@@ -96,7 +96,7 @@ class EmpiricalPrior(TaskPrior, nn.Module):
         return self.theta[indices]
     
     def log_prob(self, theta: Tensor) -> Tensor:
-        pass
+        raise NotImplementedError("Log Prob is not implemented yet for Empirical Priors.")```
 
 ############################################################################################
 # ────────────────────────────────────────────────────────────────────────────────
