@@ -123,7 +123,7 @@ class LocationFindingTask(Task, nn.Module):
         max_signal:  float = 1e-4,
         noise_scale: Optional[float] = None,
         empirical_posterior: Optional[TaskPrior] = None,
-        data_dict:   Optional[dict[str, Any]] = None, # This may be remmoved depending on how runner abstract class is implemented
+        data_dict:   Optional[dict[str, Any]] = None, # This may be removed depending on how runner abstract class is implemented
         # it was originally implemented to navigate StepDAD specifically
     ) -> None:
         Task.__init__(self)
