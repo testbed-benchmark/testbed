@@ -201,7 +201,7 @@ class LocationFindingTask(Task, nn.Module):
         dist_sampler = lambda d: d.rsample() if use_gradients else d.sample()
 
         for t in range(num_past_datapoints, self.T):
-            xi = self.design_net(designs, outcomes, t).to(self.device)           # [B, p]
+            xi = self.design_net(designs, outcomes).to(self.device)           # [B, p]
             yi = dist_sampler(self.outcome_likelihood(theta, xi))                # [B, 1]
 
             designs  = torch.cat([designs,  xi.unsqueeze(1)], dim=1)
@@ -224,7 +224,7 @@ class LocationFindingTask(Task, nn.Module):
 
         num_past_datapoints = designs.size(1)
         for t in range(num_past_datapoints, self.T):
-            xi = self.design_net(designs, outcomes, t).to(self.device)           # [B, p]
+            xi = self.design_net(designs, outcomes).to(self.device)           # [B, p]
             yi = self.outcome_likelihood(theta, xi).sample()                     # [B, 1]
             designs, outcomes = (
                 torch.cat([designs,  xi.unsqueeze(1)], dim=1),
