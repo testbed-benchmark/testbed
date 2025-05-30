@@ -66,7 +66,9 @@ class EmpiricalPrior(TaskPrior, nn.Module):
         return self.theta[indices]
     
     def log_prob(self, theta: Tensor) -> Tensor:
-        pass
+        raise NotImplementedError(
+            "EmpiricalPrior does not support log_prob. Use sample method to draw samples."
+        )
 
 ###################################################################################
 class Task(ABC):
