@@ -1,4 +1,4 @@
-from .base_task import TaskPrior, Task
+from .base_task import TaskPrior, Task, EmpiricalPrior
 from testbed.testbed.design_nets import DesignNet
 
 import torch
@@ -59,44 +59,7 @@ class LocFindPrior(TaskPrior, nn.Module):
         return self._dist.log_prob(theta)
 
 
-############################################################################################
-class EmpiricalPrior(TaskPrior, nn.Module):
-    """
-    Prior distribution for:
-      theta: [B, K, p] - the location of the sources
-    """
 
-    def __init__(
-        self,
-        device: torch.device | str,
-        theta: Tensor,  # [B, K, p]
-        *,
-        p: int = 1,
-        K: int = 2,
-    ) -> None:
-        TaskPrior.__init__(self)
-        nn.Module.__init__(self)
-        self.theta = theta.to(device)
-
-    def sample(self, num_samples: int = 1) -> Tensor:
-        """
-        Sample from the empirical prior.
-        
-        Parameters
-        ----------
-        num_samples : int, optional
-            Number of samples to draw, by default 1
-        
-        Returns
-        -------
-        Tensor
-            Samples from the empirical prior distribution.
-        """
-        indices = torch.randint(0, self.theta.size(0), (num_samples,))
-        return self.theta[indices]
-    
-    def log_prob(self, theta: Tensor) -> Tensor:
-        raise NotImplementedError("Log Prob is not implemented yet for Empirical Priors.")```
 
 ############################################################################################
 # ────────────────────────────────────────────────────────────────────────────────
@@ -129,13 +92,16 @@ class LocationFindingTask(Task, nn.Module):
         Task.__init__(self)
         nn.Module.__init__(self)
 
-        self.design_net   = design_net
+        #Task API properties
+        self._design_net   = design_net
+        self._T            = int(T)
+        self._design_dim            = prior.p
+        self._device       = prior.device
+
+        #Model specific properties
+        self.K = prior.K  # number of sources
         self.base_signal  = float(base_signal)
         self.max_signal   = float(max_signal)
-        self.T            = int(T)
-
-        self.p, self.K    = prior.p, prior.K
-        self.device       = prior.device
 
         scale             = 0.5 if noise_scale is None else float(noise_scale)
         self.register_buffer("noise_scale", torch.tensor(scale, device=self.device))
@@ -149,16 +115,20 @@ class LocationFindingTask(Task, nn.Module):
 
     # ---- Task API --------------------------------------------------------------
     @property
-    def original_prior(self) -> TaskPrior:
-        return self._original_prior
+    def design_net(self) -> nn.Module:
+        return self._design_net
 
     @property
-    def current_prior(self) -> TaskPrior:
-        return self._current_prior
+    def T(self) -> int:
+        return self._T
 
-    @current_prior.setter
-    def current_prior(self, value: TaskPrior) -> None:
-        self._current_prior = value
+    @property
+    def design_dim(self) -> int:
+        return self._design_dim
+
+    @property
+    def device(self) -> torch.device:
+        return self._device
 
     def outcome_likelihood(self, theta: Tensor, design: Tensor) -> dist.Distribution:  
         r"""Return **p(y | θ, ξ=design)** as a torch distribution."""
@@ -170,64 +140,4 @@ class LocationFindingTask(Task, nn.Module):
         return dist.Normal(mean_y, self.noise_scale)  #note that y is a scalar hence univariate normal                           # event_shape ()
 
 
-    # --- Additional methods --------------------------------------------------------
-    def forward(
-        self,
-        batch_size:   int,
-        past_designs: Tensor | None = None,   # [B, t, p]
-        past_outcomes:Tensor | None = None,   # [B, t, 1]
-        *,
-        use_gradients: bool = True,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """
-        Simulate an entire T-step experiment.
-        Note for greedy there may be cases where T here is 1 and then looped continually
-        within the runner.
-
-        Returns
-        -------
-        theta
-            [B, K, p]
-        new_designs
-            [B, num_past_datapoints, p]  **only** the designs generated in this call
-        new_outcomes
-            [B, num_past_datapoints, 1]
-        """
-        theta  = self.current_prior.sample(batch_size)                  # [B, K, p] - #TODO confirm whether to sample a single and then repeat or sample B times as here
-        designs  = torch.zeros(batch_size, 0, self.p, device=self.device) if past_designs  is None else past_designs
-        outcomes = torch.zeros(batch_size, 0, 1, device=self.device) if past_outcomes is None else past_outcomes
-
-        num_past_datapoints = designs.size(1)
-        dist_sampler = lambda d: d.rsample() if use_gradients else d.sample()
-
-        for t in range(num_past_datapoints, self.T):
-            xi = self.design_net(designs, outcomes).to(self.device)           # [B, p]
-            yi = dist_sampler(self.outcome_likelihood(theta, xi))                # [B, 1]
-
-            designs  = torch.cat([designs,  xi.unsqueeze(1)], dim=1)
-            outcomes = torch.cat([outcomes, yi.unsqueeze(1)], dim=1)
-
-        # only the fresh bits:
-        return theta, designs[:, num_past_datapoints:], outcomes[:, num_past_datapoints:]
-
-    @torch.no_grad()
-    def run_policy(
-        self,
-        theta: Tensor,
-        past_designs: Tensor | None = None,
-        past_outcomes: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor]:
-        """Policy rollout **with θ fixed** (no gradient tracking)."""
-        B = theta.size(0)
-        designs  = torch.zeros(B, 0, self.p, device=self.device) if past_designs  is None else past_designs
-        outcomes = torch.zeros(B, 0, 1, device=self.device) if past_outcomes is None else past_outcomes
-
-        num_past_datapoints = designs.size(1)
-        for t in range(num_past_datapoints, self.T):
-            xi = self.design_net(designs, outcomes).to(self.device)           # [B, p]
-            yi = self.outcome_likelihood(theta, xi).sample()                     # [B, 1]
-            designs, outcomes = (
-                torch.cat([designs,  xi.unsqueeze(1)], dim=1),
-                torch.cat([outcomes, yi.unsqueeze(1)], dim=1),
-            )
-        return designs, outcomes
+    
