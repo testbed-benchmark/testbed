@@ -1,1 +1,1 @@
-from base_task import TaskPrior, Task, EmpiricalPrior
+from .base_task import TaskPrior, Task, EmpiricalPrior
