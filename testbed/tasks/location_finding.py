@@ -1,12 +1,12 @@
 from .base_task import Task
-from ..util.distributions import TaskPrior
+from ..core.distributions import Distribution
 import torch
 from torch import nn, Tensor
-import torch.distributions as dist
+import torch.distributions as torch_dist
 from typing import Optional, Union
 
 
-class LocFindPrior(TaskPrior, nn.Module):
+class LocationFindingPrior(Distribution, nn.Module):
     """
     Prior distribution for:
       theta: [B, n_sources, dim_theta] - the location of the sources
@@ -14,12 +14,12 @@ class LocFindPrior(TaskPrior, nn.Module):
 
     def __init__(
         self,
-        device: torch.device,
+        n_sources: int,
+        dim_theta: int,
         theta_loc: Optional[Tensor] = None,      # [n_sources, dim_theta] or None
         theta_covmat: Optional[Tensor] = None,   # [dim_theta, dim_theta] or None
-        dim_theta: int = 2,
-        n_sources: int = 1,
         misspec_shift: Optional[float] = None,
+        device: Optional[Union[torch.device, str]] = 'cpu'
     ) -> None:
         super().__init__()
 
@@ -38,15 +38,15 @@ class LocFindPrior(TaskPrior, nn.Module):
         self.register_buffer("misspec_shift", torch.full((n_sources, dim_theta), shift, device=self.device))
 
         # batched MVN ⇒ sample shape (*, n_sources, dim_theta), log_prob shape (*, n_sources)
-        self._dist = dist.MultivariateNormal(
+        self._dist = torch_dist.MultivariateNormal(
             loc=self.theta_loc + self.misspec_shift,             # [n_sources, dim_theta]
             covariance_matrix=self.theta_covmat                  # [dim_theta, dim_theta] – broadcast to n_sources
         )
 
     # ---- TaskPrior API --------------------------------------------------------
-    def sample(self, sample_shape=torch.Size([])) -> Tensor:
+    def sample(self, n_samples: int = 1) -> Tensor:
         # returns [num_samples, n_sources, dim_theta]
-        return self._dist.sample(sample_shape=sample_shape).to(self.device)
+        return self._dist.sample((n_samples,)).to(self.device)
 
     def log_prob(self, theta: Tensor) -> Tensor:
         # theta shape [..., n_sources, dim_theta] → log_prob shape [..., n_sources]
@@ -66,18 +66,18 @@ class LocationFinding(Task):
     def __init__(
         self,
         n_sources:   int,
-        dim_y:       int,
         dim_theta:   int,
+        dim_y:       int = 1,
         base_signal: float = 0.1,
         max_signal:  float = 1e-4,
         noise_scale: float = 0.5,
-        prior: Optional[TaskPrior] = None,
+        prior: Optional[Distribution] = None,
         device: Optional[Union[torch.device, str]] = 'cpu'
     ) -> None:
         
         # Default prior
         if prior is None:
-            prior = LocFindPrior(device, dim_theta=dim_theta, n_sources=n_sources)
+            prior = LocationFindingPrior(dim_theta=dim_theta, n_sources=n_sources, device=device)
     
         super().__init__(prior, device)
 
@@ -99,7 +99,7 @@ class LocationFinding(Task):
                 f'device={self.device})'
                 )
 
-    def make_outcome_distr(self, theta: Tensor, design: Tensor) -> dist.Distribution:  
+    def make_outcome_distr(self, theta: Tensor, design: Tensor) -> torch_dist.Distribution:  
         r"""Return **p(y | θ, ξ=design)** as a torch distribution."""
         # theta:  [B, n_sources, dim_theta]
         # design: [B, dim_theta]
@@ -109,9 +109,9 @@ class LocationFinding(Task):
 
         # Required to handle multiple i.i.d. observations
         loc = mean_y.expand(-1, self.dim_y)
-        return dist.Independent(dist.Normal(loc, self.noise_scale), 1)
+        return torch_dist.Independent(torch_dist.Normal(loc, self.noise_scale), 1)
                                         
-    def outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
+    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
         # y:       [n_samples, B, dim_y] or [B, dim_y]
         # theta:   [B, n_sources, dim_theta]
         # design:  [B, dim_theta]        
@@ -119,7 +119,7 @@ class LocationFinding(Task):
         outcome_distr = self.make_outcome_distr(theta, design)
         return outcome_distr.log_prob(y)
 
-    def sample_outcome(self, n_samples: int, theta: Tensor, design: Tensor) -> Tensor:
+    def _sample_outcome(self, theta: Tensor, design: Tensor, n_samples: int=1) -> Tensor:
         # theta:   [B, n_sources, dim_theta]
         # design:  [B, dim_theta]  
         # returns: [n_samples, B, dim_y]
