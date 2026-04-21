@@ -1,0 +1,27 @@
+seed: 0
+
+# task
+n_sources: 1
+dim_theta: 2
+T: 10
+
+# training
+objective: 'spce'
+n_train_iter: 25_000
+n_outer: 2_048
+n_inner: 1_024
+
+# optimizer
+lr: 1e-4
+grad_clip: 1.0
+
+# eval
+eval_every: 0  # Evaluation during training is a bit expensive; let's turn it off for this recipe 
+n_outer_eval: 2_048
+n_inner_eval: 100_000
+
+# system
+device: 'cuda'
+
+# model selection -- since this is a generic config, you should specify this downstream
+policy_net_name: 'NotYetSpecified'

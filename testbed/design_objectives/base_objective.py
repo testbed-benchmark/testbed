@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 
-import torch
 from torch import Tensor
 
 from ..tasks.base_task import Task
@@ -11,4 +10,4 @@ class Objective(ABC):
         self.task = task
 
     @abstractmethod
-    def estimate_gain(self, xi: Tensor): ...
+    def estimate_gain(self, design: Tensor): ...

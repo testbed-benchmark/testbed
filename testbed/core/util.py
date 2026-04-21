@@ -1,5 +1,3 @@
-import torch
-from torch import Tensor
 
 def expand_along_batch(*tensors):
     # Expands tensors along the first (batch) dimension so that they agree in this dim.

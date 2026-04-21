@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "testbed"
+dynamic = ["version"]
+description = "TestBED is a library for Bayesian experimental design."
+readme = "README.md"
+license = { text = 'GPL-3.0' }
+requires-python = ">=3.10"
+authors = [
+    {name = 'Gavin Kerrigan', email = 'kerrigan@stats.ox.ac.uk'},
+    {name = 'Marcel Hedman', email = 'marcel.hedman@jesus.ox.ac.uk'}
+]
+urls = {Homepage = 'https://github.com/testbed-benchmark/testbed'}
+
+dependencies = [
+    'numpy>=1.24',
+    'torch>=2.0',
+]
+
+[project.optional-dependencies]
+full = [
+    'matplotlib',
+    'jupyterlab',
+    'notebook',
+    'omegaconf',
+    'pyyaml'
+]
+dev = ["pytest", "pre-commit", "ruff", 'rich']
+docs = ["sphinx"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]   # where to look
+
+[tool.setuptools_scm]

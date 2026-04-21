@@ -4,16 +4,52 @@ from typing import Any
 import torch
 from torch import nn, Tensor
 
-class Distribution(ABC):
+class Distribution(ABC, nn.Module):
     """
     Abstract class for arbitrary distributions.
     """
+    def __init__(self):
+        super().__init__()
 
     @abstractmethod
-    def sample(self, num_samples: int = 1) -> torch.Tensor: ...
+    def sample(self, n_samples: int = 1) -> Tensor: ...
 
     @abstractmethod
-    def log_prob(self, theta: Any) -> torch.Tensor: ...
+    def log_prob(self, theta: Any) -> Tensor: ...
+
+    @property
+    def device(self) -> torch.device:
+        try:
+            return next(self.buffers()).device
+        except StopIteration:
+            try:
+                return next(self.parameters()).device
+            except StopIteration:
+                return torch.device('cpu')
+
+class TorchDistribution(Distribution):
+    """
+    Adapts torch.distributions.Distribution to our Distribution class.
+    """
+
+    def __init__(self, dist):
+        super().__init__()
+        self.dist = dist
+
+    @property
+    def device(self) -> torch.device:
+        params = self.dist.__dict__.values()
+        for p in params:
+            if isinstance(p, torch.Tensor):
+                return p.device
+        return torch.device('cpu')
+
+    def sample(self, n_samples: int = 1) -> Tensor:
+        return self.dist.sample((n_samples,))
+    
+    def log_prob(self, theta: Tensor) -> Tensor:
+        return self.dist.log_prob(theta)
+    
 
 class EmpiricalDistribution(Distribution):
     """
@@ -35,13 +71,13 @@ class EmpiricalDistribution(Distribution):
         assert torch.all(weights >=0), 'Weights must be non-negative.'
         self.weight = weights.squeeze()
 
-    def sample(self, num_samples: int = 1) -> Tensor:
+    def sample(self, n_samples: int = 1) -> Tensor:
         """
         Sample from the empirical prior.
         
         Parameters
         ----------
-        num_samples : int, optional
+        n_samples : int, optional
             Number of samples to draw, by default 1
         
         Returns
@@ -49,7 +85,7 @@ class EmpiricalDistribution(Distribution):
         Tensor
             Samples from the empirical distribution.
         """
-        indices = torch.multinomial(self.weights, num_samples, replacement=True)
+        indices = torch.multinomial(self.weights, n_samples, replacement=True)
         return self.locs[indices]
     
     def log_prob(self, z: Tensor) -> Tensor:
