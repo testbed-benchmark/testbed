@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
 import torch
+import torch.nn as nn
 
 from ..core.util import expand_along_batch
 
 
-class Task(ABC):
+class Task(ABC, nn.Module):
     """
     Conventions:
     - Generally, we will follow the torch.distributions conventions for shapes
@@ -22,24 +23,46 @@ class Task(ABC):
     event_shape_design: torch.Size
     event_shape_y: torch.Size
 
-    def __init__(self, prior, separable: bool = True, device='cpu'):
+    def __init__(self, prior, 
+                 discrete_y: bool,
+                 discrete_theta: bool,
+                 discrete_design: bool,
+                 separable: bool = True):
+        
         # Safety checking that some required attributes are defined in subclasses
         required = ["event_shape_theta", "event_shape_design", "event_shape_y"]
         missing = [attr for attr in required if not hasattr(self, attr)]
         if missing:
             raise TypeError(f"{type(self).__name__} must define: {missing}")
+        
+        nn.Module.__init__(self)
 
-        self.device = torch.device(device)
         self.prior = prior
         self.current_prior = prior
 
         # Is the likelihood separable?
-        # If so, subclass most overwrite history_logp
+        # If so, subclass must overwrite history_logp
         self.separable = separable 
         if not self.separable and type(self).history_logp is Task.history_logp:
             raise TypeError(
                 f"{type(self).__name__} has separable=False but does not override history_logp."
             )
+        
+        # Tracking if there are discrete components in the model
+        self.discrete_y = discrete_y
+        self.discrete_theta = discrete_theta
+        self.discrete_design = discrete_design
+
+    @property
+    def device(self) -> torch.device:
+        """Infer device from the first registered buffer or parameter."""
+        try:
+            return next(self.buffers()).device
+        except StopIteration:
+            try:
+                return next(self.parameters()).device
+            except StopIteration:
+                return torch.device("cpu")
             
     @abstractmethod
     def _outcome_logp(self, y, theta, design):
@@ -112,6 +135,15 @@ class Task(ABC):
         outcome = outcome.squeeze(0)
 
         return outcome, theta
+    
+    def sample_marginal(self, design, n_samples=1):
+        """
+        Samples from p(y | design) for a fixed design.
+        n_samples: int
+        design: [1, *event_shape_design]
+        """
+        outcome, theta = self.sample_joint(design, n_samples=n_samples)
+        return outcome
     
     def sample_prior(self, n_samples):
         return self.prior.sample(n_samples=n_samples) # [n_samples, *event_shape_theta]

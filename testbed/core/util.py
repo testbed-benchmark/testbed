@@ -1,3 +1,4 @@
+import torch
 
 def expand_along_batch(*tensors):
     # Expands tensors along the first (batch) dimension so that they agree in this dim.
@@ -18,3 +19,21 @@ def expand_along_batch(*tensors):
             )
         
     return tuple(t.expand(target_b, *t.shape[1:]) if t.shape[0] == 1 else t for t in tensors)
+
+def batch_trace(x):
+    # x: [b, m, m]
+    # takes the traces of each m x m matrix in x
+    return torch.einsum('b m m -> b', x)
+
+def normal_log_prob(y, loc, scale):
+    # Computes the log-pdf of a univariate Gaussian N(loc, scale^2)
+
+    scale = torch.as_tensor(scale, device=y.device)
+    
+    var = scale ** 2
+    term1 = ((y - loc) ** 2) / var
+    term2 = torch.log(2 * torch.pi * var)
+    return -0.5 * (term1 + term2)
+
+def normal_cdf(x):
+    return 0.5 * (1 + torch.erf(x / 2**0.5))
