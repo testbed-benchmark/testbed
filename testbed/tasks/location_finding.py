@@ -117,12 +117,11 @@ class LocationFinding(Task):
         logp = normal_log_prob(y, loc, self.noise_scale)
         return logp.sum(dim=-1)
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor, n_samples: int = 1) -> Tensor:
-        # theta:   [B, n_sources, dim_theta]
-        # design:  [B, dim_theta]
-        # returns: [n_samples, B, dim_y]
-        loc = self.make_mean(theta, design)          # [B, 1]
-        loc = loc.expand(-1, self.event_shape_y[0])  # [B, dim_y]
-        loc = loc.unsqueeze(0).expand(n_samples, -1, -1)  # [n_samples, B, dim_y]
+    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
+        # theta:   [b, n_sources, dim_theta]
+        # design:  [b, dim_theta]
+        # returns: [b, dim_y]
+        loc = self.make_mean(theta, design)          # [b, 1]
+        loc = loc.expand(-1, self.event_shape_y[0])  # [b, dim_y]
         return torch.randn_like(loc) * self.noise_scale + loc
 

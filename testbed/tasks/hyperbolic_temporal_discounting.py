@@ -132,20 +132,12 @@ class HyperbolicTemporalDiscounting(Task):
 
         return logp
     
-    def _sample_outcome(self, theta, design, n_samples: int = 1):
-        # theta: [b, 2]
-        # design: [b, 2]
-        # returns: [n_samples, b, 1]
-
-        p_y1 = self.make_prob(theta, design)
-
+    def _sample_outcome(self, theta, design):
+        # theta:   [b, 2]
+        # design:  [b, 2]
+        # returns: [b, 1]
+        p_y1 = self.make_prob(theta, design)  # [b, 1]
         if self.temperature > 0:
-            bern = RelaxedBernoulli(temperature=self.temperature, probs=p_y1)
-            y = bern.rsample((n_samples,))
-        else:
-            bern = Bernoulli(p_y1)
-            y = bern.sample((n_samples,))
-
-        y = y.unsqueeze(-1)
-        return y
+            return RelaxedBernoulli(temperature=self.temperature, probs=p_y1).rsample()
+        return Bernoulli(p_y1).sample()
     

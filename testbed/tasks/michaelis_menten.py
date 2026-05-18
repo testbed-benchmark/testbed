@@ -95,12 +95,9 @@ class MichaelisMenten(Task):
         logp = normal_log_prob(y, loc, self.noise_scale) # [b, 1]
         return logp.sum(dim=-1)
 
-    def _sample_outcome(self, theta, design, n_samples: int = 1):
+    def _sample_outcome(self, theta, design):
         # theta:   [b, 2]
         # design:  [b, 1]
-        # returns: [n_samples, B, 1]
-        loc = self.make_mean(theta, design)          # [b, 1]
-        loc = loc.unsqueeze(0).expand(n_samples, -1, -1)  # [n_samples, b, 1]
-
-        sample = torch.randn_like(loc) * self.noise_scale + loc
-        return sample
+        # returns: [b, 1]
+        loc = self.make_mean(theta, design)  # [b, 1]
+        return torch.randn_like(loc) * self.noise_scale + loc
