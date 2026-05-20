@@ -1,6 +1,7 @@
 import json
-import time
 import logging
+import time
+
 
 class BaseLogger:
     def log(self, key: str, value: float, step: int): ...

@@ -1,8 +1,9 @@
 import os
 import time
+
 import yaml
 
-from testbed.core.logging import JSONLLogger, EventLogger
+from testbed.core.logging import EventLogger, JSONLLogger
 
 
 class Manager:

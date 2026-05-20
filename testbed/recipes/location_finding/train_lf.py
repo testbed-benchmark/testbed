@@ -1,12 +1,9 @@
 import os
-from omegaconf import OmegaConf
+
 import torch
+from omegaconf import OmegaConf
 
-
-from testbed.tasks import LocationFinding
-from testbed.design_objectives import SPCE
-
-from testbed.designers import PolicyDesigner
+from testbed.core.manager import Manager
 from testbed.design_nets import (
     AttentiveDAD,
     AttentiveDAD_v2,
@@ -16,8 +13,11 @@ from testbed.design_nets import (
     DADNet_v2,
     DADNet_v3,
 )
+from testbed.design_objectives import SPCE
+from testbed.designers import PolicyDesigner
 from testbed.recipes.train import Trainer
-from testbed.core.manager import Manager
+from testbed.tasks import LocationFinding
+
 
 def build_policy_net(cfg):
     POLICY_NETS = {

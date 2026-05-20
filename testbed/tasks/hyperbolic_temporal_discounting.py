@@ -1,11 +1,10 @@
-import torch
 import numpy as np
+import torch
+from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoulli
 
-from torch.distributions import LogNormal, HalfNormal, Bernoulli, RelaxedBernoulli
-
-from .base_task import Task
 from ..core.distributions import Distribution
 from ..core.util import normal_cdf
+from .base_task import Task
 
 
 class HTDPrior(Distribution):

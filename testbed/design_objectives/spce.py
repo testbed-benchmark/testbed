@@ -1,9 +1,10 @@
-import torch
 import numpy as np
+import torch
 from torch import Tensor
 
-from .base_objective import Objective
 from ..tasks.base_task import Task
+from .base_objective import Objective
+
 
 class SPCE(Objective):
     """

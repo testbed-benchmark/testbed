@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from testbed.design_nets import DesignNet
-from testbed.design_nets.modules import MLP, TransformerEncoderBlock, AttentionPool
+from testbed.design_nets.modules import MLP, AttentionPool, TransformerEncoderBlock
 
 
 class AttentiveDAD(DesignNet):

@@ -1,9 +1,10 @@
 import torch
 from torch import Tensor
 
-from .base_task import Task
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
+from .base_task import Task
+
 
 class LocationFindingPrior(Distribution):
     def __init__(
