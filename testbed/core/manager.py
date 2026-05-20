@@ -48,11 +48,11 @@ class Manager:
 
             # --- dataclass ---
             try:
-                from dataclasses import is_dataclass, asdict
+                from dataclasses import asdict, is_dataclass
                 if is_dataclass(cfg):
                     yaml.dump(asdict(cfg), f)
                     return
-            except:
+            except (ImportError, TypeError, ValueError):
                 pass
 
             # --- OmegaConf ---
@@ -61,7 +61,7 @@ class Manager:
                 if OmegaConf.is_config(cfg):
                     yaml.dump(OmegaConf.to_container(cfg, resolve=True), f)
                     return
-            except:
+            except (ImportError, TypeError, ValueError):
                 pass
 
             # --- dict fallback ---
