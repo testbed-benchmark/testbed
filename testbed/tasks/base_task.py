@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
 
-from ..core.util import expand_along_batch
+from ..core.util import broadcast_and_flatten
 
 
 class Task(ABC, nn.Module):
@@ -71,79 +71,128 @@ class Task(ABC, nn.Module):
         y: [b, *event_shape_y]
         theta: [b, *event_shape_theta]
         design: [b, *event_shape_design]
-        returns: [batch, ]
+        returns: [b,]
         """
         ...
 
     @abstractmethod
-    def _sample_outcome(self, theta, design, n_samples=1):
+    def _sample_outcome(self, theta, design):
         """
         theta: [b, *event_shape_theta]
         design: [b, *event_shape_design]
-        returns: [n_samples, b, **shape]
+        returns: [b, *event_shape_y]  — one sample per (theta, design) pair
         """
         ...
 
     def outcome_logp(self, y, theta, design):
         """
-        y, theta, design: [batch, **shape]
-        Also supports when any of y, theta, design only have batch=1 by broadcasting.
+        y: [*batch_shape_y,  *event_shape_y]
+        theta: [*batch_shape_theta, *event_shape_theta]
+        design: [*batch_shape_design, *event_shape_design]
+        Batch dims are broadcast together (torch.distributions convention).
+        returns: [*batch_shape]
         """
-        y_expanded, theta_expanded, design_expanded = expand_along_batch(y, theta, design)
-        return self._outcome_logp(y_expanded, theta_expanded, design_expanded)
-    
+        (y_flat, theta_flat, design_flat), batch_shape = broadcast_and_flatten(
+            (y, self.event_shape_y),
+            (theta, self.event_shape_theta),
+            (design, self.event_shape_design),
+        )
+        logp_flat = self._outcome_logp(y_flat, theta_flat, design_flat)
+        return logp_flat.reshape(batch_shape)
+
     def history_logp(self, y_history, design_history, theta):
         """
         Default implementation that assumes a separable likelihood.
         Tasks with non-separable likelihoods should overwrite this.
         p(h_T | theta) = sum_t log p(y_t | theta, design_t)
 
-        y_history: [b, T, *event_shape_y] or [1, T, *event_shape_y]
-        design_history: [b, T, *event_shape_design] or [1, T, *event_shape_design]
-        theta: [b, *event_shape_theta] or [1, *event_shape_theta]
-        returns: [b, ]
+        y_history: [*batch_shape, T, *event_shape_y]
+        design_history: [*batch_shape, T, *event_shape_design]
+        theta: [*batch_shape, *event_shape_theta]
+        Batch dims are broadcast together across all three arguments.
+        returns: [*batch_shape]
         """
-        y_history, design_history, theta = expand_along_batch(y_history, design_history, theta)       
-        b = y_history.shape[0]
-        T = y_history.shape[1]
-
-        logp = torch.zeros(b, device=theta.device)
+        T = y_history.shape[-(len(self.event_shape_y) + 1)]
+        (y_flat, design_flat, theta_flat), batch_shape = broadcast_and_flatten(
+            (y_history,      (T, *self.event_shape_y)),
+            (design_history, (T, *self.event_shape_design)),
+            (theta,          tuple(self.event_shape_theta)),
+        )
+        b_flat = theta_flat.shape[0]
+        logp = torch.zeros(b_flat, device=theta_flat.device)
         for t in range(T):
-            logp += self._outcome_logp(
-                y_history[:, t],
-                theta,
-                design_history[:, t],
-            )
-        return logp
-    
+            logp += self._outcome_logp(y_flat[:, t], theta_flat, design_flat[:, t])
+        return logp.reshape(batch_shape)
+
     def sample_outcome(self, theta, design, n_samples=1):
         """
-        theta: [b, *event_shape_theta] or [1, *event_shape_theta]
-        design: [b, *event_shape_design] or [1, *event_shape_design]
-        returns: [n_samples, b, *event_shape_y]
+        theta: [*batch_shape_theta, *event_shape_theta]
+        design: [*batch_shape_design, *event_shape_design]
+        Batch dims are broadcast together (torch.distributions convention).
+        returns:
+            n_samples == 1: [*batch_shape, *event_shape_y]
+            n_samples  > 1: [n_samples, *batch_shape, *event_shape_y]
         """
-        theta_expanded, design_expanded = expand_along_batch(theta, design)
-        return self._sample_outcome(theta_expanded, design_expanded, n_samples=n_samples)
-        
+        (theta_flat, design_flat), batch_shape = broadcast_and_flatten(
+            (theta, self.event_shape_theta),
+            (design, self.event_shape_design),
+        )
+        b_flat = theta_flat.shape[0]
+        if n_samples > 1:
+            theta_flat = (
+                theta_flat.unsqueeze(0)
+                .expand(n_samples, b_flat, *self.event_shape_theta)
+                .reshape(n_samples * b_flat, *self.event_shape_theta)
+            )
+            design_flat = (
+                design_flat.unsqueeze(0)
+                .expand(n_samples, b_flat, *self.event_shape_design)
+                .reshape(n_samples * b_flat, *self.event_shape_design)
+            )
+        y_flat = self._sample_outcome(theta_flat, design_flat)
+        if n_samples == 1:
+            return y_flat.reshape(*batch_shape, *self.event_shape_y)
+        return y_flat.reshape(n_samples, *batch_shape, *self.event_shape_y)
+
     def sample_joint(self, design, n_samples=1):
         """
-        Samples from p(theta, y | design) for a fixed design.
-        n_samples: int
-        design: [1, *event_shape_design]
+        design: [*batch_shape, *event_shape_design]
+        returns:
+            n_samples == 1: (y [*batch_shape, *event_y], theta [*batch_shape, *event_theta])
+            n_samples  > 1: (y [n_samples, *batch_shape, *event_y],
+                             theta [n_samples, *batch_shape, *event_theta])
         """
-        theta = self.sample_current_prior(n_samples) # [n_samples, *event_shape_theta]
-        outcome = self.sample_outcome(theta, design)
-        outcome = outcome.squeeze(0)
+        batch_shape = design.shape[:design.ndim - len(self.event_shape_design)]
+        b_flat = 1
+        for s in batch_shape:
+            b_flat *= s
 
-        return outcome, theta
-    
+        total = n_samples * b_flat
+        theta_flat = self.sample_current_prior(total)  # [total, *event_theta]
+        design_flat = design.reshape(b_flat, *self.event_shape_design)
+        if n_samples > 1:
+            design_flat = (
+                design_flat.unsqueeze(0)
+                .expand(n_samples, b_flat, *self.event_shape_design)
+                .reshape(total, *self.event_shape_design)
+            )
+        y_flat = self._sample_outcome(theta_flat, design_flat)  # [total, *event_y]
+        if n_samples == 1:
+            return (
+                y_flat.reshape(*batch_shape, *self.event_shape_y),
+                theta_flat.reshape(*batch_shape, *self.event_shape_theta),
+            )
+        return (
+            y_flat.reshape(n_samples, *batch_shape, *self.event_shape_y),
+            theta_flat.reshape(n_samples, *batch_shape, *self.event_shape_theta),
+        )
+
     def sample_marginal(self, design, n_samples=1):
         """
-        Samples from p(y | design) for a fixed design.
-        n_samples: int
-        design: [1, *event_shape_design]
+        design: [*batch_shape, *event_shape_design]
+        returns: y with same shape convention as sample_joint
         """
-        outcome, theta = self.sample_joint(design, n_samples=n_samples)
+        outcome, _ = self.sample_joint(design, n_samples=n_samples)
         return outcome
     
     def sample_prior(self, n_samples):

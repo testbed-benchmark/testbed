@@ -42,8 +42,7 @@ class Designer(ABC):
         
         for t in range(T):
             design = self.propose_design(y_history[:, :t, :], design_history[:, :t, :])     # [b, event_shape_design]
-            y = self.task.sample_outcome(theta, design)                                 # [1, b, event_shape_y]
-            y = y.squeeze(0)
+            y = self.task.sample_outcome(theta, design)                                 # [b, *event_shape_y]
 
             y_history[:, t] = y
             design_history[:, t] = design
