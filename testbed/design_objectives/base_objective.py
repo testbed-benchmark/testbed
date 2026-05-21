@@ -4,6 +4,7 @@ from torch import Tensor
 
 from ..tasks.base_task import Task
 
+
 class Objective(ABC):
 
     def __init__(self, task: Task):

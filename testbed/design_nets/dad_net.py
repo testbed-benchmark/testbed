@@ -4,6 +4,7 @@ import torch.nn as nn
 from testbed.design_nets import DesignNet
 from testbed.design_nets.modules import MLP
 
+
 class DADNet(DesignNet):
     """
     Location Finding policy network from the DAD paper

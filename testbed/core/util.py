@@ -1,5 +1,6 @@
 import torch
 
+
 def broadcast_and_flatten(*tensors_with_event_shapes):
     """
     For each (tensor, event_shape) pair, broadcast the batch dims (all dims

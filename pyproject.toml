@@ -34,4 +34,13 @@ docs = ["sphinx"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]   # where to look
 
+[tool.ruff]
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*.py" = ["F401"]
+"testbed/notebooks/**.ipynb" = ["I"]
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
 [tool.setuptools_scm]

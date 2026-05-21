@@ -1,1 +1,1 @@
-from .designer import SequentialDesigner, PolicyDesigner, RandomDesigner
+from .designer import PolicyDesigner, RandomDesigner, SequentialDesigner

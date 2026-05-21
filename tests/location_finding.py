@@ -1,18 +1,16 @@
 import time
-import torch
 
-from rich.console import Console
-from rich.table import Table
-from rich.progress import track
+import torch
 from rich import box
+from rich.console import Console, Group
 from rich.panel import Panel
-from rich.console import Group
+from rich.progress import track
+from rich.table import Table
 
 from testbed.core.distributions import TorchDistribution
-from testbed.tasks import LocationFinding
-from testbed.design_objectives import SPCE, SNMC
-
+from testbed.design_objectives import SNMC, SPCE
 from testbed.designers import RandomDesigner
+from testbed.tasks import LocationFinding
 
 console = Console()
 
@@ -80,7 +78,10 @@ def test_random_eig():
     ))
 
 def test_logp():
-    from stepdad.models.location_finding import LocationFindingModel, LocationFindingPrior
+    from stepdad.models.location_finding import (
+        LocationFindingModel,
+        LocationFindingPrior,
+    )
 
     n_sources = 1
     dim_theta = 2

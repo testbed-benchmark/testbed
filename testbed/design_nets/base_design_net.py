@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
-import torch
 from typing import Any
+
+import torch
+
 
 class DesignNet(torch.nn.Module, ABC):
     """
