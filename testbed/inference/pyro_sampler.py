@@ -3,17 +3,17 @@ from __future__ import annotations
 from math import prod
 from typing import Literal
 
+import pyro
 import torch
 import torch.distributions as td
 import torch.distributions.constraints as C
-import pyro
 from pyro.distributions.torch_distribution import TorchDistributionMixin
-from pyro.infer import MCMC, NUTS, HMC
+from pyro.infer import HMC, MCMC, NUTS
 from pyro.infer.autoguide.initialization import init_to_sample
 
-from ..tasks.base_task import Task
 from ..core.distributions import EmpiricalDistribution
 from ..core.util import squeeze_history
+from ..tasks.base_task import Task
 
 
 class TaskPriorDist(TorchDistributionMixin, td.Distribution):
