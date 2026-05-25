@@ -64,13 +64,13 @@ class EmpiricalDistribution(Distribution):
         - Note that weight does /not/ have to sum to one; they only need to be non-negative.
 
         """
-        super().__init__(self)
+        super().__init__()
         self.locs = locs
-       
+
         if weights is None:
             weights = torch.ones(locs.shape[0])
-        assert torch.all(weights >=0), 'Weights must be non-negative.'
-        self.weight = weights.squeeze()
+        assert torch.all(weights >= 0), 'Weights must be non-negative.'
+        self.weights = weights.squeeze()
 
     def sample(self, n_samples: int = 1) -> Tensor:
         """
