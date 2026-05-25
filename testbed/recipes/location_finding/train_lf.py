@@ -1,3 +1,5 @@
+"""Train a location-finding policy."""
+
 import os
 
 import torch
@@ -20,6 +22,7 @@ from testbed.tasks import LocationFinding
 
 
 def build_policy_net(cfg):
+    """Builds the configured policy network."""
     POLICY_NETS = {
         "DADNet": DADNet,
         "DADNet_v2": DADNet_v2,
@@ -29,13 +32,13 @@ def build_policy_net(cfg):
         "AttentiveDAD_v3": AttentiveDAD_v3,
         "AttentiveDAD_v4": AttentiveDAD_v4,
     }
-    
+
     net_cls = POLICY_NETS[cfg.policy_net_name]
-    net = net_cls()   # later you can pass args via cfg too
+    net = net_cls()  # later you can pass args via cfg too
     return net
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     conf_cli = OmegaConf.from_cli()
     cfg = OmegaConf.load(conf_cli.config)
     # sync cli args with config
@@ -66,8 +69,7 @@ if __name__ == '__main__':
         objective=objective,
         optimizer=optimizer,
         cfg=cfg,
-        manager=manager
+        manager=manager,
     )
 
     trainer.train()
-    

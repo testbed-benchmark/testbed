@@ -1,3 +1,5 @@
+"""Pyro MCMC posterior inference."""
+
 from __future__ import annotations
 
 from math import prod
@@ -17,8 +19,7 @@ from ..tasks.base_task import Task
 
 
 class TaskPriorDist(TorchDistributionMixin, td.Distribution):
-    """
-    Wraps task.prior as a Pyro-compatible distribution for use with MCMC.
+    """Wraps task.prior as a Pyro-compatible distribution for use with MCMC.
 
     batch_shape = []
     event_shape = task.event_shape_theta
@@ -29,6 +30,7 @@ class TaskPriorDist(TorchDistributionMixin, td.Distribution):
     has_rsample: bool = False
 
     def __init__(self, task: Task) -> None:
+        """Wraps a task prior."""
         self._task = task
         n_event = len(task.event_shape_theta)
         self._support = C.independent(C.real, n_event)
@@ -40,22 +42,27 @@ class TaskPriorDist(TorchDistributionMixin, td.Distribution):
 
     @property
     def batch_shape(self) -> torch.Size:
+        """Returns the empty batch shape."""
         return torch.Size([])
 
     @property
     def event_shape(self) -> torch.Size:
+        """Returns the task theta event shape."""
         return self._task.event_shape_theta
 
     @property
     def support(self) -> C.Constraint:
+        """Returns the prior support constraint."""
         return self._support
 
     def sample(self, sample_shape: torch.Size = torch.Size([])) -> torch.Tensor:
+        """Draws prior samples."""
         n = prod(sample_shape) if len(sample_shape) > 0 else 1
         raw = self._task.prior.sample(n_samples=n)  # [n, *event_shape_theta]
         return raw.reshape(*sample_shape, *self._task.event_shape_theta)
 
     def log_prob(self, theta: torch.Tensor) -> torch.Tensor:
+        """Evaluates prior log probabilities."""
         # theta: [*B, *event_shape_theta] — B may be empty when called by Pyro
         n_event = len(self._task.event_shape_theta)
         added = theta.ndim == n_event
@@ -91,8 +98,7 @@ def run_mcmc(
     disable_progbar: bool = True,
     **kernel_kwargs,
 ) -> EmpiricalDistribution:
-    """
-    Run MCMC to obtain posterior samples of theta given observed data.
+    """Runs MCMC to obtain posterior samples of theta given observed data.
 
     Parameters
     ----------
@@ -112,10 +118,9 @@ def run_mcmc(
     **kernel_kwargs
         Passed to the NUTS or HMC constructor.
 
-    Returns
-    -------
-    EmpiricalDistribution
-        locs has shape [n_samples * num_chains, *event_shape_theta].
+    Returns:
+        EmpiricalDistribution
+            locs has shape [n_samples * num_chains, *event_shape_theta].
     """
     if task.discrete_theta:
         raise ValueError(
@@ -142,5 +147,7 @@ def run_mcmc(
     )
     mcmc.run()
 
-    theta_samples = mcmc.get_samples()["theta"]  # [n_samples * num_chains, *event_shape_theta]
+    theta_samples = mcmc.get_samples()[
+        "theta"
+    ]  # [n_samples * num_chains, *event_shape_theta]
     return EmpiricalDistribution(locs=theta_samples)

@@ -1,3 +1,5 @@
+"""Hyperbolic temporal-discounting task."""
+
 import numpy as np
 import torch
 from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoulli
@@ -8,37 +10,41 @@ from .base_task import Task
 
 
 class HTDPrior(Distribution):
-    """
+    """Prior from the DAD paper HTD settings.
+
     This follows the settings in the DAD paper, Appendix D.2
-    https://arxiv.org/pdf/2103.02438
+    https://arxiv.org/pdf/2103.02438.
     """
-    def __init__(self,
-                 k_loc = -4.25,
-                 k_scale = np.sqrt(1.5),
-                 alpha_scale = np.sqrt(2)):
+
+    def __init__(self, k_loc=-4.25, k_scale=np.sqrt(1.5), alpha_scale=np.sqrt(2)):
+        """Initializes prior parameters."""
         super().__init__()
 
-        self.register_buffer('k_loc', torch.tensor(k_loc))
-        self.register_buffer('k_scale', torch.tensor(k_scale))
-        self.register_buffer('alpha_scale', torch.tensor(alpha_scale))
+        self.register_buffer("k_loc", torch.tensor(k_loc))
+        self.register_buffer("k_scale", torch.tensor(k_scale))
+        self.register_buffer("alpha_scale", torch.tensor(alpha_scale))
 
     @property
     def k_lognormal(self):
+        """Distribution for discount rate k."""
         return LogNormal(self.k_loc, self.k_scale)
-    
-    @property 
+
+    @property
     def alpha_halfnormal(self):
+        """Distribution for alpha."""
         return HalfNormal(self.alpha_scale)
-    
+
     def sample(self, n_samples: int = 1):
-        # returns: [n_samples, 2]
-        k_samples = self.k_lognormal.sample((n_samples,1))
-        alpha_samples = self.alpha_halfnormal.sample((n_samples,1))
+        """Draws parameter samples."""
+        # returns: [n_samples, 2]
+        k_samples = self.k_lognormal.sample((n_samples, 1))
+        alpha_samples = self.alpha_halfnormal.sample((n_samples, 1))
 
         samples = torch.hstack([k_samples, alpha_samples])
         return samples
-    
+
     def log_prob(self, theta):
+        """Evaluates prior log probabilities."""
         # theta: [b, 2]
 
         k = theta[:, 0]
@@ -51,16 +57,19 @@ class HTDPrior(Distribution):
 
 
 class HyperbolicTemporalDiscounting(Task):
-    """
-    Implements the Hyperbolic Temporal Discounting model.
-    Convention: design = (D_1, R_0); theta = (k, alpha)
-    """
-    def __init__(self, 
-                 epsilon: float = 0.01,
-                 exponent: float = 1.0,
-                 temperature: float = 0.0,
-                 prior=None):
+    """Implements the Hyperbolic Temporal Discounting model.
 
+    Convention: design = (D_1, R_0); theta = (k, alpha).
+    """
+
+    def __init__(
+        self,
+        epsilon: float = 0.01,
+        exponent: float = 1.0,
+        temperature: float = 0.0,
+        prior=None,
+    ):
+        """Initializes the task."""
         if prior is None:
             prior = HTDPrior()
 
@@ -82,18 +91,19 @@ class HyperbolicTemporalDiscounting(Task):
         self.event_shape_design = torch.Size([2])
         self.event_shape_y = torch.Size([1])
 
-        super().__init__(prior,
-                         discrete_y=True,
-                         discrete_theta=False,
-                         discrete_design=False,
-                         )
-    
-    def __repr__(self):
-        return (
-            f"HyperbolicTemporalDiscounting(exponent={self.exponent})"
+        super().__init__(
+            prior,
+            discrete_y=True,
+            discrete_theta=False,
+            discrete_design=False,
         )
 
+    def __repr__(self):
+        """Returns a compact representation."""
+        return f"HyperbolicTemporalDiscounting(exponent={self.exponent})"
+
     def make_prob(self, theta, design):
+        """Computes response probabilities."""
         # theta:  [b, 2]
         # design: [b, 2]
         # computes P(y=1 | theta, design)
@@ -107,9 +117,9 @@ class HyperbolicTemporalDiscounting(Task):
         V1 = 100 / (1 + (k * D1).pow(self.exponent))
 
         cdf_in = (V1 - R0) / alpha
-        p_y1 = self.epsilon + (1. - 2 * self.epsilon) * normal_cdf(cdf_in)
-        return p_y1.clamp(self.clamp_val, 1. - self.clamp_val)
-    
+        p_y1 = self.epsilon + (1.0 - 2 * self.epsilon) * normal_cdf(cdf_in)
+        return p_y1.clamp(self.clamp_val, 1.0 - self.clamp_val)
+
     def _outcome_logp(self, y, theta, design):
         # y: [b, 1]
         # theta: [b, 2]
@@ -122,15 +132,15 @@ class HyperbolicTemporalDiscounting(Task):
 
         y = y.squeeze(-1)
 
-        is_zero = (y == 0)
-        is_one = (y == 1)
+        is_zero = y == 0
+        is_one = y == 1
 
         logp = torch.full_like(p_y1, -torch.inf)
         logp = torch.where(is_one, log_p_y1, logp)
         logp = torch.where(is_zero, log_p_y0, logp)
 
         return logp
-    
+
     def _sample_outcome(self, theta, design):
         # theta:   [b, 2]
         # design:  [b, 2]
@@ -139,4 +149,3 @@ class HyperbolicTemporalDiscounting(Task):
         if self.temperature > 0:
             return RelaxedBernoulli(temperature=self.temperature, probs=p_y1).rsample()
         return Bernoulli(p_y1).sample()
-    

@@ -1,3 +1,5 @@
+"""Design objective exports."""
+
 from .nmc import NMC
 from .pce import PCE
 from .snmc import SNMC
