@@ -48,7 +48,7 @@ if __name__ == "__main__":
     # Set seed
     torch.manual_seed(cfg.seed)
 
-    task = LocationFinding(cfg.n_sources, cfg.dim_theta)
+    task = LocationFinding(cfg.n_sources, cfg.dim_theta).to(cfg.device)
 
     policy_net = build_policy_net(cfg).to(cfg.device)
     designer = PolicyDesigner(task, cfg.T, policy_net)
