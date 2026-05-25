@@ -1,4 +1,32 @@
 import torch
+from torch import Tensor
+
+
+def squeeze_history(tensor: Tensor, event_shape: torch.Size) -> Tensor:
+    """
+    Ensures tensor has shape [T, *event_shape] by squeezing any leading size-1 dims.
+
+    Raises ValueError if extra leading dims exist but are not all size 1 (batched
+    multi-run data that can't be unambiguously reduced to a single sequence).
+    """
+    expected_ndim = 1 + len(event_shape)
+    if tensor.ndim == expected_ndim:
+        return tensor
+    if tensor.ndim < expected_ndim:
+        raise ValueError(
+            f"Tensor must have shape [T, *event_shape] (ndim={expected_ndim}), "
+            f"got shape {tuple(tensor.shape)}."
+        )
+    n_extra = tensor.ndim - expected_ndim
+    leading = tensor.shape[:n_extra]
+    if any(s != 1 for s in leading):
+        raise ValueError(
+            f"Tensor has leading batch dimensions {tuple(leading)} that are not all "
+            f"size 1 and cannot be automatically squeezed. "
+            f"Got shape {tuple(tensor.shape)}, expected ndim={expected_ndim}. "
+            "Select a single run (e.g. tensor[0]) before passing."
+        )
+    return tensor.reshape(tensor.shape[n_extra:])
 
 
 def broadcast_and_flatten(*tensors_with_event_shapes):

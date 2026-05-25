@@ -38,7 +38,7 @@ class LocationFindingPrior(Distribution):
         return self.loc + eps @ self.chol.T
 
     def log_prob(self, theta):
-        # theta: [..., n_sources, dim_theta]
+        # theta: [*batch_shape, n_sources, dim_theta]
 
         diff = theta - self.loc
 
@@ -49,9 +49,10 @@ class LocationFindingPrior(Distribution):
 
         maha = (solve ** 2).sum(dim=-1)  # [..., n_sources]
 
-        return -0.5 * (
+        logp_per_source = -0.5 * (
             maha + self.logdet + self.dim * torch.log(torch.tensor(2 * torch.pi))
         )
+        return logp_per_source.sum(dim=-1)  # [...] — independent sources
 
 class LocationFinding(Task):
     """

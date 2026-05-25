@@ -195,14 +195,17 @@ class Task(ABC, nn.Module):
         outcome, _ = self.sample_joint(design, n_samples=n_samples)
         return outcome
     
-    def sample_prior(self, n_samples):
-        return self.prior.sample(n_samples=n_samples) # [n_samples, *event_shape_theta]
+    def sample_prior(self, n_samples=1):
+        samples = self.prior.sample(n_samples=n_samples)  # [n_samples, *event_shape_theta]
+        if n_samples == 1:
+            return samples.squeeze(0)  # [*event_shape_theta]
+        return samples
+
+    def sample_current_prior(self, n_samples=1):
+        samples = self.current_prior.sample(n_samples=n_samples)  # [n_samples, *event_shape_theta]
+        if n_samples == 1:
+            return samples.squeeze(0)  # [*event_shape_theta]
+        return samples
     
-    def sample_current_prior(self, n_samples):
-        return self.current_prior.sample(n_samples=n_samples) # [n_samples, *event_shape_theta]
-    
-    def update_prior(self, design):
-        # Potentially updates the prior
-        # For use in sequential experiments
-        raise NotImplementedError
-    
+    def update_prior(self, new_prior):
+        self.current_prior = new_prior

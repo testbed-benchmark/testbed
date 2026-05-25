@@ -26,7 +26,8 @@ full = [
     'jupyterlab',
     'notebook',
     'omegaconf',
-    'pyyaml'
+    'pyyaml',
+    'pyro-ppl'
 ]
 dev = ["pytest", "pre-commit", "ruff", 'rich']
 docs = ["sphinx"]
