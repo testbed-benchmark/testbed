@@ -29,13 +29,13 @@ def build_policy_net(cfg):
         "AttentiveDAD_v3": AttentiveDAD_v3,
         "AttentiveDAD_v4": AttentiveDAD_v4,
     }
-    
+
     net_cls = POLICY_NETS[cfg.policy_net_name]
-    net = net_cls()   # later you can pass args via cfg too
+    net = net_cls()  # later you can pass args via cfg too
     return net
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     conf_cli = OmegaConf.from_cli()
     cfg = OmegaConf.load(conf_cli.config)
     # sync cli args with config
@@ -48,7 +48,7 @@ if __name__ == '__main__':
     # Set seed
     torch.manual_seed(cfg.seed)
 
-    task = LocationFinding(cfg.n_sources, cfg.dim_theta, device=cfg.device)
+    task = LocationFinding(cfg.n_sources, cfg.dim_theta).to(cfg.device)
 
     policy_net = build_policy_net(cfg).to(cfg.device)
     designer = PolicyDesigner(task, cfg.T, policy_net)
@@ -66,8 +66,7 @@ if __name__ == '__main__':
         objective=objective,
         optimizer=optimizer,
         cfg=cfg,
-        manager=manager
+        manager=manager,
     )
 
     trainer.train()
-    

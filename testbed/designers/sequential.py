@@ -1,6 +1,6 @@
 import torch
 
-from testbed.inference import run_importance_sampling
+from testbed.inference.is_sampler import run_importance_sampling
 
 
 class SequentialDesigner:

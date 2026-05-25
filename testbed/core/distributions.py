@@ -65,12 +65,12 @@ class EmpiricalDistribution(Distribution):
 
         """
         super().__init__()
-        self.locs = locs
 
         if weights is None:
-            weights = torch.ones(locs.shape[0])
+            weights = torch.ones(locs.shape[0], device=locs.device)
         assert torch.all(weights >= 0), 'Weights must be non-negative.'
-        self.weights = weights.squeeze()
+        self.register_buffer('locs', locs)
+        self.register_buffer('weights', weights.squeeze())
 
     def sample(self, n_samples: int = 1) -> Tensor:
         """
