@@ -1,2 +1,8 @@
 from .is_sampler import run_importance_sampling
-from .pyro_sampler import run_mcmc
+
+try:
+    from .pyro_sampler import run_mcmc
+except ModuleNotFoundError as exc:
+    if exc.name != "pyro":
+        raise
+    run_mcmc = None
