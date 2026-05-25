@@ -1,6 +1,6 @@
 """Design objective exports."""
 
-from .nmc import NMC
-from .pce import PCE
-from .snmc import SNMC
-from .spce import SPCE
+from .snmc import NMC, SNMC
+from .spce import PCE, SPCE
+
+__all__ = ["NMC", "PCE", "SNMC", "SPCE"]

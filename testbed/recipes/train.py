@@ -24,6 +24,13 @@ class Trainer:
         # checkpointing
         self.best_metric = -torch.inf
 
+    @property
+    def metric_logger(self):
+        """Returns the metric logger when a manager is configured."""
+        if self.manager is None:
+            return None
+        return self.manager.metric_logger
+
     def train(self):
         """Runs training."""
         self.designer.policy_net.train()
@@ -32,8 +39,8 @@ class Trainer:
             metrics = self.train_step()
             metrics["step"] = step
 
-            if self.manager.metric_logger is not None:
-                self.manager.metric_logger.log(metrics)
+            if self.metric_logger is not None:
+                self.metric_logger.log(metrics)
 
             # evaluation
             if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
@@ -45,17 +52,18 @@ class Trainer:
 
             self._maybe_save_best(step, metrics, min_step=500)
 
-        save_path = self.manager.path("final_step.pt")
-        torch.save(
-            {
-                "model": self.designer.policy_net.state_dict(),
-                "step": step,
-            },
-            save_path,
-        )
+        if self.manager is not None:
+            save_path = self.manager.path("final_step.pt")
+            torch.save(
+                {
+                    "model": self.designer.policy_net.state_dict(),
+                    "step": step,
+                },
+                save_path,
+            )
 
-        if self.manager.metric_logger is not None:
-            self.manager.metric_logger.close()
+        if self.metric_logger is not None:
+            self.metric_logger.close()
 
     def train_step(self):
         """Runs one training step."""
@@ -81,7 +89,7 @@ class Trainer:
             "gain": gain.item(),
         }
 
-    def evaluate():
+    def evaluate(self):
         """Returns placeholder evaluation metrics."""
         # TODO
         # Evaluating with a large inner sample size slows down training quite a bit.
