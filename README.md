@@ -44,7 +44,7 @@ Please follow the following guidelines if you would like to contribute to TestBE
 1. Fork the repository and create a new branch for your feature or bug fix.
 2. Add your code. Add your tests.
 3. Run the linter, formatter, and tests, and fix any issues:
-```py
+```sh
 ruff check
 ruff format
 pytest
