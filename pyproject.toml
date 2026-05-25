@@ -43,5 +43,9 @@ testpaths = ["tests"]   # where to look
 
 [tool.ruff.lint]
 extend-select = ["I"]
+select = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.setuptools_scm]
