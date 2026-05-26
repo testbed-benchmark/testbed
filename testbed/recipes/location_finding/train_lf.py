@@ -1,3 +1,5 @@
+"""Train a location-finding policy."""
+
 import os
 
 import torch
@@ -20,6 +22,7 @@ from testbed.tasks import LocationFinding
 
 
 def build_policy_net(cfg):
+    """Builds the configured policy network."""
     POLICY_NETS = {
         "DADNet": DADNet,
         "DADNet_v2": DADNet_v2,

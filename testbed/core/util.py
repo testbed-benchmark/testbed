@@ -1,10 +1,11 @@
+"""Tensor shape and probability helpers."""
+
 import torch
 from torch import Tensor
 
 
 def squeeze_history(tensor: Tensor, event_shape: torch.Size) -> Tensor:
-    """
-    Ensures tensor has shape [T, *event_shape] by squeezing any leading size-1 dims.
+    """Ensures tensor has shape [T, *event_shape] by squeezing any leading size-1 dims.
 
     Raises ValueError if extra leading dims exist but are not all size 1 (batched
     multi-run data that can't be unambiguously reduced to a single sequence).
@@ -30,10 +31,7 @@ def squeeze_history(tensor: Tensor, event_shape: torch.Size) -> Tensor:
 
 
 def broadcast_and_flatten(*tensors_with_event_shapes):
-    """
-    For each (tensor, event_shape) pair, broadcast the batch dims (all dims
-    except the last len(event_shape)) together using torch.broadcast_shapes,
-    then flatten them to a single b_flat dimension.
+    """Broadcasts batch dims and flatten them into one dimension.
 
     Uses broadcast_to (zero-copy view) so no data is copied unless the
     computation genuinely requires it (i.e. a 0-stride expanded dim must be
@@ -43,7 +41,7 @@ def broadcast_and_flatten(*tensors_with_event_shapes):
     """
     batch_shapes = []
     for t, e in tensors_with_event_shapes:
-        batch_shapes.append(t.shape[:t.ndim - len(e)])
+        batch_shapes.append(t.shape[: t.ndim - len(e)])
 
     target_batch = torch.broadcast_shapes(*batch_shapes)
     b_flat = 1
@@ -59,12 +57,13 @@ def broadcast_and_flatten(*tensors_with_event_shapes):
 
 
 def expand_along_batch(*tensors):
-    # Expands tensors along the first (batch) dimension so that they agree in this dim.
-    # Requires tensors to have either the same batch dimension or a batch dimension of one.
-    
+    """Expands tensors along the first batch dimension."""
+    # Expands tensors along the first (batch) dimension so that they agree in this dim.
+    # Requires tensors to have either the same batch dimension or a batch dimension of one.
+
     if not tensors:
         return []
-    
+
     batch_sizes = [t.shape[0] for t in tensors]
     target_b = max(batch_sizes)
 
@@ -75,23 +74,31 @@ def expand_along_batch(*tensors):
                 f"Incompatible batch dimensions. Batch sizes must either be 1 or "
                 f"agree on a single value. Got: {batch_sizes}"
             )
-        
-    return tuple(t.expand(target_b, *t.shape[1:]) if t.shape[0] == 1 else t for t in tensors)
+
+    return tuple(
+        t.expand(target_b, *t.shape[1:]) if t.shape[0] == 1 else t for t in tensors
+    )
+
 
 def batch_trace(x):
+    """Computes traces for a batch of square matrices."""
     # x: [b, m, m]
     # takes the traces of each m x m matrix in x
-    return torch.einsum('b m m -> b', x)
+    return torch.einsum("b m m -> b", x)
+
 
 def normal_log_prob(y, loc, scale):
+    """Computes univariate Gaussian log probabilities."""
     # Computes the log-pdf of a univariate Gaussian N(loc, scale^2)
 
     scale = torch.as_tensor(scale, device=y.device)
-    
-    var = scale ** 2
+
+    var = scale**2
     term1 = ((y - loc) ** 2) / var
     term2 = torch.log(2 * torch.pi * var)
     return -0.5 * (term1 + term2)
 
+
 def normal_cdf(x):
+    """Computes the standard normal CDF."""
     return 0.5 * (1 + torch.erf(x / 2**0.5))

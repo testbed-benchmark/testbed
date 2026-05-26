@@ -1,16 +1,16 @@
+"""Neural-network building blocks."""
+
 import torch
 import torch.nn as nn
 
 
 class MLP(nn.Module):
+    """Multilayer perceptron."""
 
-    def __init__(self, dims, 
-                 activation=nn.ReLU, 
-                 norm=None,
-                 dropout=0.0,
-                 activate_last=False):
-        """
-        Implements a basic MLP. 
+    def __init__(
+        self, dims, activation=nn.ReLU, norm=None, dropout=0.0, activate_last=False
+    ):
+        """Implements a basic MLP.
 
         dims: list of layer dimensions, e.g., [3, 256, 256, 16]
         activation: activation class (nn.ReLU, nn.GELU, ...)
@@ -29,7 +29,6 @@ class MLP(nn.Module):
 
             is_last = i == n_layers - 1
             if not is_last or activate_last:
-
                 if norm is not None:
                     layers.append(norm(out_dim))
 
@@ -42,32 +41,36 @@ class MLP(nn.Module):
         self.net = nn.Sequential(*layers)
 
     def forward(self, x):
+        """Applies the MLP."""
         return self.net(x)
 
 
 class TransformerEncoderBlock(nn.Module):
-    """
-    Implements a standard transformer-style encoder block with pre-norms.
+    """Implements a standard transformer-style encoder block with pre-norms.
+
     x = x + MHA(LN(x))
-    x = x + MLP(LN(x))
+    x = x + MLP(LN(x)).
 
     Heuristics:
     - dim / heads = 32
     """
 
     def __init__(self, dim, num_heads, batch_first=True, expand=4, dropout=0.0):
+        """Initializes attention and feed-forward layers."""
         super().__init__()
 
-        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=batch_first, dropout=dropout)
-        self.mlp = MLP([dim, expand*dim, dim], activation=nn.GELU)
+        self.attn = nn.MultiheadAttention(
+            dim, num_heads, batch_first=batch_first, dropout=dropout
+        )
+        self.mlp = MLP([dim, expand * dim, dim], activation=nn.GELU)
 
         self.ln1 = nn.LayerNorm(dim)
         self.ln2 = nn.LayerNorm(dim)
 
         self.dropout = nn.Dropout(dropout)
 
-    
     def forward(self, x):
+        """Applies the encoder block."""
         # x: [b, T, dim]
         # out: [b, T, dim]
 
@@ -82,17 +85,17 @@ class TransformerEncoderBlock(nn.Module):
 
 
 class AttentionPool(nn.Module):
-    """
-    Implements a learnable, attention-based pooling mechanism.
+    """Implements a learnable, attention-based pooling mechanism."""
 
-    """
-    def __init__(self, dim, num_heads, query_init_scale = 0.02):
+    def __init__(self, dim, num_heads, query_init_scale=0.02):
+        """Initializes pooling parameters."""
         super().__init__()
         self.query = nn.Parameter(torch.randn(1, 1, dim) * query_init_scale)
         self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
         self.ln = nn.LayerNorm(dim)
 
     def forward(self, x):
+        """Pools a sequence into one embedding."""
         # x: [b, T, dim]
         q = self.query.expand(x.size(0), -1, -1)  # [b, 1, dim]
         out, _ = self.attn(q, self.ln(x), self.ln(x))

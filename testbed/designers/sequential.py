@@ -1,19 +1,30 @@
+"""Sequential design optimization."""
+
 import torch
 
 from testbed.inference.is_sampler import run_importance_sampling
 
 
 class SequentialDesigner:
+    """Optimizes each design online."""
 
-    def __init__(self, task, T, objective, lr, n_step_opt,
-                 inference_fn=run_importance_sampling,
-                 init_design_dist=None):
-        """
+    def __init__(
+        self,
+        task,
+        T,
+        objective,
+        lr,
+        n_step_opt,
+        inference_fn=run_importance_sampling,
+        init_design_dist=None,
+    ):
+        """Initializes the sequential designer.
+
         init_design_dist controls how the initial design is drawn before each gradient optimization:
-          None             -- standard normal N(0, I)  [default]
-          "current_prior"  -- sample one design from task.current_prior (useful when the design
-                              space and theta space coincide, e.g. source-finding)
-          Distribution     -- any testbed Distribution; one sample is drawn per call
+        None             -- standard normal N(0, I)  [default]
+        "current_prior"  -- sample one design from task.current_prior (useful when the design
+                            space and theta space coincide, e.g. source-finding)
+        Distribution     -- any testbed Distribution; one sample is drawn per call.
         """
         self.task = task
         self.T = T
@@ -24,6 +35,7 @@ class SequentialDesigner:
         self.init_design_dist = init_design_dist
 
     def initialize_design(self):
+        """Creates an initial design for optimization."""
         # Returns [*event_shape_design] with requires_grad=True.
         # Override this method for custom initialization logic.
         dist = self.init_design_dist
@@ -32,10 +44,15 @@ class SequentialDesigner:
         elif dist == "current_prior":
             design = self.task.sample_current_prior().to(self.task.device)
         else:
-            design = dist.sample(1).reshape(self.task.event_shape_design).to(self.task.device)
+            design = (
+                dist.sample(1)
+                .reshape(self.task.event_shape_design)
+                .to(self.task.device)
+            )
         return design.requires_grad_(True)
 
     def propose_design(self, return_gain=False):
+        """Optimizes and returns the next design."""
         # Selects the next design via gradient descent on the objective
         # returns: [*event_shape_design]
         design = self.initialize_design()
@@ -54,9 +71,9 @@ class SequentialDesigner:
         return design
 
     def rollout(self, theta_true):
-        """
-        Runs the full sequential experimental design procedure:
-        Propose -> Sample -> Update posterior
+        """Runs the full sequential experimental design procedure.
+
+        Propose -> Sample -> Update posterior.
 
         Args:
             theta_true: [*event_shape_theta] or [1, *event_shape_theta]
@@ -84,8 +101,8 @@ class SequentialDesigner:
             y_list.append(y)
             design_list.append(design)
 
-            y_history = torch.stack(y_list)           # [t+1, *event_shape_y]
-            design_history = torch.stack(design_list) # [t+1, *event_shape_design]
+            y_history = torch.stack(y_list)  # [t+1, *event_shape_y]
+            design_history = torch.stack(design_list)  # [t+1, *event_shape_design]
 
             posterior = self.inference_fn(self.task, y_history, design_history)
             self.task.update_prior(posterior)

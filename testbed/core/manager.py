@@ -1,3 +1,5 @@
+"""Experiment run management."""
+
 import os
 import time
 
@@ -7,7 +9,12 @@ from testbed.core.logging import EventLogger, JSONLLogger
 
 
 class Manager:
-    def __init__(self, cfg, root="runs", name=None, logger=None, console=True, timestamp=True):
+    """Manage run directories, config snapshots, and loggers."""
+
+    def __init__(
+        self, cfg, root="runs", name=None, logger=None, console=True, timestamp=True
+    ):
+        """Creates a run directory and loggers."""
         self.cfg = cfg
 
         # create run directory
@@ -29,20 +36,21 @@ class Manager:
 
         # logging
         if logger is None:
-            metrics_path = os.path.join(self.dir, 'metrics.jsonl')
+            metrics_path = os.path.join(self.dir, "metrics.jsonl")
             self.metric_logger = JSONLLogger(metrics_path)
         else:
             self.metric_logger = logger
 
-        events_path = os.path.join(self.dir, 'events.log')
+        events_path = os.path.join(self.dir, "events.log")
         self.event_logger = EventLogger(events_path, console=console)
 
-        self.event_logger.info('Spawning Manager...')
-        self.event_logger.info(f'Run directory: {self.dir}')
-        
+        self.event_logger.info("Spawning Manager...")
+        self.event_logger.info(f"Run directory: {self.dir}")
+
     def _save_config(self):
-        """ Helper function to save the experiment configuration.
-        Config types supported: DataClass, OmegaConf, Dict, etc. 
+        """Saves the experiment configuration.
+
+        Config types supported: DataClass, OmegaConf, Dict, etc.
         """
         with open(self.config_path, "w") as f:
             cfg = self.cfg
@@ -50,6 +58,7 @@ class Manager:
             # --- dataclass ---
             try:
                 from dataclasses import asdict, is_dataclass
+
                 if is_dataclass(cfg):
                     yaml.dump(asdict(cfg), f)
                     return
@@ -59,6 +68,7 @@ class Manager:
             # --- OmegaConf ---
             try:
                 from omegaconf import OmegaConf
+
                 if OmegaConf.is_config(cfg):
                     yaml.dump(OmegaConf.to_container(cfg, resolve=True), f)
                     return
@@ -74,5 +84,5 @@ class Manager:
             yaml.dump(vars(cfg), f)
 
     def path(self, *parts):
-        """Convenience for constructing paths inside run dir"""
+        """Builds paths inside the run directory."""
         return os.path.join(self.dir, *parts)

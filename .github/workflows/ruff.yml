@@ -20,8 +20,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Run Ruff
+      - name: Run Ruff linter
         uses: astral-sh/ruff-action@v3
         with:
           args: check --output-format=github
+          src: "."
+
+      - name: Run Ruff formatter
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: format --check
           src: "."

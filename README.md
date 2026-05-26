@@ -37,6 +37,20 @@ To do a basic check of your installation, run `pytest`. A more extensive test ca
 
 Check out `notebooks/introduction.ipynb` for a quick overview of the package.
 
+# Contributing
+
+Please follow the following guidelines if you would like to contribute to TestBED:
+
+1. Fork the repository and create a new branch for your feature or bug fix.
+2. Add your code. Add your tests.
+3. Run the linter, formatter, and tests, and fix any issues:
+```sh
+ruff check
+ruff format
+pytest
+```
+4. Submit a pull request with a clear description of your changes and why they are needed.
+
 # Recipes
 
 > [!WARNING]
