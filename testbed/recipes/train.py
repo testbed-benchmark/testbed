@@ -70,9 +70,9 @@ class Trainer:
         cfg = self.cfg
 
         theta0 = self.task.sample_prior(cfg.n_outer)
-        y_obs, xi_obs = self.designer.rollout(theta0)
+        y_history, design_history = self.designer.rollout(theta0)
 
-        gain = self.objective.estimate_gain(y_obs, xi_obs, theta0)
+        gain = self.objective.estimate_gain(y_history, design_history, theta0)
         loss = -gain
 
         self.optimizer.zero_grad()
