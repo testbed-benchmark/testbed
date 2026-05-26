@@ -19,12 +19,12 @@ class DesignNet(torch.nn.Module, ABC):
         return next(self.parameters()).device
 
     @abstractmethod
-    def forward(self, past_designs, past_outcomes) -> Any:
-        """Maps past (design, outcome) pairs to the next design ξ_t.
+    def forward(self, y_history, design_history) -> Any:
+        """Maps past (design, outcome) pairs to the next design x_t.
 
         Returns:
         Any
-            The next design ξ_t
+            The next design x_t
 
         """
         ...
