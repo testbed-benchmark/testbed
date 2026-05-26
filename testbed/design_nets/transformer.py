@@ -22,7 +22,9 @@ class AttentiveDAD(DesignNet):
         super().__init__()
 
         # Could possibly try out random Fourier features for our encoder
-        self.input_encoder = MLP([dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU)
+        self.input_encoder = MLP(
+            [dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU
+        )
 
         self.transformer_blocks = nn.ModuleList(
             [TransformerEncoderBlock(dim_emb, num_heads) for _ in range(num_blocks)]
@@ -77,7 +79,9 @@ class AttentiveDAD_v2(DesignNet):
         super().__init__()
 
         # Could possibly try out random Fourier features for our encoder
-        self.input_encoder = MLP([dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU)
+        self.input_encoder = MLP(
+            [dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU
+        )
 
         self.transformer_blocks = nn.ModuleList(
             [TransformerEncoderBlock(dim_emb, num_heads) for _ in range(num_blocks)]
@@ -136,7 +140,9 @@ class AttentiveDAD_v3(DesignNet):
         super().__init__()
 
         # Could possibly try out random Fourier features for our encoder
-        self.input_encoder = MLP([dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU)
+        self.input_encoder = MLP(
+            [dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU
+        )
 
         self.transformer_blocks = nn.ModuleList(
             [TransformerEncoderBlock(dim_emb, num_heads) for _ in range(num_blocks)]
@@ -192,7 +198,9 @@ class AttentiveDAD_v4(DesignNet):
         super().__init__()
 
         # Could possibly try out random Fourier features for our encoder
-        self.input_encoder = MLP([dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU)
+        self.input_encoder = MLP(
+            [dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU
+        )
 
         self.transformer_blocks = nn.ModuleList(
             [TransformerEncoderBlock(dim_emb, num_heads) for _ in range(num_blocks)]

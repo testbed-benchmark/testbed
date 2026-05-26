@@ -40,7 +40,9 @@ class DADNet(DesignNet):
         emb = self.null_embedding.expand(b, -1)
 
         if T > 0:
-            x = torch.cat([y_history, design_history], dim=-1)  # [b, T, dim_y + dim_design]
+            x = torch.cat(
+                [y_history, design_history], dim=-1
+            )  # [b, T, dim_y + dim_design]
 
             enc = self.encoder_net(x)  # [b, T, dim_enc]
             emb = emb + enc.sum(dim=1)  # [b, dim_enc]
