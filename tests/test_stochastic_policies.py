@@ -1,7 +1,13 @@
 import pytest
 import torch
 
-from testbed.design_nets import PolicySample, StochasticDesignNet, TanhGaussianPolicyNet
+from testbed.design_nets import (
+    DeepSetGaussianActor,
+    GaussianPolicyActor,
+    PolicySample,
+    StochasticDesignNet,
+    TanhGaussianPolicyNet,
+)
 from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
@@ -17,21 +23,51 @@ def make_space():
 
 
 def make_policy():
-    return TanhGaussianPolicyNet(make_space(), dim_y=1, dim_h=32, dim_emb=16)
+    return TanhGaussianPolicyNet(make_space())
 
 
 def set_actor_output(policy, mean, log_std):
     mean = torch.as_tensor(mean, dtype=policy.action_scale.dtype)
     log_std = torch.as_tensor(log_std, dtype=policy.action_scale.dtype)
-    scaled_log_std = 2 * (log_std - policy.log_std_min) / (
-        policy.log_std_max - policy.log_std_min
+    actor = policy.actor
+    scaled_log_std = 2 * (log_std - actor.log_std_min) / (
+        actor.log_std_max - actor.log_std_min
     ) - 1
 
     with torch.no_grad():
-        policy.mean_head.weight.zero_()
-        policy.mean_head.bias.copy_(mean)
-        policy.log_std_head.weight.zero_()
-        policy.log_std_head.bias.copy_(torch.atanh(scaled_log_std))
+        actor.mean_head.weight.zero_()
+        actor.mean_head.bias.copy_(mean)
+        actor.log_std_head.weight.zero_()
+        actor.log_std_head.bias.copy_(torch.atanh(scaled_log_std))
+
+
+class RecordingGaussianActor(GaussianPolicyActor):
+    def __init__(self, mean, log_std):
+        super().__init__()
+        self.register_buffer("mean", torch.as_tensor(mean, dtype=torch.float32))
+        self.register_buffer("log_std", torch.as_tensor(log_std, dtype=torch.float32))
+        self.y_shape = None
+        self.design_shape = None
+        self.mask = None
+
+    def forward(self, y_history, design_history, *, mask=None):
+        self.y_shape = y_history.shape
+        self.design_shape = design_history.shape
+        self.mask = mask
+        batch_size = design_history.shape[0]
+        return (
+            self.mean.expand(batch_size, -1),
+            self.log_std.expand(batch_size, -1),
+        )
+
+
+class BadShapeGaussianActor(GaussianPolicyActor):
+    def forward(self, y_history, design_history, *, mask=None):
+        batch_size = design_history.shape[0]
+        return (
+            torch.zeros(batch_size, 1, device=design_history.device),
+            torch.zeros(batch_size, 1, device=design_history.device),
+        )
 
 
 def test_tanh_gaussian_policy_samples_bounded_actions_and_log_probs():
@@ -78,7 +114,7 @@ def test_tanh_gaussian_policy_raw_actions_are_approximately_normal():
 def test_tanh_gaussian_policy_transformed_actions_follow_box_scale_and_shift():
     torch.manual_seed(0)
     space = BoxDesignSpace(torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]))
-    policy = TanhGaussianPolicyNet(space, dim_y=1, dim_h=32, dim_emb=16)
+    policy = TanhGaussianPolicyNet(space)
     mean = torch.tensor([0.25, -0.5])
     log_std = torch.tensor([-0.7, 0.1])
     set_actor_output(policy, mean, log_std)
@@ -124,7 +160,7 @@ def test_tanh_gaussian_policy_accepts_padded_observation_dict():
         observation_fn=PaddedHistoryObservation(),
         batch_shape=(4,),
     )
-    policy = TanhGaussianPolicyNet(space, dim_y=1, dim_h=32, dim_emb=16)
+    policy = TanhGaussianPolicyNet(space)
 
     obs, _ = env.reset(seed=0)
     sample0 = policy.sample_from_observation(obs)
@@ -165,6 +201,61 @@ def test_tanh_gaussian_policy_allows_gradient_flow():
 
     grads = [p.grad for p in policy.parameters() if p.requires_grad]
     assert any(grad is not None and torch.any(grad != 0) for grad in grads)
+
+
+def test_tanh_gaussian_policy_uses_deepset_actor_by_default():
+    policy = make_policy()
+
+    assert isinstance(policy.actor, DeepSetGaussianActor)
+    assert not hasattr(policy, "encoder_net")
+    assert not hasattr(policy, "actor_net")
+    assert not hasattr(policy, "mean_head")
+    assert not hasattr(policy, "log_std_head")
+
+
+def test_tanh_gaussian_policy_accepts_custom_actor_and_forwards_mask():
+    actor = RecordingGaussianActor(mean=[0.2, -0.1], log_std=[-0.5, -0.25])
+    policy = TanhGaussianPolicyNet(make_space(), actor=actor)
+    y_history = torch.randn(2, 3, 4, 1)
+    design_history = torch.randn(2, 3, 4, 2)
+    mask = torch.ones(2, 3, 4, dtype=torch.bool)
+    mask[:, :, -1] = False
+
+    sample = policy.sample(
+        y_history,
+        design_history,
+        mask=mask,
+        deterministic=True,
+    )
+
+    assert actor.y_shape == (6, 4, 1)
+    assert actor.design_shape == (6, 4, 2)
+    assert actor.mask.shape == (6, 4)
+    assert torch.equal(actor.mask, mask.reshape(6, 4))
+    assert sample.action.shape == (2, 3, 2)
+    assert sample.log_prob.shape == (2, 3)
+    assert torch.allclose(
+        sample.action[0, 0],
+        torch.tanh(torch.tensor([0.2, -0.1])),
+    )
+
+
+def test_tanh_gaussian_policy_rejects_invalid_mask_shape():
+    policy = make_policy()
+
+    with pytest.raises(ValueError, match="mask must have shape"):
+        policy.sample(
+            torch.randn(2, 3, 1),
+            torch.randn(2, 3, 2),
+            mask=torch.ones(2, 2, dtype=torch.bool),
+        )
+
+
+def test_tanh_gaussian_policy_rejects_invalid_actor_output_shape():
+    policy = TanhGaussianPolicyNet(make_space(), actor=BadShapeGaussianActor())
+
+    with pytest.raises(ValueError, match="actor mean"):
+        policy.sample(torch.randn(2, 3, 1), torch.randn(2, 3, 2))
 
 
 def test_tanh_gaussian_policy_rejects_non_box_design_space():

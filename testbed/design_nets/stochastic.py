@@ -83,37 +83,53 @@ class StochasticDesignNet(DesignNet):
         )
 
 
-class TanhGaussianPolicyNet(StochasticDesignNet):
-    """Tanh-squashed Gaussian policy for continuous box design spaces."""
+class GaussianPolicyActor(nn.Module):
+    """Maps flattened experimental histories to Gaussian policy parameters."""
+
+    def forward(
+        self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]:
+        """Computes Gaussian mean and log standard deviation.
+
+        Args:
+            y_history: Outcome history with shape [batch, T, dim_y].
+            design_history: Design history with shape [batch, T, dim_design].
+            mask: Optional boolean or float mask with shape [batch, T].
+
+        Returns:
+            Gaussian mean and log standard deviation, both with shape
+            [batch, dim_design].
+        """
+        raise NotImplementedError
+
+
+class DeepSetGaussianActor(GaussianPolicyActor):
+    """DeepSets-style Gaussian actor using masked sum pooling over history."""
 
     def __init__(
         self,
-        design_space: BoxDesignSpace,
+        *,
+        dim_design: int,
         dim_y: int = 1,
         dim_h: int = 128,
         dim_emb: int = 64,
-        *,
         log_std_min: float = -5.0,
         log_std_max: float = 2.0,
     ):
-        """Initializes the policy network.
+        """Initializes the actor network.
 
         Args:
-            design_space: Continuous box design space used to bound actions.
             dim_y: Flattened outcome dimension.
+            dim_design: Flattened design dimension.
             dim_h: Hidden layer width.
             dim_emb: History summary dimension.
             log_std_min: Lower bound for Gaussian log standard deviations.
             log_std_max: Upper bound for Gaussian log standard deviations.
         """
-        if not isinstance(design_space, BoxDesignSpace):
-            raise TypeError("TanhGaussianPolicyNet requires a BoxDesignSpace.")
         super().__init__()
 
-        self.design_space = design_space
-        self.event_shape_design = torch.Size(design_space.event_shape)
-        self.dim_design = self.event_shape_design.numel()
         self.dim_y = int(dim_y)
+        self.dim_design = int(dim_design)
         self.dim_emb = int(dim_emb)
         self.log_std_min = float(log_std_min)
         self.log_std_max = float(log_std_max)
@@ -125,6 +141,61 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         self.actor_net = MLP([dim_emb, dim_h, dim_h], activation=nn.ReLU)
         self.mean_head = nn.Linear(dim_h, self.dim_design)
         self.log_std_head = nn.Linear(dim_h, self.dim_design)
+
+    def forward(
+        self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]:
+        """Computes Gaussian parameters from flattened histories."""
+        b_flat, T, _ = design_history.shape
+
+        if T == 0:
+            summary = torch.zeros(
+                b_flat,
+                self.dim_emb,
+                device=design_history.device,
+                dtype=design_history.dtype,
+            )
+        else:
+            enc_input = torch.cat([design_history, y_history], dim=-1)
+            enc = self.encoder_net(enc_input)
+
+            if mask is not None:
+                enc = enc * mask.to(dtype=enc.dtype).unsqueeze(-1)
+
+            summary = enc.sum(dim=1)
+
+        hidden = self.actor_net(summary)
+        mean = self.mean_head(hidden)
+        log_std = torch.tanh(self.log_std_head(hidden))
+        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
+            log_std + 1
+        )
+        return mean, log_std
+
+
+class TanhGaussianPolicyNet(StochasticDesignNet):
+    """Tanh-squashed Gaussian policy for continuous box design spaces."""
+
+    def __init__(
+        self,
+        design_space: BoxDesignSpace,
+        actor: GaussianPolicyActor | None = None,
+    ):
+        """Initializes the policy network.
+
+        Args:
+            design_space: Continuous box design space used to bound actions.
+            actor: Optional module mapping flattened histories to Gaussian
+                mean and log standard deviation.
+        """
+        super().__init__()
+
+        self.design_space = design_space
+        self.event_shape_design = torch.Size(design_space.event_shape)
+        self.dim_design = self.event_shape_design.numel()
+        self.actor = actor or DeepSetGaussianActor(
+            dim_design=self.dim_design,
+        )
 
         low = design_space.low.reshape(self.dim_design)
         high = design_space.high.reshape(self.dim_design)
@@ -139,7 +210,6 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 [*batch_shape, T, *event_shape_y].
             design_history: Design history with shape
                 [*batch_shape, T, *event_shape_design].
-
         Returns:
             Deterministic bounded design with shape
             [*batch_shape, *event_shape_design].
@@ -171,10 +241,11 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             probability, the deterministic bounded action, and the unsquashed
             Gaussian action.
         """
-        batch_shape, summary = self._summarize_history(
+        batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
             y_history, design_history, mask=mask
         )
-        mean, log_std = self._actor_params(summary)
+        mean, log_std = self.actor(y_flat, design_flat, mask=mask_flat)
+        self._validate_actor_params(mean, log_std, batch_size=design_flat.shape[0])
         std = log_std.exp()
         normal, action_dist = self._action_distribution(mean, std)
 
@@ -222,10 +293,10 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             action = transform(action)
         return action
 
-    def _summarize_history(
+    def _prepare_histories(
         self, y_history, design_history, *, mask: Tensor | None = None
-    ) -> tuple[torch.Size, Tensor]:
-        """Encodes a possibly padded history with masked sum pooling.
+    ) -> tuple[torch.Size, Tensor, Tensor, Tensor | None]:
+        """Validates histories and flattens arbitrary batch shapes.
 
         Args:
             y_history: Outcome history with shape
@@ -236,17 +307,22 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 [*batch_shape, T].
 
         Returns:
-            A tuple containing the batch shape and encoded history summary with
-            shape [prod(batch_shape), dim_emb].
+            The original batch shape, flattened outcome history, flattened design
+            history, and optional flattened mask.
         """
         dtype = self.action_scale.dtype
-        y_history = torch.as_tensor(y_history, device=self.device, dtype=dtype)
-        design_history = torch.as_tensor(
-            design_history, device=self.device, dtype=dtype
-        )
+        device = self.action_scale.device
+        y_history = torch.as_tensor(y_history, device=device, dtype=dtype)
+        design_history = torch.as_tensor(design_history, device=device, dtype=dtype)
 
         design_event_ndim = len(self.event_shape_design)
         design_t_dim = design_history.ndim - design_event_ndim - 1
+        if design_t_dim < 0:
+            raise ValueError(
+                "design_history must have shape "
+                f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
+            )
+
         batch_shape = torch.Size(design_history.shape[:design_t_dim])
         T = design_history.shape[design_t_dim]
 
@@ -260,43 +336,45 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
             )
 
+        if y_history.ndim < len(batch_shape) + 2:
+            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
+        if y_history.shape[: len(batch_shape)] != batch_shape:
+            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
+        if y_history.shape[len(batch_shape)] != T:
+            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
+
         b_flat = prod(batch_shape) if batch_shape else 1
-        y_flat = y_history.reshape(b_flat, T, self.dim_y)
+        dim_y = prod(y_history.shape[len(batch_shape) + 1 :])
+        y_flat = y_history.reshape(b_flat, T, dim_y)
         design_flat = design_history.reshape(b_flat, T, self.dim_design)
 
-        if T == 0:
-            summary = torch.zeros(
-                b_flat,
-                self.dim_emb,
-                device=y_flat.device,
-                dtype=y_flat.dtype,
-            )
-            return batch_shape, summary
-
-        enc_input = torch.cat([design_flat, y_flat], dim=-1)
-        enc = self.encoder_net(enc_input)
-
+        mask_flat = None
         if mask is not None:
-            mask = torch.as_tensor(mask, device=enc.device, dtype=enc.dtype)
-            mask = mask.reshape(b_flat, T, 1)
-            enc = enc * mask
+            mask = torch.as_tensor(mask, device=device)
+            expected_mask_shape = (*batch_shape, T)
+            if mask.shape != expected_mask_shape:
+                raise ValueError(
+                    "mask must have shape "
+                    f"[*batch_shape, T]; expected {expected_mask_shape}."
+                )
+            mask_flat = mask.reshape(b_flat, T)
 
-        return batch_shape, enc.sum(dim=1)
+        return batch_shape, y_flat, design_flat, mask_flat
 
-    def _actor_params(self, summary: Tensor) -> tuple[Tensor, Tensor]:
-        """Computes Gaussian mean and bounded log standard deviation.
-
-        Args:
-            summary: Encoded history summary with shape [batch, dim_emb].
-
-        Returns:
-            A tuple containing the Gaussian mean and log standard deviation, each
-            with shape [batch, dim_design].
-        """
-        hidden = self.actor_net(summary)
-        mean = self.mean_head(hidden)
-        log_std = torch.tanh(self.log_std_head(hidden))
-        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
-            log_std + 1
-        )
-        return mean, log_std
+    def _validate_actor_params(
+        self, mean: Tensor, log_std: Tensor, *, batch_size: int
+    ) -> None:
+        """Validates Gaussian parameter shapes returned by the actor."""
+        expected_shape = (batch_size, self.dim_design)
+        if mean.shape != expected_shape:
+            raise ValueError(
+                "actor mean must have shape "
+                f"[batch, dim_design]; expected {expected_shape}, got "
+                f"{tuple(mean.shape)}."
+            )
+        if log_std.shape != expected_shape:
+            raise ValueError(
+                "actor log_std must have shape "
+                f"[batch, dim_design]; expected {expected_shape}, got "
+                f"{tuple(log_std.shape)}."
+            )
