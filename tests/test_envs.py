@@ -80,7 +80,9 @@ def test_categorical_design_space_samples_contains_and_projects():
     assert space.contains(torch.tensor([0.0, 1.0, 2.0]))
     assert not space.contains(torch.tensor([0.5]))
     assert not space.contains(torch.tensor([-1, 3]))
-    assert torch.equal(space.project(torch.tensor([-2.0, 1.6, 5.0])), torch.tensor([0, 2, 2]))
+    assert torch.equal(
+        space.project(torch.tensor([-2.0, 1.6, 5.0])), torch.tensor([0, 2, 2])
+    )
     with pytest.raises(ValueError):
         CategoricalDesignSpace(0)
 
@@ -128,7 +130,9 @@ def test_history_empty_write_append_prefix_and_bounds():
     assert history.T == 1
     assert torch.equal(history.designs[:, 0], design0)
     assert torch.equal(history.outcomes[:, 0], outcome0)
-    assert torch.equal(history.mask, torch.tensor([[True, False, False], [True, False, False]]))
+    assert torch.equal(
+        history.mask, torch.tensor([[True, False, False], [True, False, False]])
+    )
 
     design1 = torch.zeros(2, 2, dtype=torch.float64)
     outcome1 = torch.ones(2, 1)

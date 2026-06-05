@@ -136,8 +136,4 @@ class RLBOEDTerminalReward(_ContrastiveReward):
         if env.t + 1 < env.horizon:
             return torch.zeros(env.batch_shape, device=env.device)
         L = torch.as_tensor(self.n_contrastive + 1, device=env.device)
-        return (
-            self.log_c[..., 0]
-            - torch.logsumexp(self.log_c, dim=-1)
-            + torch.log(L)
-        )
+        return self.log_c[..., 0] - torch.logsumexp(self.log_c, dim=-1) + torch.log(L)
