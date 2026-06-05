@@ -1,73 +1,62 @@
-"""DAD policy networks."""
+"""DAD-style continuous policy networks."""
+
+from collections.abc import Sequence
 
 import torch
 import torch.nn as nn
 
-from testbed.design_nets import DesignNet
+from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.modules import MLP
 
 
 class DADNet(DesignNet):
-    """Location Finding policy network from the DAD paper.
+    """Canonical continuous DAD-style policy network.
 
-    c.f. Appendix D.1, https://ardesignv.org/abs/2103.02438.
+    The default architecture follows the public DAD location-finding code more
+    closely than Appendix D.1 of the DAD paper. Appendix D.1 describes a deeper
+    linear readout, but the original code uses a summed history embedding and a
+    single linear emitter:
+
+    - Paper: https://ardesignv.org/abs/2103.02438
+    - DAD code: https://github.com/ae-foster/dad/blob/main/location_finding.py#L31
+    - DAD module: https://github.com/ae-foster/dad/blob/main/neural/modules.py#L61
+
+    Set ``encoder_depth=2`` and pass ``emitter_dims=[128, 16]`` to recover the
+    extra depth used by the earlier StepDAD-inspired experimental variant:
+    https://github.com/marcelhedman/stepdad/blob/master/src/stepdad/policy/dad.py#L73.
     """
 
-    def __init__(self, dim_y=1, dim_design=2, dim_h=256, dim_emb=16):
-        """Initializes network layers."""
-        super().__init__()
+    def __init__(
+        self,
+        dim_y: int = 1,
+        dim_design: int = 2,
+        dim_h: int = 256,
+        dim_emb: int = 16,
+        encoder_depth: int = 1,
+        emitter_dims: Sequence[int] | None = None,
+    ):
+        """Initializes network layers.
 
-        self.encoder_net = MLP([dim_y + dim_design, dim_h, dim_emb], activation=nn.ReLU)
-        self.emitter_net = nn.Sequential(
-            nn.Linear(dim_emb, dim_design),
-            nn.Linear(dim_design, dim_design),
-            nn.Linear(dim_design, dim_design),
-        )
-
-        # Encoding used when T=0
-        # ToDo: how does DAD actually handle this?
-        self.null_embedding = nn.Parameter(torch.randn(1, dim_emb))
-
-    def forward(self, y_history, design_history):
-        """Maps histories to designs.
-
-        y_history: [b, T, dim_y]
-        design_history: [b, T, dim_design].
+        Args:
+            dim_y: Outcome event dimension.
+            dim_design: Design event dimension.
+            dim_h: Hidden dimension for the history encoder.
+            dim_emb: Summed history embedding dimension.
+            encoder_depth: Number of hidden ``dim_h`` layers before ``dim_emb``.
+            emitter_dims: Optional hidden dimensions for the readout. ``None``
+                gives the DAD-code-compatible single linear emitter.
         """
-        b, T, _ = y_history.shape
-
-        # Handle T=0 with a learnable null embedding
-        emb = self.null_embedding.expand(b, -1)
-
-        if T > 0:
-            x = torch.cat(
-                [y_history, design_history], dim=-1
-            )  # [b, T, dim_y + dim_design]
-
-            enc = self.encoder_net(x)  # [b, T, dim_enc]
-            emb = emb + enc.sum(dim=1)  # [b, dim_enc]
-
-        out = self.emitter_net(emb)  # [b, dim_design]
-        return out
-
-
-class DADNet_v2(DesignNet):
-    """Location Finding policy network from the DAD code.
-
-    c.f. Appendix D.1, https://ardesignv.org/abs/2103.02438
-    NB: Appendix D.1 does not actually match the DAD code
-    c.f. https://github.com/ae-foster/dad/blob/main/location_finding.py#L31
-    c.f. https://github.com/ae-foster/dad/blob/main/neural/modules.py#L61.
-
-    This network re-implements the network from that file as closely as possible
-    """
-
-    def __init__(self, dim_y=1, dim_design=2, dim_h=256, dim_emb=16):
-        """Initializes network layers."""
         super().__init__()
 
-        self.encoder_net = MLP([dim_y + dim_design, dim_h, dim_emb], activation=nn.ReLU)
-        self.emitter_net = nn.Sequential(nn.Linear(dim_emb, dim_design))
+        encoder_dims = [dim_y + dim_design, *([dim_h] * encoder_depth), dim_emb]
+        self.encoder_net = MLP(encoder_dims, activation=nn.ReLU)
+
+        emitter_hidden_dims = [] if emitter_dims is None else list(emitter_dims)
+        emitter_dims_full = [dim_emb, *emitter_hidden_dims, dim_design]
+        if emitter_hidden_dims:
+            self.emitter_net = MLP(emitter_dims_full, activation=nn.ReLU)
+        else:
+            self.emitter_net = nn.Linear(dim_emb, dim_design)
 
         self.dim_emb = dim_emb
 
@@ -79,54 +68,14 @@ class DADNet_v2(DesignNet):
         """
         b, T, _ = y_history.shape
 
-        # Handle T=0 by setting the embedding to zero
         if T == 0:
-            enc = torch.zeros((b, self.dim_emb), device=y_history.device)
+            enc = y_history.new_zeros((b, self.dim_emb))
         else:
             enc_input = torch.cat(
                 [y_history, design_history], dim=-1
             )  # [b, T, dim_y + dim_design]
-            enc = self.encoder_net(enc_input)  # [b, T, dim_enc]
-            enc = enc.sum(dim=1)  # [b, dim_enc]
-
-        out = self.emitter_net(enc)  # [b, dim_design]
-        return out
-
-
-class DADNet_v3(DesignNet):
-    """Policy network inspired by StepDAD.
-
-    https://github.com/marcelhedman/stepdad/blob/master/src/stepdad/policy/dad.py#L73.
-    """
-
-    def __init__(self, dim_y=1, dim_design=2, dim_h=256, dim_emb=16):
-        """Initializes network layers."""
-        super().__init__()
-
-        self.encoder_net = MLP(
-            [dim_y + dim_design, dim_h, dim_h, dim_emb], activation=nn.ReLU
-        )
-        self.emitter_net = MLP([dim_emb, 128, 16, dim_design], activation=nn.ReLU)
-
-        # Embedding for T=0 i.e. no history -- initialized to zero but learnable
-        self.null_enc = nn.Parameter(torch.zeros(dim_emb))
-
-    def forward(self, y_history, design_history):
-        """Maps histories to designs.
-
-        y_history: [b, T, dim_y]
-        design_history: [b, T, dim_design].
-        """
-        b, T, _ = y_history.shape
-
-        if T == 0:
-            enc = self.null_enc.unsqueeze(0).expand(b, -1)
-        else:
-            enc_input = torch.cat(
-                [y_history, design_history], dim=-1
-            )  # [b, T, dim_y + dim_design]
-            enc = self.encoder_net(enc_input)  # [b, T, dim_enc]
-            enc = enc.sum(dim=1)  # [b, dim_enc]
+            enc = self.encoder_net(enc_input)  # [b, T, dim_emb]
+            enc = enc.sum(dim=1)  # [b, dim_emb]
 
         out = self.emitter_net(enc)  # [b, dim_design]
         return out

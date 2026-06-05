@@ -6,15 +6,7 @@ import torch
 from omegaconf import OmegaConf
 
 from testbed.core.manager import Manager
-from testbed.design_nets import (
-    AttentiveDAD,
-    AttentiveDAD_v2,
-    AttentiveDAD_v3,
-    AttentiveDAD_v4,
-    DADNet,
-    DADNet_v2,
-    DADNet_v3,
-)
+from testbed.design_nets import DADNet, TransformerDADNet
 from testbed.design_objectives import SPCE
 from testbed.designers import PolicyDesigner
 from testbed.recipes.train import Trainer
@@ -25,16 +17,12 @@ def build_policy_net(cfg):
     """Builds the configured policy network."""
     POLICY_NETS = {
         "DADNet": DADNet,
-        "DADNet_v2": DADNet_v2,
-        "DADNet_v3": DADNet_v3,
-        "AttentiveDAD": AttentiveDAD,
-        "AttentiveDAD_v2": AttentiveDAD_v2,
-        "AttentiveDAD_v3": AttentiveDAD_v3,
-        "AttentiveDAD_v4": AttentiveDAD_v4,
+        "TransformerDADNet": TransformerDADNet,
     }
 
     net_cls = POLICY_NETS[cfg.policy_net_name]
-    net = net_cls()  # later you can pass args via cfg too
+    net_kwargs = OmegaConf.to_container(cfg.get("policy_net_kwargs", {}))
+    net = net_cls(**net_kwargs)
     return net
 
 

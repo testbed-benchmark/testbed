@@ -1,39 +1,58 @@
-"""Attention-based DAD policy networks."""
+"""Transformer-based continuous DAD policy networks."""
 
 import torch
 import torch.nn as nn
 
-from testbed.design_nets import DesignNet
+from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.modules import MLP, AttentionPool, TransformerEncoderBlock
 
 
-class AttentiveDAD(DesignNet):
-    """Transformer policy with mean pooling.
+class TransformerDADNet(DesignNet):
+    """Continuous transformer policy with configurable history pooling.
 
-    Possible improvements:
-    [1] Go beyond mean-pooling
-    [2] Different embedders for y/design.
+    - ``pooling="mean"``: mean pooling over history tokens.
+    - ``pooling="weighted"``: learned scalar weights over history tokens.
+    - ``pooling="attention"``: learned attention pooling.
+    - ``pooling="cls"``: prepend a learned class token and read it out.
     """
 
+    _POOLING_OPTIONS = {"mean", "weighted", "attention", "cls"}
+
     def __init__(
-        self, dim_y=1, dim_design=2, dim_h=256, dim_emb=128, num_heads=4, num_blocks=3
+        self,
+        dim_y: int = 1,
+        dim_design: int = 2,
+        dim_h: int = 256,
+        dim_emb: int = 128,
+        num_heads: int = 4,
+        num_blocks: int = 3,
+        pooling: str = "mean",
     ):
         """Initializes network layers."""
         super().__init__()
 
-        # Could possibly try out random Fourier features for our encoder
+        if pooling not in self._POOLING_OPTIONS:
+            valid = ", ".join(sorted(self._POOLING_OPTIONS))
+            raise ValueError(f"pooling must be one of: {valid}.")
+
+        self.pooling = pooling
         self.input_encoder = MLP(
             [dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU
         )
-
         self.transformer_blocks = nn.ModuleList(
             [TransformerEncoderBlock(dim_emb, num_heads) for _ in range(num_blocks)]
         )
-
         self.decoder = MLP([dim_emb, dim_emb, dim_design], activation=nn.GELU)
 
-        # Embedding for T=0 i.e. no history -- initialized to zero but learnable
+        # Embedding for T=0 i.e. no history -- initialized to zero but learnable.
         self.null_enc = nn.Parameter(torch.zeros(dim_emb))
+
+        if pooling == "weighted":
+            self.pool_weights = nn.Parameter(torch.randn(dim_emb))
+        elif pooling == "attention":
+            self.pool = AttentionPool(dim_emb, num_heads)
+        elif pooling == "cls":
+            self.cls_token = nn.Parameter(torch.randn(1, 1, dim_emb) * 0.02)
 
     def forward(self, y_history, design_history):
         """Maps histories to designs.
@@ -46,201 +65,37 @@ class AttentiveDAD(DesignNet):
         if T == 0:
             enc = self.null_enc[None, :].expand(b, -1)
         else:
-            # [1] Encode (y, design) inputs via an MLP
             enc_input = torch.cat(
                 [y_history, design_history], dim=-1
             )  # [b, T, dim_y + dim_design]
-            enc = self.input_encoder(enc_input)  # [B, T, dim_emb]
+            enc = self.input_encoder(enc_input)  # [b, T, dim_emb]
 
-            # [2] Attention blocks
+            if self.pooling == "cls":
+                cls = self.cls_token.expand(b, -1, -1)  # [b, 1, dim_emb]
+                enc = torch.cat([cls, enc], dim=1)  # [b, T+1, dim_emb]
+
             for block in self.transformer_blocks:
                 enc = block(enc)
 
-            # [3] Pooling
-            # TODO try out other variants
-            enc = enc.mean(dim=1)
+            enc = self._pool(enc)
 
-        # [4] Readout MLP
         out = self.decoder(enc)  # [b, dim_design]
         return out
 
+    def _pool(self, enc):
+        """Pools encoded history tokens into one embedding."""
+        if self.pooling == "mean":
+            return enc.mean(dim=1)
 
-class AttentiveDAD_v2(DesignNet):
-    """Transformer policy with learned weighted pooling.
-
-    Changes:
-    - Uses a learned weighting aggregation mechanism.
-    """
-
-    def __init__(
-        self, dim_y=1, dim_design=2, dim_h=256, dim_emb=128, num_heads=4, num_blocks=3
-    ):
-        """Initializes network layers."""
-        super().__init__()
-
-        # Could possibly try out random Fourier features for our encoder
-        self.input_encoder = MLP(
-            [dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU
-        )
-
-        self.transformer_blocks = nn.ModuleList(
-            [TransformerEncoderBlock(dim_emb, num_heads) for _ in range(num_blocks)]
-        )
-
-        self.decoder = MLP([dim_emb, dim_emb, dim_design], activation=nn.GELU)
-
-        # Embedding for T=0 i.e. no history -- initialized to zero but learnable
-        self.null_enc = nn.Parameter(torch.zeros(dim_emb))
-
-        # Initialize weighting for pooling step randomly
-        self.pool_weights = nn.Parameter(torch.randn(dim_emb))
-
-    def forward(self, y_history, design_history):
-        """Maps histories to designs.
-
-        y_history: [b, T, dim_y]
-        design_history: [b, T, dim_design].
-        """
-        b, T, _ = y_history.shape
-
-        if T == 0:
-            enc = self.null_enc[None, :].expand(b, -1)
-        else:
-            # [1] Encode (y, design) inputs via an MLP
-            enc_input = torch.cat(
-                [y_history, design_history], dim=-1
-            )  # [b, T, dim_y + dim_design]
-            enc = self.input_encoder(enc_input)  # [B, T, dim_emb]
-
-            # [2] Attention blocks
-            for block in self.transformer_blocks:
-                enc = block(enc)
-
-            # [3] Pooling
-            weights = torch.einsum("btd,d->bt", enc, self.pool_weights)  # [b, T]
+        if self.pooling == "weighted":
+            weights = torch.einsum("btd,d->bt", enc, self.pool_weights)
             weights = torch.softmax(weights, dim=1)
-            enc = torch.einsum("bt,btd->bd", weights, enc)
+            return torch.einsum("bt,btd->bd", weights, enc)
 
-        # [4] Readout MLP
-        out = self.decoder(enc)  # [b, dim_design]
-        return out
+        if self.pooling == "attention":
+            return self.pool(enc)
 
+        if self.pooling == "cls":
+            return enc[:, 0, :]
 
-class AttentiveDAD_v3(DesignNet):
-    """Transformer policy with attention pooling.
-
-    Changes:
-    - Uses attention pooling to aggregate the embeddings prior to readout.
-    """
-
-    def __init__(
-        self, dim_y=1, dim_design=2, dim_h=256, dim_emb=128, num_heads=4, num_blocks=3
-    ):
-        """Initializes network layers."""
-        super().__init__()
-
-        # Could possibly try out random Fourier features for our encoder
-        self.input_encoder = MLP(
-            [dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU
-        )
-
-        self.transformer_blocks = nn.ModuleList(
-            [TransformerEncoderBlock(dim_emb, num_heads) for _ in range(num_blocks)]
-        )
-
-        self.decoder = MLP([dim_emb, dim_emb, dim_design], activation=nn.GELU)
-
-        # Embedding for T=0 i.e. no history -- initialized to zero but learnable
-        self.null_enc = nn.Parameter(torch.zeros(dim_emb))
-
-        self.pool = AttentionPool(dim_emb, num_heads)
-
-    def forward(self, y_history, design_history):
-        """Maps histories to designs.
-
-        y_history: [b, T, dim_y]
-        design_history: [b, T, dim_design].
-        """
-        b, T, _ = y_history.shape
-
-        if T == 0:
-            enc = self.null_enc[None, :].expand(b, -1)
-        else:
-            # [1] Encode (y, design) inputs via an MLP
-            enc_input = torch.cat(
-                [y_history, design_history], dim=-1
-            )  # [b, T, dim_y + dim_design]
-            enc = self.input_encoder(enc_input)  # [B, T, dim_emb]
-
-            # [2] Attention blocks
-            for block in self.transformer_blocks:
-                enc = block(enc)
-
-            # [3] Pooling
-            enc = self.pool(enc)
-
-        # [4] Readout MLP
-        out = self.decoder(enc)  # [b, dim_design]
-        return out
-
-
-class AttentiveDAD_v4(DesignNet):
-    """Transformer policy with a class token.
-
-    Changes:
-    - Uses attention pooling to aggregate the embeddings prior to readout.
-    """
-
-    def __init__(
-        self, dim_y=1, dim_design=2, dim_h=256, dim_emb=128, num_heads=4, num_blocks=3
-    ):
-        """Initializes network layers."""
-        super().__init__()
-
-        # Could possibly try out random Fourier features for our encoder
-        self.input_encoder = MLP(
-            [dim_y + dim_design, dim_h, dim_emb], activation=nn.GELU
-        )
-
-        self.transformer_blocks = nn.ModuleList(
-            [TransformerEncoderBlock(dim_emb, num_heads) for _ in range(num_blocks)]
-        )
-
-        self.decoder = MLP([dim_emb, dim_emb, dim_design], activation=nn.GELU)
-
-        # Embedding for T=0 i.e. no history -- initialized to zero but learnable
-        self.null_enc = nn.Parameter(torch.zeros(dim_emb))
-
-        self.cls_token = nn.Parameter(torch.randn(1, 1, dim_emb) * 0.02)
-
-    def forward(self, y_history, design_history):
-        """Maps histories to designs.
-
-        y_history: [b, T, dim_y]
-        design_history: [b, T, dim_design].
-        """
-        b, T, _ = y_history.shape
-
-        if T == 0:
-            enc = self.null_enc[None, :].expand(b, -1)
-        else:
-            # [1] Encode (y, design) inputs via an MLP
-            enc_input = torch.cat(
-                [y_history, design_history], dim=-1
-            )  # [b, T, dim_y + dim_design]
-            enc = self.input_encoder(enc_input)  # [B, T, dim_emb]
-
-            # [2] cat class token
-            cls = self.cls_token.expand(b, -1, -1)  # [b, 1, dim_emb]
-            enc = torch.cat([cls, enc], dim=1)  # [b, T+1, dim_emb]
-
-            # [3] Attention blocks
-            for block in self.transformer_blocks:
-                enc = block(enc)
-
-            # [4] Readout cls embedding -- no pooling
-            enc = enc[:, 0, :]
-
-        # [5] Readout MLP
-        out = self.decoder(enc)  # [b, dim_design]
-        return out
+        raise RuntimeError(f"Unknown pooling mode: {self.pooling}.")
