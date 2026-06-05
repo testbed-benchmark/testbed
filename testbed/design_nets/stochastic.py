@@ -210,6 +210,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 [*batch_shape, T, *event_shape_y].
             design_history: Design history with shape
                 [*batch_shape, T, *event_shape_design].
+
         Returns:
             Deterministic bounded design with shape
             [*batch_shape, *event_shape_design].

@@ -30,9 +30,9 @@ def set_actor_output(policy, mean, log_std):
     mean = torch.as_tensor(mean, dtype=policy.action_scale.dtype)
     log_std = torch.as_tensor(log_std, dtype=policy.action_scale.dtype)
     actor = policy.actor
-    scaled_log_std = 2 * (log_std - actor.log_std_min) / (
-        actor.log_std_max - actor.log_std_min
-    ) - 1
+    scaled_log_std = (
+        2 * (log_std - actor.log_std_min) / (actor.log_std_max - actor.log_std_min) - 1
+    )
 
     with torch.no_grad():
         actor.mean_head.weight.zero_()
