@@ -26,6 +26,8 @@ class Task(ABC, nn.Module):
     event_shape_theta: torch.Size
     event_shape_design: torch.Size
     event_shape_y: torch.Size
+    design_space = None
+    likelihood_type = "explicit"
 
     def __init__(
         self,
