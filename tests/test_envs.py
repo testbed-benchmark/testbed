@@ -313,6 +313,29 @@ def test_bed_env_projects_box_actions():
         env.step(torch.zeros(2, 2))
 
 
+def test_bed_env_step_detaches_rollout_tensors_by_default():
+    task = make_task()
+    env = BEDEnv(
+        task,
+        horizon=1,
+        design_space=make_space(task),
+        reward_fn=CallableReward(lambda env, design, outcome: design.sum(dim=-1)),
+        project_actions=False,
+    )
+    action = torch.zeros(2, requires_grad=True)
+
+    env.reset(seed=0)
+    obs, reward, _, _, info = env.step(action)
+
+    assert action.requires_grad
+    assert not reward.requires_grad
+    assert not obs["designs"].requires_grad
+    assert not obs["outcomes"].requires_grad
+    assert not info["raw_action"].requires_grad
+    assert not info["design"].requires_grad
+    assert not info["outcome"].requires_grad
+
+
 def test_bed_env_scalar_batch_shape():
     task = make_task()
     env = BEDEnv(

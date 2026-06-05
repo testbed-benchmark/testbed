@@ -29,6 +29,7 @@ class BEDEnv:
         validate_actions: bool = True,
         project_actions: bool = True,
         include_theta_in_info: bool = False,
+        track_grad: bool = False,
     ):
         """Initializes a BED environment."""
         self.task = task
@@ -48,6 +49,7 @@ class BEDEnv:
         self.validate_actions = validate_actions
         self.project_actions = project_actions
         self.include_theta_in_info = include_theta_in_info
+        self.track_grad = track_grad
 
         self.t = 0
         self._has_reset = False
@@ -126,10 +128,15 @@ class BEDEnv:
             raise RuntimeError("Cannot step a terminated environment; call reset().")
 
         raw_action = torch.as_tensor(action, device=self.device)
-        design = self._prepare_design(raw_action)
-        outcome = self.task.sample_outcome(self.theta_0, design)
-        self.history.write(self.t, design, outcome)
-        reward = self.reward_fn.step(self, design, outcome)
+        if not self.track_grad:
+            raw_action = raw_action.detach()
+
+        grad_context = torch.enable_grad() if self.track_grad else torch.no_grad()
+        with grad_context:
+            design = self._prepare_design(raw_action)
+            outcome = self.task.sample_outcome(self.theta_0, design)
+            self.history.write(self.t, design, outcome)
+            reward = self.reward_fn.step(self, design, outcome)
         self.t += 1
 
         info: dict[str, Any] = {
@@ -160,7 +167,7 @@ class BEDEnv:
                 raise ValueError(
                     f"theta_all must have shape {expected}; got {tuple(theta_all.shape)}."
                 )
-            return theta_all
+            return self._detach_if_needed(theta_all)
 
         if theta is not None:
             theta_0 = torch.as_tensor(theta, device=self.device)
@@ -176,16 +183,23 @@ class BEDEnv:
             )
 
         if n_contrastive == 0:
-            return theta_0.unsqueeze(len(self.batch_shape))
+            return self._detach_if_needed(theta_0.unsqueeze(len(self.batch_shape)))
 
         n = prod(self.batch_shape) * n_contrastive
         theta_contrastive = self.task.sample_current_prior(n).reshape(
             *self.batch_shape, n_contrastive, *event_shape
         )
         particle_dim = len(self.batch_shape)
-        return torch.cat(
+        theta_all = torch.cat(
             [theta_0.unsqueeze(particle_dim), theta_contrastive], dim=particle_dim
         )
+        return self._detach_if_needed(theta_all)
+
+    def _detach_if_needed(self, tensor: Tensor) -> Tensor:
+        """Detaches rollout tensors unless differentiable env interaction is enabled."""
+        if self.track_grad:
+            return tensor
+        return tensor.detach()
 
     def _prepare_design(self, raw_action: Tensor) -> Tensor:
         """Converts, projects, validates, and shape-checks an action."""
