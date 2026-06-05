@@ -6,7 +6,8 @@ from math import prod
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.distributions import Normal
+from torch.distributions import Normal, TransformedDistribution
+from torch.distributions.transforms import AffineTransform, TanhTransform
 
 from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.modules import MLP
@@ -175,20 +176,16 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         )
         mean, log_std = self._actor_params(summary)
         std = log_std.exp()
-        normal = Normal(mean, std)
+        normal, action_dist = self._action_distribution(mean, std)
 
         if deterministic:
             raw_action = mean
         else:
             raw_action = normal.rsample()
 
-        squashed = torch.tanh(raw_action)
-        action_flat = squashed * self.action_scale + self.action_bias
-        deterministic_flat = torch.tanh(mean) * self.action_scale + self.action_bias
-
-        log_prob = normal.log_prob(raw_action)
-        correction = torch.log(self.action_scale * (1 - squashed.pow(2)) + 1e-6)
-        log_prob = (log_prob - correction).sum(dim=-1)
+        action_flat = self._transform_raw_action(raw_action, action_dist)
+        deterministic_flat = self._transform_raw_action(mean, action_dist)
+        log_prob = action_dist.log_prob(action_flat).sum(dim=-1)
 
         action = action_flat.reshape(*batch_shape, *self.event_shape_design)
         deterministic_action = deterministic_flat.reshape(
@@ -202,6 +199,28 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             deterministic_action=deterministic_action,
             raw_action=raw_action,
         )
+
+    def _action_distribution(
+        self, mean: Tensor, std: Tensor
+    ) -> tuple[Normal, TransformedDistribution]:
+        """Builds the Gaussian base distribution and bounded action distribution."""
+        normal = Normal(mean, std)
+        action_dist = TransformedDistribution(
+            normal,
+            [
+                TanhTransform(cache_size=1),
+                AffineTransform(loc=self.action_bias, scale=self.action_scale),
+            ],
+        )
+        return normal, action_dist
+
+    @staticmethod
+    def _transform_raw_action(raw_action: Tensor, action_dist) -> Tensor:
+        """Applies the action distribution transforms to an unsquashed sample."""
+        action = raw_action
+        for transform in action_dist.transforms:
+            action = transform(action)
+        return action
 
     def _summarize_history(
         self, y_history, design_history, *, mask: Tensor | None = None
