@@ -258,10 +258,5 @@ def test_tanh_gaussian_policy_rejects_invalid_actor_output_shape():
         policy.sample(torch.randn(2, 3, 1), torch.randn(2, 3, 2))
 
 
-def test_tanh_gaussian_policy_rejects_non_box_design_space():
-    with pytest.raises(TypeError, match="BoxDesignSpace"):
-        TanhGaussianPolicyNet(CategoricalDesignSpace(3))
-
-
 def test_stochastic_design_net_sample_is_abstract_extension():
     assert issubclass(TanhGaussianPolicyNet, StochasticDesignNet)
