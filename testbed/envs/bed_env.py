@@ -92,7 +92,13 @@ class BEDEnv:
         theta_all: Tensor | None = None,
         batch_shape: tuple[int, ...] | None = None,
     ) -> tuple[Any, dict]:
-        """Starts a new episode."""
+        """Starts a new episode.
+
+        Observation functions may return views or references to mutable environment
+        state. In particular, ``PaddedHistoryObservation`` returns the tensors owned
+        by ``env.history``. Callers that retain an observation across ``step()`` or
+        ``reset()`` must clone it first.
+        """
         if seed is not None:
             torch.manual_seed(seed)
         if batch_shape is not None:
@@ -121,7 +127,13 @@ class BEDEnv:
         return self.observation_fn(self), info
 
     def step(self, action: Tensor) -> tuple[Any, Tensor, Tensor, Tensor, dict]:
-        """Advances the environment by one design/outcome pair."""
+        """Advances the environment by one design/outcome pair.
+
+        This updates ``env.history`` in place before constructing the returned
+        observation. Previously returned observations that reference the history,
+        including those from ``PaddedHistoryObservation``, therefore change during
+        this call. Clone observations before ``step()`` when storing transitions.
+        """
         if not self._has_reset:
             raise RuntimeError("Environment must be reset before step().")
         if bool(torch.any(self.terminated).item()):

@@ -34,7 +34,13 @@ class HistoryObservation(ObservationFunction):
 
 
 class PaddedHistoryObservation(ObservationFunction):
-    """Returns fixed-length padded history tensors."""
+    """Returns fixed-length padded history tensors.
+
+    The ``designs``, ``outcomes``, and ``mask`` values directly reference tensors
+    owned by ``env.history``; they are not snapshots. ``BEDEnv.step()`` mutates
+    these tensors in place, so callers must clone an observation before stepping
+    if they need to retain its pre-step value, such as in an RL replay buffer.
+    """
 
     def __init__(self, horizon: int | None = None, *, include_timestep: bool = True):
         """Initializes the observation function."""
@@ -42,7 +48,7 @@ class PaddedHistoryObservation(ObservationFunction):
         self.include_timestep = include_timestep
 
     def __call__(self, env: "BEDEnv") -> Any:
-        """Returns padded designs, outcomes, and mask."""
+        """Returns padded designs, outcomes, and mask by reference."""
         history = env.history
         if self.horizon is not None and self.horizon != history.max_episode_length:
             raise ValueError(
