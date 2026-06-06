@@ -1,8 +1,7 @@
-"""Torch-first design/action spaces for BED environments."""
+"""Design spaces for BED environments."""
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from importlib import import_module
 
 import torch
 from torch import Tensor
@@ -35,12 +34,6 @@ class DesignSpace(ABC):
     def project(self, design: Tensor) -> Tensor:
         """Projects a tensor into the design space."""
         ...
-
-    def to_gymnasium(self):
-        """Converts to a Gymnasium space when Gymnasium is installed."""
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement Gymnasium conversion."
-        )
 
 
 class BoxDesignSpace(DesignSpace):
@@ -89,17 +82,6 @@ class BoxDesignSpace(DesignSpace):
         high = self.high.to(device=design.device, dtype=design.dtype)
         return design.clamp(low, high)
 
-    def to_gymnasium(self):
-        """Converts to gymnasium.spaces.Box."""
-        gym = import_module("gymnasium")
-
-        return gym.spaces.Box(
-            low=self.low.cpu().numpy(),
-            high=self.high.cpu().numpy(),
-            shape=tuple(self.event_shape),
-            dtype=self.low.cpu().numpy().dtype,
-        )
-
 
 class IntegerDesignSpace(DesignSpace):
     """Integer box design space with inclusive bounds."""
@@ -144,17 +126,6 @@ class IntegerDesignSpace(DesignSpace):
         high = self.high.to(device=design.device)
         return design.round().clamp(low, high).to(torch.long)
 
-    def to_gymnasium(self):
-        """Converts to a Gymnasium integer Box."""
-        gym = import_module("gymnasium")
-
-        return gym.spaces.Box(
-            low=self.low.cpu().numpy(),
-            high=self.high.cpu().numpy(),
-            shape=tuple(self.event_shape),
-            dtype=self.low.cpu().numpy().dtype,
-        )
-
 
 class CategoricalDesignSpace(DesignSpace):
     """Scalar categorical design space with values 0, ..., n - 1."""
@@ -182,12 +153,6 @@ class CategoricalDesignSpace(DesignSpace):
     def project(self, design: Tensor) -> Tensor:
         """Rounds and clamps to valid categories."""
         return design.round().clamp(0, self.n - 1).to(torch.long)
-
-    def to_gymnasium(self):
-        """Converts to gymnasium.spaces.Discrete."""
-        gym = import_module("gymnasium")
-
-        return gym.spaces.Discrete(self.n)
 
 
 class ProductDesignSpace(DesignSpace):
