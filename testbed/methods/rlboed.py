@@ -55,6 +55,7 @@ class RLBOEDConfig:
     target_network_frequency: int = 1
     alpha: float = 0.2
     log_frequency: int = 100
+    verbose: bool = True
 
 
 class RLBOED:
@@ -172,11 +173,12 @@ class RLBOED:
                     "episodic_return": episodic_returns.mean().item(),
                 }
                 metrics.append(episode_metrics)
-                print(
-                    f"global_step={global_step}, "
-                    f"episodes={completed_episodes}, "
-                    f"episodic_return={episode_metrics['episodic_return']:.4f}"
-                )
+                if cfg.verbose:
+                    print(
+                        f"global_step={global_step}, "
+                        f"episodes={completed_episodes}, "
+                        f"episodic_return={episode_metrics['episodic_return']:.4f}"
+                    )
                 episodic_returns.zero_()
                 next_obs, _ = env.reset()
             obs = next_obs
@@ -252,7 +254,8 @@ class RLBOED:
                         f"actor_loss={step_metrics['actor_loss']:.4f}, "
                         f"alpha={cfg.alpha:.4f}"
                     )
-                    print(message)
+                    if cfg.verbose:
+                        print(message)
 
         actor.eval()
         designer = PolicyDesigner(task, horizon, actor)
