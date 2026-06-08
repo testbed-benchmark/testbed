@@ -48,11 +48,15 @@ class RecordingGaussianActor(GaussianPolicyActor):
         self.register_buffer("log_std", torch.as_tensor(log_std, dtype=torch.float32))
         self.y_shape = None
         self.design_shape = None
+        self.y_history = None
+        self.design_history = None
         self.mask = None
 
     def forward(self, y_history, design_history, *, mask=None):
         self.y_shape = y_history.shape
         self.design_shape = design_history.shape
+        self.y_history = y_history.detach().clone()
+        self.design_history = design_history.detach().clone()
         self.mask = mask
         batch_size = design_history.shape[0]
         return (
@@ -134,6 +138,29 @@ def test_tanh_gaussian_policy_transformed_actions_follow_box_scale_and_shift():
     assert torch.allclose(
         sample.deterministic_action[0],
         expected_deterministic_action,
+    )
+
+
+def test_tanh_gaussian_policy_normalizes_physical_histories_for_actor():
+    actor = RecordingGaussianActor(mean=[0.0, 0.0], log_std=[-1.0, -1.0])
+    policy = TanhGaussianPolicyNet(
+        BoxDesignSpace(-4.0, 4.0, event_shape=(2,)),
+        actor=actor,
+        normalize_design_history=True,
+        outcome_bounds=(-3.0, 10.0),
+    )
+    y_history = torch.tensor([[[-3.0], [3.5], [10.0]]])
+    design_history = torch.tensor([[[-4.0, 4.0], [0.0, 0.0], [4.0, -4.0]]])
+
+    policy.sample(y_history, design_history, deterministic=True)
+
+    torch.testing.assert_close(
+        actor.y_history,
+        torch.tensor([[[0.0], [0.5], [1.0]]]),
+    )
+    torch.testing.assert_close(
+        actor.design_history,
+        torch.tensor([[[-1.0, 1.0], [0.0, 0.0], [1.0, -1.0]]]),
     )
 
 

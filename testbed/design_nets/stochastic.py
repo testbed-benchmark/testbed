@@ -180,27 +180,53 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         self,
         design_space: BoxDesignSpace,
         actor: GaussianPolicyActor | None = None,
+        *,
+        normalize_design_history: bool = False,
+        outcome_bounds: tuple[float, float] | None = None,
     ):
         """Initializes the policy network.
 
         Args:
-            design_space: Continuous box design space used to bound actions.
+            design_space: Physical continuous design space. Public policy methods
+                return designs in these coordinates.
             actor: Optional module mapping flattened histories to Gaussian
                 mean and log standard deviation.
+            normalize_design_history: If True, affinely map physical design
+                histories to [-1, 1] before passing them to the actor.
+            outcome_bounds: Optional lower and upper bounds used to affinely map
+                physical outcome histories to [0, 1] before actor evaluation.
         """
         super().__init__()
 
         self.design_space = design_space
         self.event_shape_design = torch.Size(design_space.event_shape)
         self.dim_design = self.event_shape_design.numel()
+        self.normalize_design_history = bool(normalize_design_history)
         self.actor = actor or DeepSetGaussianActor(
             dim_design=self.dim_design,
         )
 
         low = design_space.low.reshape(self.dim_design)
         high = design_space.high.reshape(self.dim_design)
+        if torch.any(low >= high):
+            raise ValueError(
+                "TanhGaussianPolicyNet requires finite-width design bounds."
+            )
         self.register_buffer("action_scale", (high - low) / 2.0)
         self.register_buffer("action_bias", (high + low) / 2.0)
+
+        if outcome_bounds is None:
+            outcome_low = torch.tensor(float("nan"), dtype=low.dtype)
+            outcome_high = torch.tensor(float("nan"), dtype=low.dtype)
+        else:
+            outcome_low, outcome_high = (
+                torch.as_tensor(bound, dtype=low.dtype) for bound in outcome_bounds
+            )
+            if torch.any(outcome_low >= outcome_high):
+                raise ValueError("outcome_bounds must satisfy low < high.")
+        self.register_buffer("outcome_low", outcome_low)
+        self.register_buffer("outcome_high", outcome_high)
+        self._normalize_outcomes = outcome_bounds is not None
 
     def forward(self, y_history, design_history) -> Tensor:
         """Returns the deterministic bounded action for a history.
@@ -243,8 +269,28 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             Gaussian action.
         """
         batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
-            y_history, design_history, mask=mask
+            y_history,
+            design_history,
+            mask=mask,
         )
+        return self._sample_prepared(
+            batch_shape,
+            y_flat,
+            design_flat,
+            mask_flat,
+            deterministic=deterministic,
+        )
+
+    def _sample_prepared(
+        self,
+        batch_shape: torch.Size,
+        y_flat: Tensor,
+        design_flat: Tensor,
+        mask_flat: Tensor | None,
+        *,
+        deterministic: bool,
+    ) -> PolicySample:
+        """Samples from validated histories in actor coordinates."""
         mean, log_std = self.actor(y_flat, design_flat, mask=mask_flat)
         self._validate_actor_params(mean, log_std, batch_size=design_flat.shape[0])
         std = log_std.exp()
@@ -295,7 +341,11 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         return action
 
     def _prepare_histories(
-        self, y_history, design_history, *, mask: Tensor | None = None
+        self,
+        y_history,
+        design_history,
+        *,
+        mask: Tensor | None = None,
     ) -> tuple[torch.Size, Tensor, Tensor, Tensor | None]:
         """Validates histories and flattens arbitrary batch shapes.
 
@@ -348,6 +398,15 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         dim_y = prod(y_history.shape[len(batch_shape) + 1 :])
         y_flat = y_history.reshape(b_flat, T, dim_y)
         design_flat = design_history.reshape(b_flat, T, self.dim_design)
+
+        if self.normalize_design_history:
+            bias = self.action_bias.reshape(1, 1, self.dim_design)
+            scale = self.action_scale.reshape(1, 1, self.dim_design)
+            design_flat = (design_flat - bias) / scale
+        if self._normalize_outcomes:
+            y_flat = (y_flat - self.outcome_low) / (
+                self.outcome_high - self.outcome_low
+            )
 
         mask_flat = None
         if mask is not None:
