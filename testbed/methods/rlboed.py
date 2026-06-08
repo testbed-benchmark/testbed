@@ -44,7 +44,7 @@ class RLBOEDConfig:
 
     total_timesteps: int = 20_000
     num_envs: int = 100
-    buffer_size: int = 10_000_000
+    buffer_size: int = 2_000_000
     gamma: float = 0.9
     tau: float = 1e-3
     batch_size: int = 4096
@@ -75,8 +75,6 @@ class RLBOED:
         cfg = self.config
         self._validate(task, horizon, design_space)
         self._set_seed()
-
-        assert isinstance(design_space, BoxDesignSpace)
 
         device = task.device
         design_low = design_space.low.to(device)

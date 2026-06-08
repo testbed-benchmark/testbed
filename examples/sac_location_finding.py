@@ -38,7 +38,7 @@ class Args:
 
     total_timesteps: int = 20_000
     num_envs: int = 100
-    buffer_size: int = 10_000_000
+    buffer_size: int = 2_000_000
     gamma: float = 0.9
     tau: float = 1e-3
     batch_size: int = 4096

@@ -156,7 +156,7 @@ class DeepSetGaussianActor(GaussianPolicyActor):
                 dtype=design_history.dtype,
             )
         else:
-            enc_input = torch.cat([design_history, y_history], dim=-1)
+            enc_input = torch.cat([y_history, design_history], dim=-1)
             enc = self.encoder_net(enc_input)
 
             if mask is not None:
