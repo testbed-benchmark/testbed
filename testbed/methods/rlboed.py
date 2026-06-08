@@ -263,6 +263,9 @@ class RLBOED:
             "design_high": design_high.detach().cpu(),
             "outcome_low": torch.as_tensor(cfg.outcome_low),
             "outcome_high": torch.as_tensor(cfg.outcome_high),
+            # The trained actor is the deployable designer, so its weights are
+            # stored under both keys: "designer" for inference-only loading and
+            # "actor" for resuming SAC training alongside the critic/optimizers.
             "designer": actor.state_dict(),
             "actor": actor.state_dict(),
             "qf1": qf1.state_dict(),

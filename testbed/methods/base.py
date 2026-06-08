@@ -17,8 +17,11 @@ class FitResult:
         designer: The `PolicyDesigner` that wraps the trained policy.
         metrics: A list of dictionaries containing training metrics, such as
             loss values and evaluation scores.
-        checkpoint: A dictionary containing the training checkpoint, which can
-            be used to resume training or for inference.
+        checkpoint: A dictionary holding the trained weights and training state
+            (optimizer states, step counts) needed to deploy the policy or to
+            resume training. The methods do not yet provide a `load`/resume
+            entry point, so consuming the checkpoint is currently the caller's
+            responsibility.
     """
 
     designer: PolicyDesigner
