@@ -139,9 +139,7 @@ class BEDEnv:
         if bool(torch.any(self.terminated).item()):
             raise RuntimeError("Cannot step a terminated environment; call reset().")
 
-        raw_action = torch.as_tensor(action, device=self.device)
-        if not self.track_grad:
-            raw_action = raw_action.detach()
+        raw_action = self._detach_if_needed(torch.as_tensor(action, device=self.device))
 
         grad_context = torch.enable_grad() if self.track_grad else torch.no_grad()
         with grad_context:

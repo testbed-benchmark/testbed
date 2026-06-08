@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -135,5 +136,5 @@ class RLBOEDTerminalReward(_ContrastiveReward):
         self.update_log_c(env, design, outcome)
         if env.t + 1 < env.horizon:
             return torch.zeros(env.batch_shape, device=env.device)
-        L = torch.as_tensor(self.n_contrastive + 1, device=env.device)
-        return self.log_c[..., 0] - torch.logsumexp(self.log_c, dim=-1) + torch.log(L)
+        log_L = math.log(self.n_contrastive + 1)
+        return self.log_c[..., 0] - torch.logsumexp(self.log_c, dim=-1) + log_L

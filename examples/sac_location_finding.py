@@ -1,21 +1,15 @@
 """Train a policy for location finding with the RL-BOED algorithm."""
 
 import argparse
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 
-from testbed.design_nets import RLBOEDGaussianActor, RLBOEDQNetwork
 from testbed.envs import BoxDesignSpace
 from testbed.methods import RLBOED, RLBOEDConfig
 from testbed.tasks import LocationFinding
-
-# Compatibility aliases for code that imported these from the original example.
-DADGaussianActor = RLBOEDGaussianActor
-SoftQNetwork = RLBOEDQNetwork
 
 
 @dataclass
@@ -142,4 +136,4 @@ def train(args: Args) -> Path | None:
 if __name__ == "__main__":
     checkpoint = train(parse_args())
     if checkpoint is not None:
-        print(f"saved checkpoint to {os.fspath(checkpoint)}")
+        print(f"saved checkpoint to {checkpoint}")

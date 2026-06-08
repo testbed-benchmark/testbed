@@ -10,7 +10,11 @@ from tensordict import TensorDict
 from torch import nn
 from torchrl.data import LazyTensorStorage, ReplayBuffer
 
-from testbed.design_nets import TanhGaussianPolicyNet
+from testbed.design_nets import (
+    RLBOEDGaussianActor,
+    RLBOEDQNetwork,
+    TanhGaussianPolicyNet,
+)
 from testbed.designers import PolicyDesigner
 from testbed.envs import BoxDesignSpace
 from testbed.methods import RLBOED, FitResult, RLBOEDConfig
@@ -22,8 +26,8 @@ assert SPEC is not None
 assert SPEC.loader is not None
 sac_location_finding = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sac_location_finding)
-DADGaussianActor = sac_location_finding.DADGaussianActor
-SoftQNetwork = sac_location_finding.SoftQNetwork
+DADGaussianActor = RLBOEDGaussianActor
+SoftQNetwork = RLBOEDQNetwork
 
 
 def _linear_shapes(module):
