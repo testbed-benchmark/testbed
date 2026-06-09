@@ -1,13 +1,10 @@
 """Policy and value networks used by RL-BOED."""
 
-import math
-
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from testbed.design_nets.modules import MLP
-from testbed.design_nets.stochastic import GaussianPolicyActor
 
 
 def affine_rescale(
@@ -25,69 +22,6 @@ def affine_rescale(
     return target_low + (value - source_low) * (
         (target_high - target_low) / (source_high - source_low)
     )
-
-
-class RLBOEDGaussianActor(GaussianPolicyActor):
-    """RL-BOED DeepSets architecture with Gaussian policy output heads."""
-
-    def __init__(
-        self,
-        *,
-        dim_y: int,
-        dim_design: int,
-        dim_h: int = 128,
-        dim_emb: int = 64,
-        init_std: float = math.sqrt(1.0 / 3.0),
-        log_std_min: float = -20.0,
-        log_std_max: float = 0.0,
-    ):
-        """Initializes the history encoder and stochastic emitter."""
-        super().__init__()
-        self.dim_emb = dim_emb
-        self.log_std_min = log_std_min
-        self.log_std_max = log_std_max
-
-        self.encoder_net = MLP(
-            [dim_y + dim_design, dim_h, dim_h, dim_emb],
-            activation=nn.ReLU,
-        )
-        self.emitter_net = MLP(
-            [dim_emb, dim_h, dim_h],
-            activation=nn.ReLU,
-        )
-        self.mean_head = nn.Linear(dim_h, dim_design)
-        self.log_std_head = nn.Linear(dim_h, dim_design)
-
-        nn.init.constant_(self.log_std_head.bias, math.log(init_std))
-
-    def forward(
-        self,
-        y_history: Tensor,
-        design_history: Tensor,
-        *,
-        mask: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor]:
-        """Maps padded histories to Gaussian mean and log standard deviation."""
-        batch_size, history_length, _ = design_history.shape
-
-        if history_length == 0:
-            enc = design_history.new_zeros(batch_size, self.dim_emb)
-        else:
-            enc_input = torch.cat([y_history, design_history], dim=-1)
-            encoded_history = self.encoder_net(enc_input)
-            if mask is not None:
-                encoded_history = encoded_history * mask.to(
-                    dtype=encoded_history.dtype
-                ).unsqueeze(-1)
-            enc = encoded_history.sum(dim=1)
-
-        hidden = self.emitter_net(enc)
-        mean = self.mean_head(hidden)
-        log_std = self.log_std_head(hidden).clamp(
-            min=self.log_std_min,
-            max=self.log_std_max,
-        )
-        return mean, log_std
 
 
 class RLBOEDQNetwork(nn.Module):

@@ -1,13 +1,12 @@
 """Stochastic policy networks for reinforcement learning BED agents."""
 
 from dataclasses import dataclass
-from math import prod
+from math import log, prod
 
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.distributions import Normal, TransformedDistribution
-from torch.distributions.transforms import AffineTransform, TanhTransform
+from torch.distributions import Normal
 
 from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.modules import MLP
@@ -113,8 +112,8 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         dim_y: int = 1,
         dim_h: int = 128,
         dim_emb: int = 64,
-        log_std_min: float = -5.0,
-        log_std_max: float = 2.0,
+        log_std_min: float = -20.0,
+        log_std_max: float = 0.0,
     ):
         """Initializes the actor network.
 
@@ -294,16 +293,18 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         mean, log_std = self.actor(y_flat, design_flat, mask=mask_flat)
         self._validate_actor_params(mean, log_std, batch_size=design_flat.shape[0])
         std = log_std.exp()
-        normal, action_dist = self._action_distribution(mean, std)
+        normal = Normal(mean, std)
 
         if deterministic:
             raw_action = mean
         else:
             raw_action = normal.rsample()
 
-        action_flat = self._transform_raw_action(raw_action, action_dist)
-        deterministic_flat = self._transform_raw_action(mean, action_dist)
-        log_prob = action_dist.log_prob(action_flat).sum(dim=-1)
+        action_flat = self._squash(raw_action)
+        deterministic_flat = self._squash(mean)
+        log_prob = (normal.log_prob(raw_action) - self._squash_log_det(raw_action)).sum(
+            dim=-1
+        )
 
         action = action_flat.reshape(*batch_shape, *self.event_shape_design)
         deterministic_action = deterministic_flat.reshape(
@@ -318,27 +319,22 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             raw_action=raw_action,
         )
 
-    def _action_distribution(
-        self, mean: Tensor, std: Tensor
-    ) -> tuple[Normal, TransformedDistribution]:
-        """Builds the Gaussian base distribution and bounded action distribution."""
-        normal = Normal(mean, std)
-        action_dist = TransformedDistribution(
-            normal,
-            [
-                TanhTransform(cache_size=1),
-                AffineTransform(loc=self.action_bias, scale=self.action_scale),
-            ],
-        )
-        return normal, action_dist
+    def _squash(self, raw_action: Tensor) -> Tensor:
+        """Maps an unsquashed Gaussian sample into the bounded design box."""
+        return self.action_bias + self.action_scale * torch.tanh(raw_action)
 
-    @staticmethod
-    def _transform_raw_action(raw_action: Tensor, action_dist) -> Tensor:
-        """Applies the action distribution transforms to an unsquashed sample."""
-        action = raw_action
-        for transform in action_dist.transforms:
-            action = transform(action)
-        return action
+    def _squash_log_det(self, raw_action: Tensor) -> Tensor:
+        """Log absolute determinant of the tanh-then-affine squash, per dimension.
+
+        Computed in the forward direction to stay finite for any finite
+        ``raw_action``; inverting via ``atanh`` would diverge once ``tanh``
+        saturates to +/-1 in floating point.
+        """
+        # log(1 - tanh(x)^2) in a numerically stable form (SpinUp / Denis Yarats).
+        tanh_log_det = 2.0 * (
+            log(2.0) - raw_action - nn.functional.softplus(-2.0 * raw_action)
+        )
+        return torch.log(self.action_scale) + tanh_log_det
 
     def _prepare_histories(
         self,

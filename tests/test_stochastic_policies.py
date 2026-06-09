@@ -94,7 +94,7 @@ def test_tanh_gaussian_policy_raw_actions_are_approximately_normal():
     torch.manual_seed(0)
     policy = make_policy()
     mean = torch.tensor([0.25, -0.5])
-    log_std = torch.tensor([-0.7, 0.1])
+    log_std = torch.tensor([-0.7, -0.1])
     set_actor_output(policy, mean, log_std)
 
     n = 20_000
@@ -120,7 +120,7 @@ def test_tanh_gaussian_policy_transformed_actions_follow_box_scale_and_shift():
     space = BoxDesignSpace(torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]))
     policy = TanhGaussianPolicyNet(space)
     mean = torch.tensor([0.25, -0.5])
-    log_std = torch.tensor([-0.7, 0.1])
+    log_std = torch.tensor([-0.7, -0.1])
     set_actor_output(policy, mean, log_std)
 
     n = 2_000

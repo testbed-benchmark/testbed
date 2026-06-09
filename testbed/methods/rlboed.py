@@ -14,7 +14,7 @@ from tensordict import TensorDict
 from torchrl.data import LazyTensorStorage, ReplayBuffer
 
 from testbed.design_nets import (
-    RLBOEDGaussianActor,
+    DeepSetGaussianActor,
     RLBOEDQNetwork,
     TanhGaussianPolicyNet,
 )
@@ -91,7 +91,7 @@ class RLBOED:
 
         dim_y = task.event_shape_y.numel()
         dim_design = task.event_shape_design.numel()
-        actor_module = RLBOEDGaussianActor(
+        actor_module = DeepSetGaussianActor(
             dim_y=dim_y,
             dim_design=dim_design,
         )

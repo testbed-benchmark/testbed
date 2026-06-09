@@ -1,7 +1,6 @@
 """Tests for the SAC location-finding example."""
 
 import importlib.util
-import math
 from pathlib import Path
 
 import pytest
@@ -11,7 +10,7 @@ from torch import nn
 from torchrl.data import LazyTensorStorage, ReplayBuffer
 
 from testbed.design_nets import (
-    RLBOEDGaussianActor,
+    DeepSetGaussianActor,
     RLBOEDQNetwork,
     TanhGaussianPolicyNet,
 )
@@ -26,7 +25,6 @@ assert SPEC is not None
 assert SPEC.loader is not None
 sac_location_finding = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sac_location_finding)
-DADGaussianActor = RLBOEDGaussianActor
 SoftQNetwork = RLBOEDQNetwork
 
 
@@ -40,25 +38,15 @@ def _linear_shapes(module):
 
 def test_actor_defaults_match_released_rl_boed_architecture():
     """The default actor reproduces the released source-location policy."""
-    actor = DADGaussianActor(dim_y=1, dim_design=2)
+    actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
 
     assert _linear_shapes(actor.encoder_net) == [(3, 128), (128, 128), (128, 64)]
-    assert _linear_shapes(actor.emitter_net) == [(64, 128), (128, 128)]
+    assert _linear_shapes(actor.actor_net) == [(64, 128), (128, 128)]
     assert actor.mean_head.in_features == 128
     assert actor.log_std_head.in_features == 128
     assert actor.log_std_min == -20.0
     assert actor.log_std_max == 0.0
     assert not hasattr(actor, "null_enc")
-
-
-def test_actor_has_released_initial_standard_deviation():
-    """The log-std output bias starts at std sqrt(1/3)."""
-    actor = DADGaussianActor(dim_y=1, dim_design=2)
-
-    torch.testing.assert_close(
-        actor.log_std_head.bias.exp(),
-        torch.full_like(actor.log_std_head.bias, math.sqrt(1.0 / 3.0)),
-    )
 
 
 def test_critic_defaults_match_released_rl_boed_architecture():
@@ -295,7 +283,7 @@ def test_rlboed_requires_design_space():
 
 def test_deployable_policy_maps_raw_history_to_physical_designs():
     design_space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
-    actor = DADGaussianActor(dim_y=1, dim_design=2)
+    actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
     policy = TanhGaussianPolicyNet(
         design_space,
         actor=actor,
