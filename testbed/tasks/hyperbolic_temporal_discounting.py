@@ -1,6 +1,7 @@
 """Hyperbolic temporal-discounting task."""
 
 import math
+
 import torch
 from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoulli
 
