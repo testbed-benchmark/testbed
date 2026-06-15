@@ -136,7 +136,7 @@ class BEDEnv:
         """
         if not self._has_reset:
             raise RuntimeError("Environment must be reset before step().")
-        if bool(torch.any(self.terminated).item()):
+        if self.t >= self.horizon:
             raise RuntimeError("Cannot step a terminated environment; call reset().")
 
         raw_action = self._detach_if_needed(torch.as_tensor(action, device=self.device))
@@ -155,7 +155,6 @@ class BEDEnv:
             "outcome": outcome,
             "history": self.history,
             "raw_action": raw_action,
-            "projected_action": design,
         }
         if self.include_theta_in_info:
             info["theta_0"] = self.theta_0

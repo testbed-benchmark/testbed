@@ -77,11 +77,12 @@ class Designer(ABC):
 class PolicyDesigner(Designer):
     """Designer backed by a policy network."""
 
-    def __init__(self, task, T, policy_net):
+    def __init__(self, task, T, policy_net, *, deterministic: bool = True):
         """Initializes with a policy network."""
         super().__init__(task, T)
 
         self.policy_net = policy_net
+        self.deterministic = bool(deterministic)
 
     @property
     def device(self) -> torch.device:
@@ -95,5 +96,8 @@ class PolicyDesigner(Designer):
 
         # TODO enforce policy_net can handle this kind of input or otherwise handle it here
         # When t=0, the slices of y_history, design_history will have shape [b, 0, dim]
-        design = self.policy_net(y_history, design_history)
+        if self.deterministic:
+            design = self.policy_net(y_history, design_history)
+        else:
+            design = self.policy_net.sample(y_history, design_history).action
         return design

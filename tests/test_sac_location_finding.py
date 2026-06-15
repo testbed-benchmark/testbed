@@ -28,6 +28,22 @@ SPEC.loader.exec_module(sac_location_finding)
 SoftQNetwork = RLBOEDQNetwork
 
 
+def test_example_exposes_released_source_location_seeds():
+    assert sac_location_finding.PAPER_SEEDS == (
+        373693,
+        943929,
+        675273,
+        79387,
+        508137,
+        557390,
+        756177,
+        155183,
+        262598,
+        572185,
+    )
+    assert sac_location_finding.Args.seed == sac_location_finding.PAPER_SEEDS[0]
+
+
 def _linear_shapes(module):
     return [
         (layer.in_features, layer.out_features)
@@ -48,6 +64,10 @@ def test_actor_defaults_match_released_rl_boed_architecture():
     assert actor.log_std_max == 0.0
     assert actor.init_std == pytest.approx(3**-0.5)
     assert not hasattr(actor, "null_enc")
+    for module in (actor.encoder_net, actor.actor_net, actor.mean_head):
+        for layer in module.modules():
+            if isinstance(layer, nn.Linear):
+                torch.testing.assert_close(layer.bias, torch.zeros_like(layer.bias))
 
 
 def test_actor_initializes_requested_standard_deviation():
@@ -85,6 +105,9 @@ def test_critic_defaults_match_released_rl_boed_architecture():
         (128, 128),
         (128, 1),
     ]
+    for layer in critic.modules():
+        if isinstance(layer, nn.Linear):
+            torch.testing.assert_close(layer.bias, torch.zeros_like(layer.bias))
 
 
 def test_soft_q_network_is_permutation_invariant():
@@ -151,7 +174,7 @@ def test_soft_q_network_ignores_masked_history_entries():
     torch.testing.assert_close(actual, modified)
 
 
-def test_soft_q_network_uses_same_coordinates_for_designs_and_actions():
+def test_soft_q_network_uses_reference_history_and_action_coordinates():
     critic = SoftQNetwork(
         dim_y=1,
         dim_design=2,
@@ -181,7 +204,7 @@ def test_soft_q_network_uses_same_coordinates_for_designs_and_actions():
 
     torch.testing.assert_close(
         inputs["encoder"][..., -2:],
-        torch.zeros(1, 1, 2),
+        torch.full((1, 1, 2), 0.5),
     )
     torch.testing.assert_close(
         inputs["emitter"][..., -2:],
@@ -280,12 +303,16 @@ def test_rlboed_config_generic_defaults_match_example():
         "tau",
         "batch_size",
         "learning_starts",
+        "gradient_steps_per_iteration",
         "policy_lr",
         "q_lr",
         "policy_init_std",
         "policy_frequency",
         "target_network_frequency",
         "alpha",
+        "initial_alpha",
+        "target_entropy",
+        "entropy_anneal_rate",
         "log_frequency",
     ):
         assert getattr(config, field_name) == getattr(
@@ -308,6 +335,7 @@ def test_deployable_policy_maps_raw_history_to_physical_designs():
         design_space,
         actor=actor,
         normalize_design_history=True,
+        design_history_bounds=(0.0, 1.0),
         outcome_bounds=(-3.0, 10.0),
     )
     raw_y = torch.tensor([[[3.5]]])
@@ -315,7 +343,7 @@ def test_deployable_policy_maps_raw_history_to_physical_designs():
 
     mean, _ = actor(
         torch.tensor([[[0.5]]]),
-        torch.tensor([[[-1.0, 1.0]]]),
+        torch.tensor([[[0.0, 1.0]]]),
     )
     expected = torch.tanh(mean) * 4.0
     actual = policy(raw_y, raw_designs)
@@ -337,7 +365,9 @@ def test_rlboed_fit_returns_deployable_designer(tmp_path):
         buffer_size=20,
         batch_size=2,
         learning_starts=1,
+        gradient_steps_per_iteration=1,
         log_frequency=1,
+        verbose=False,
     )
 
     result = RLBOED(config).fit(
@@ -349,10 +379,15 @@ def test_rlboed_fit_returns_deployable_designer(tmp_path):
     assert isinstance(result, FitResult)
     assert isinstance(result.designer, PolicyDesigner)
     assert isinstance(result.designer.policy_net, TanhGaussianPolicyNet)
+    assert not result.designer.deterministic
+    assert not result.designer.policy_net.physical_action_log_prob
+    assert result.designer.policy_net.design_history_bounds == (0.0, 1.0)
     assert result.checkpoint["config"]["gamma"] == config.gamma
-    assert result.checkpoint["alpha"] == config.alpha
-    assert "log_alpha" not in result.checkpoint
-    assert "alpha_optimizer" not in result.checkpoint
+    assert result.checkpoint["alpha"].item() > 0
+    assert "log_alpha" in result.checkpoint
+    assert result.checkpoint["alpha_optimizer"] is not None
+    assert result.checkpoint["optimization_step"] == 3
+    assert result.checkpoint["env_steps"] == 12
     assert result.checkpoint["global_step"] == config.total_timesteps
     torch.testing.assert_close(
         result.checkpoint["design_low"],
@@ -375,3 +410,27 @@ def test_rlboed_fit_returns_deployable_designer(tmp_path):
     checkpoint = torch.load(checkpoint_path, weights_only=True)
     assert "designer" in checkpoint
     assert "actor_optimizer" in checkpoint
+
+
+@pytest.mark.parametrize("alpha", [0.0, 0.2])
+def test_rlboed_fixed_alpha_disables_temperature_optimizer(alpha):
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    design_space = BoxDesignSpace(-2.0, 3.0, event_shape=(2,))
+    config = RLBOEDConfig(
+        outcome_low=-3.0,
+        outcome_high=10.0,
+        n_contrastive=1,
+        total_timesteps=1,
+        num_envs=2,
+        buffer_size=10,
+        batch_size=2,
+        learning_starts=1,
+        gradient_steps_per_iteration=1,
+        alpha=alpha,
+        verbose=False,
+    )
+
+    result = RLBOED(config).fit(task, horizon=2, design_space=design_space)
+
+    assert result.checkpoint["alpha"].item() == pytest.approx(alpha)
+    assert result.checkpoint["alpha_optimizer"] is None

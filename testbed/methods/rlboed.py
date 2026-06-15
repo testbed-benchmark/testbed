@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import asdict, dataclass
+from math import ceil, log
 
 import numpy as np
 import torch
@@ -37,24 +38,28 @@ class RLBOEDConfig:
 
     outcome_low: float
     outcome_high: float
-    seed: int = 1
+    seed: int = 373693
     torch_deterministic: bool = True
 
     n_contrastive: int = 100_000
 
-    total_timesteps: int = 20_000
+    total_timesteps: int = 20_001
     num_envs: int = 100
-    buffer_size: int = 2_000_000
+    buffer_size: int = 10_000_000
     gamma: float = 0.9
     tau: float = 1e-3
     batch_size: int = 4096
-    learning_starts: int = 1_000
+    learning_starts: int = 100_000
+    gradient_steps_per_iteration: int = 64
     policy_lr: float = 1e-4
     q_lr: float = 3e-4
     policy_init_std: float = 3**-0.5
-    policy_frequency: int = 2
+    policy_frequency: int = 1
     target_network_frequency: int = 1
-    alpha: float = 0.2
+    alpha: float | None = None
+    initial_alpha: float = 1.0
+    target_entropy: float | None = None
+    entropy_anneal_rate: float = 1 / 1.4e4
     log_frequency: int = 100
     verbose: bool = True
 
@@ -101,7 +106,9 @@ class RLBOED:
             design_space,
             actor=actor_module,
             normalize_design_history=True,
+            design_history_bounds=(0.0, 1.0),
             outcome_bounds=(cfg.outcome_low, cfg.outcome_high),
+            physical_action_log_prob=False,
         ).to(device)
 
         critic_kwargs = {
@@ -124,6 +131,22 @@ class RLBOED:
             lr=cfg.q_lr,
         )
         actor_optimizer = optim.Adam(actor.parameters(), lr=cfg.policy_lr)
+        if cfg.alpha is None:
+            log_alpha = torch.tensor(
+                log(cfg.initial_alpha),
+                device=device,
+                requires_grad=True,
+            )
+            alpha_optimizer = optim.Adam([log_alpha], lr=cfg.policy_lr)
+        else:
+            fixed_log_alpha = float("-inf") if cfg.alpha == 0 else log(cfg.alpha)
+            log_alpha = torch.tensor(fixed_log_alpha, device=device)
+            alpha_optimizer = None
+        target_entropy = (
+            -float(dim_design)
+            if cfg.target_entropy is None
+            else float(cfg.target_entropy)
+        )
 
         replay_buffer = ReplayBuffer(
             storage=LazyTensorStorage(cfg.buffer_size, device="cpu"),
@@ -133,95 +156,102 @@ class RLBOED:
 
         metrics: list[dict[str, float]] = []
         start_time = time.time()
-        obs, _ = env.reset(seed=cfg.seed)
-        episodic_returns = torch.zeros(cfg.num_envs, device=device)
         completed_episodes = 0
+        env_steps = 0
+        optimization_step = 0
         actor_loss = torch.tensor(float("nan"))
+        alpha_loss = torch.tensor(float("nan"))
+        qf_loss = torch.tensor(float("nan"))
 
-        for global_step in range(cfg.total_timesteps):
-            if global_step < cfg.learning_starts:
-                designs = design_space.sample(
-                    (cfg.num_envs,),
-                    device=device,
+        transitions_per_episode_batch = cfg.num_envs * horizon
+        for training_iteration in range(cfg.total_timesteps):
+            episode_batches = 1
+            if len(replay_buffer) < cfg.learning_starts:
+                episode_batches = ceil(
+                    (cfg.learning_starts - len(replay_buffer))
+                    / transitions_per_episode_batch
                 )
-            else:
-                with torch.no_grad():
-                    policy_sample = actor.sample_from_observation(obs)
-                    designs = policy_sample.action
-            replay_obs = {key: value.detach().clone() for key, value in obs.items()}
-            next_obs, rewards, terminations, truncations, _ = env.step(designs)
-            dones = terminations | truncations
-            replay_buffer.extend(
-                TensorDict(
-                    {
-                        "observation": replay_obs,
-                        "next_observation": next_obs,
-                        "action": designs,
-                        "reward": rewards,
-                        "done": dones,
-                    },
-                    batch_size=[cfg.num_envs],
-                )
-                .detach()
-                .to("cpu")
-            )
 
-            episodic_returns += rewards
-            if dones.any():
-                completed_episodes += cfg.num_envs
-                episode_metrics = {
-                    "step": float(global_step),
-                    "episodes": float(completed_episodes),
-                    "episodic_return": episodic_returns.mean().item(),
-                }
-                metrics.append(episode_metrics)
-                if cfg.verbose:
-                    print(
-                        f"global_step={global_step}, "
-                        f"episodes={completed_episodes}, "
-                        f"episodic_return={episode_metrics['episodic_return']:.4f}"
+            iteration_returns = []
+            for episode_batch in range(episode_batches):
+                seed = cfg.seed if training_iteration == 0 and episode_batch == 0 else None
+                obs, _ = env.reset(seed=seed)
+                episodic_returns = torch.zeros(cfg.num_envs, device=device)
+
+                for _ in range(horizon):
+                    replay_obs = self._clone_observation(obs)
+                    with torch.no_grad():
+                        policy_sample = actor.sample_from_observation(obs)
+                        designs = policy_sample.action
+                    next_obs, rewards, terminations, truncations, _ = env.step(designs)
+                    dones = terminations | truncations
+                    replay_buffer.extend(
+                        TensorDict(
+                            {
+                                "observation": replay_obs,
+                                "next_observation": self._clone_observation(next_obs),
+                                "action": designs,
+                                "reward": rewards,
+                                "done": dones,
+                            },
+                            batch_size=[cfg.num_envs],
+                        )
+                        .detach()
+                        .to("cpu")
                     )
-                episodic_returns.zero_()
-                next_obs, _ = env.reset()
-            obs = next_obs
+                    episodic_returns += rewards
+                    env_steps += cfg.num_envs
+                    obs = next_obs
+
+                completed_episodes += cfg.num_envs
+                iteration_returns.append(episodic_returns.mean())
+
+            episode_metrics = {
+                "step": float(training_iteration),
+                "env_steps": float(env_steps),
+                "episodes": float(completed_episodes),
+                "episodic_return": torch.stack(iteration_returns).mean().item(),
+            }
+            metrics.append(episode_metrics)
 
             if (
-                global_step >= cfg.learning_starts
+                len(replay_buffer) >= cfg.learning_starts
                 and len(replay_buffer) >= cfg.batch_size
             ):
-                data = replay_buffer.sample().to(device, non_blocking=True)
-                data_obs = data["observation"]
-                data_next_obs = data["next_observation"]
-                data_actions = data["action"]
-                data_rewards = data["reward"]
-                data_dones = data["done"]
+                for _ in range(cfg.gradient_steps_per_iteration):
+                    data = replay_buffer.sample().to(device, non_blocking=True)
+                    data_obs = data["observation"]
+                    data_next_obs = data["next_observation"]
+                    data_actions = data["action"]
+                    data_rewards = data["reward"]
+                    data_dones = data["done"]
+                    alpha = log_alpha.exp().detach()
 
-                with torch.no_grad():
-                    next_policy_sample = actor.sample_from_observation(data_next_obs)
-                    next_actions = next_policy_sample.action
-                    next_log_pi = next_policy_sample.log_prob.unsqueeze(-1)
-                    qf1_next_target = qf1_target(data_next_obs, next_actions)
-                    qf2_next_target = qf2_target(data_next_obs, next_actions)
-                    min_qf_next_target = (
-                        torch.min(qf1_next_target, qf2_next_target)
-                        - cfg.alpha * next_log_pi
-                    )
-                    next_q_value = data_rewards + (
-                        1.0 - data_dones.float()
-                    ) * cfg.gamma * min_qf_next_target.view(-1)
+                    with torch.no_grad():
+                        next_policy_sample = actor.sample_from_observation(data_next_obs)
+                        next_actions = next_policy_sample.action
+                        next_log_pi = next_policy_sample.log_prob.unsqueeze(-1)
+                        qf1_next_target = qf1_target(data_next_obs, next_actions)
+                        qf2_next_target = qf2_target(data_next_obs, next_actions)
+                        min_qf_next_target = (
+                            torch.min(qf1_next_target, qf2_next_target)
+                            - alpha * next_log_pi
+                        )
+                        next_q_value = data_rewards + (
+                            1.0 - data_dones.float()
+                        ) * cfg.gamma * min_qf_next_target.view(-1)
 
-                qf1_a_values = qf1(data_obs, data_actions).view(-1)
-                qf2_a_values = qf2(data_obs, data_actions).view(-1)
-                qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
-                qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
-                qf_loss = qf1_loss + qf2_loss
+                    qf1_a_values = qf1(data_obs, data_actions).view(-1)
+                    qf2_a_values = qf2(data_obs, data_actions).view(-1)
+                    qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
+                    qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
+                    qf_loss = qf1_loss + qf2_loss
 
-                q_optimizer.zero_grad()
-                qf_loss.backward()
-                q_optimizer.step()
+                    q_optimizer.zero_grad()
+                    qf_loss.backward()
+                    q_optimizer.step()
 
-                if global_step % cfg.policy_frequency == 0:
-                    for _ in range(cfg.policy_frequency):
+                    if optimization_step % cfg.policy_frequency == 0:
                         policy_sample = actor.sample_from_observation(data_obs)
                         pi = policy_sample.action
                         log_pi = policy_sample.log_prob.unsqueeze(-1)
@@ -229,38 +259,54 @@ class RLBOED:
                             qf1(data_obs, pi),
                             qf2(data_obs, pi),
                         )
-                        actor_loss = (cfg.alpha * log_pi - min_qf_pi).mean()
+                        actor_loss = (alpha * log_pi - min_qf_pi).mean()
 
                         actor_optimizer.zero_grad()
                         actor_loss.backward()
                         actor_optimizer.step()
 
-                if global_step % cfg.target_network_frequency == 0:
-                    self._soft_update(qf1, qf1_target)
-                    self._soft_update(qf2, qf2_target)
+                        if alpha_optimizer is not None:
+                            alpha_loss = -(
+                                log_alpha.exp()
+                                * (log_pi.detach() + target_entropy)
+                            ).mean()
+                            alpha_optimizer.zero_grad()
+                            alpha_loss.backward()
+                            alpha_optimizer.step()
 
-                if global_step % cfg.log_frequency == 0:
-                    step_metrics = {
-                        "step": float(global_step),
-                        "sps": float(
-                            int((global_step + 1) / (time.time() - start_time))
-                        ),
-                        "qf_loss": qf_loss.item() / 2.0,
-                        "actor_loss": actor_loss.item(),
-                        "alpha": cfg.alpha,
-                    }
-                    metrics.append(step_metrics)
-                    message = (
-                        f"SPS={int(step_metrics['sps'])}, "
+                    if optimization_step % cfg.target_network_frequency == 0:
+                        self._soft_update(qf1, qf1_target)
+                        self._soft_update(qf2, qf2_target)
+                    optimization_step += 1
+
+            if cfg.alpha is None:
+                target_entropy -= cfg.entropy_anneal_rate
+
+            if training_iteration % cfg.log_frequency == 0:
+                alpha = log_alpha.exp().item()
+                step_metrics = {
+                    "step": float(training_iteration),
+                    "env_steps": float(env_steps),
+                    "sps": float(int(env_steps / (time.time() - start_time))),
+                    "qf_loss": qf_loss.item() / 2.0,
+                    "actor_loss": actor_loss.item(),
+                    "alpha_loss": alpha_loss.item(),
+                    "alpha": alpha,
+                    "target_entropy": target_entropy,
+                }
+                metrics.append(step_metrics)
+                if cfg.verbose:
+                    print(
+                        f"iteration={training_iteration}, "
+                        f"env_steps={env_steps}, "
+                        f"return={episode_metrics['episodic_return']:.4f}, "
                         f"qf_loss={step_metrics['qf_loss']:.4f}, "
                         f"actor_loss={step_metrics['actor_loss']:.4f}, "
-                        f"alpha={cfg.alpha:.4f}"
+                        f"alpha={alpha:.4f}"
                     )
-                    if cfg.verbose:
-                        print(message)
 
         actor.eval()
-        designer = PolicyDesigner(task, horizon, actor)
+        designer = PolicyDesigner(task, horizon, actor, deterministic=False)
         checkpoint = {
             "config": asdict(cfg),
             "horizon": horizon,
@@ -279,7 +325,14 @@ class RLBOED:
             "qf2_target": qf2_target.state_dict(),
             "actor_optimizer": actor_optimizer.state_dict(),
             "q_optimizer": q_optimizer.state_dict(),
-            "alpha": cfg.alpha,
+            "alpha": log_alpha.exp().detach().cpu(),
+            "log_alpha": log_alpha.detach().cpu(),
+            "alpha_optimizer": (
+                None if alpha_optimizer is None else alpha_optimizer.state_dict()
+            ),
+            "target_entropy": target_entropy,
+            "optimization_step": optimization_step,
+            "env_steps": env_steps,
             "global_step": cfg.total_timesteps,
         }
         return FitResult(
@@ -287,6 +340,14 @@ class RLBOED:
             metrics=metrics,
             checkpoint=checkpoint,
         )
+
+    @staticmethod
+    def _clone_observation(observation):
+        """Snapshots mutable padded-history observations for replay."""
+        return {
+            key: value.detach().clone()
+            for key, value in observation.items()
+        }
 
     def _soft_update(self, source, target) -> None:
         """Polyak-updates a target Q network."""
@@ -317,6 +378,7 @@ class RLBOED:
             "num_envs": cfg.num_envs,
             "buffer_size": cfg.buffer_size,
             "batch_size": cfg.batch_size,
+            "gradient_steps_per_iteration": cfg.gradient_steps_per_iteration,
             "horizon": horizon,
             "log_frequency": cfg.log_frequency,
             "policy_frequency": cfg.policy_frequency,
@@ -327,10 +389,18 @@ class RLBOED:
                 raise ValueError(f"{name} must be positive.")
         if cfg.n_contrastive < 0:
             raise ValueError("n_contrastive must be non-negative.")
+        if cfg.buffer_size < cfg.learning_starts:
+            raise ValueError("buffer_size must be at least learning_starts.")
         if cfg.outcome_low >= cfg.outcome_high:
             raise ValueError("outcome_low must be less than outcome_high.")
-        if cfg.alpha < 0:
-            raise ValueError("alpha must be non-negative.")
+        if cfg.alpha is not None and cfg.alpha < 0:
+            raise ValueError("alpha must be non-negative when fixed.")
+        if cfg.initial_alpha <= 0:
+            raise ValueError("initial_alpha must be positive.")
+        if cfg.learning_starts < 0:
+            raise ValueError("learning_starts must be non-negative.")
+        if cfg.entropy_anneal_rate < 0:
+            raise ValueError("entropy_anneal_rate must be non-negative.")
         if cfg.policy_init_std <= 0:
             raise ValueError("policy_init_std must be positive.")
         if task.likelihood_type != "explicit":

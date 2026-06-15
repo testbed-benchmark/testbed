@@ -98,7 +98,7 @@ class _ContrastiveReward(RewardFunction):
         if env.theta_all is None:
             raise RuntimeError("Environment has not been reset.")
         logp = batched_logp_against_theta_all(env.task, outcome, design, env.theta_all)
-        self.log_c = self.log_c + logp
+        self.log_c += logp
         return logp
 
 

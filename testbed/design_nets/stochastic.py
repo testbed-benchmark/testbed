@@ -9,7 +9,7 @@ from torch import Tensor
 from torch.distributions import Normal
 
 from testbed.design_nets.base_design_net import DesignNet
-from testbed.design_nets.modules import MLP
+from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
 from testbed.envs.design_spaces import BoxDesignSpace
 
 
@@ -151,6 +151,7 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         self.actor_net = MLP([dim_emb, dim_h, dim_h], activation=nn.ReLU)
         self.mean_head = nn.Linear(dim_h, self.dim_design)
         self.log_std_head = nn.Linear(dim_h, self.dim_design)
+        _initialize_linear_layers(self)
         nn.init.zeros_(self.log_std_head.weight)
         scaled_log_std = 2.0 * (
             (init_log_std - self.log_std_min)
@@ -198,7 +199,9 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         actor: GaussianPolicyActor | None = None,
         *,
         normalize_design_history: bool = False,
+        design_history_bounds: tuple[float, float] = (-1.0, 1.0),
         outcome_bounds: tuple[float, float] | None = None,
+        physical_action_log_prob: bool = True,
     ):
         """Initializes the policy network.
 
@@ -208,9 +211,13 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             actor: Optional module mapping flattened histories to Gaussian
                 mean and log standard deviation.
             normalize_design_history: If True, affinely map physical design
-                histories to [-1, 1] before passing them to the actor.
+                histories to `design_history_bounds` before actor evaluation.
+            design_history_bounds: Target bounds for normalized design history.
             outcome_bounds: Optional lower and upper bounds used to affinely map
                 physical outcome histories to [0, 1] before actor evaluation.
+            physical_action_log_prob: Include the affine design-space scale in
+                returned log probabilities. Disable this when reproducing SAC
+                implementations that optimize entropy in normalized action space.
         """
         super().__init__()
 
@@ -218,6 +225,13 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         self.event_shape_design = torch.Size(design_space.event_shape)
         self.dim_design = self.event_shape_design.numel()
         self.normalize_design_history = bool(normalize_design_history)
+        self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
+        if (
+            len(self.design_history_bounds) != 2
+            or self.design_history_bounds[0] >= self.design_history_bounds[1]
+        ):
+            raise ValueError("design_history_bounds must satisfy low < high.")
+        self.physical_action_log_prob = bool(physical_action_log_prob)
         self.actor = actor or DeepSetGaussianActor(
             dim_design=self.dim_design,
         )
@@ -351,7 +365,9 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         tanh_log_det = 2.0 * (
             log(2.0) - raw_action - nn.functional.softplus(-2.0 * raw_action)
         )
-        return torch.log(self.action_scale) + tanh_log_det
+        if self.physical_action_log_prob:
+            return torch.log(self.action_scale) + tanh_log_det
+        return tanh_log_det
 
     def _prepare_histories(
         self,
@@ -413,12 +429,17 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         design_flat = design_history.reshape(b_flat, T, self.dim_design)
 
         if self.normalize_design_history:
-            bias = self.action_bias.reshape(1, 1, self.dim_design)
-            scale = self.action_scale.reshape(1, 1, self.dim_design)
-            design_flat = (design_flat - bias) / scale
+            target_low, target_high = self.design_history_bounds
+            design_flat = affine_rescale(
+                design_flat,
+                self.action_bias - self.action_scale,
+                self.action_bias + self.action_scale,
+                target_low,
+                target_high,
+            )
         if self._normalize_outcomes:
-            y_flat = (y_flat - self.outcome_low) / (
-                self.outcome_high - self.outcome_low
+            y_flat = affine_rescale(
+                y_flat, self.outcome_low, self.outcome_high, 0.0, 1.0
             )
 
         mask_flat = None

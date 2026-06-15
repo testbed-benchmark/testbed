@@ -11,11 +11,24 @@ from testbed.envs import BoxDesignSpace
 from testbed.methods import RLBOED, RLBOEDConfig
 from testbed.tasks import LocationFinding
 
+PAPER_SEEDS = (
+    373693,
+    943929,
+    675273,
+    79387,
+    508137,
+    557390,
+    756177,
+    155183,
+    262598,
+    572185,
+)
+
 
 @dataclass
 class Args:
     exp_name: str = Path(__file__).stem
-    seed: int = 1
+    seed: int = PAPER_SEEDS[0]
     torch_deterministic: bool = True
     cuda: bool = True
     save: bool = True
@@ -30,19 +43,23 @@ class Args:
     outcome_low: float = -3.0
     outcome_high: float = 10.0
 
-    total_timesteps: int = 20_000
+    total_timesteps: int = 20_001
     num_envs: int = 100
-    buffer_size: int = 2_000_000
+    buffer_size: int = 10_000_000
     gamma: float = 0.9
     tau: float = 1e-3
     batch_size: int = 4096
-    learning_starts: int = 1_000
+    learning_starts: int = 100_000
+    gradient_steps_per_iteration: int = 64
     policy_lr: float = 1e-4
     q_lr: float = 3e-4
     policy_init_std: float = 3**-0.5
-    policy_frequency: int = 2
+    policy_frequency: int = 1
     target_network_frequency: int = 1
-    alpha: float = 0.2
+    alpha: float | None = None
+    initial_alpha: float = 1.0
+    target_entropy: float | None = None
+    entropy_anneal_rate: float = 1 / 1.4e4
     log_frequency: int = 100
 
 
@@ -79,6 +96,11 @@ def parse_args() -> Args:
     parser.add_argument("--tau", type=float, default=Args.tau)
     parser.add_argument("--batch-size", type=int, default=Args.batch_size)
     parser.add_argument("--learning-starts", type=int, default=Args.learning_starts)
+    parser.add_argument(
+        "--gradient-steps-per-iteration",
+        type=int,
+        default=Args.gradient_steps_per_iteration,
+    )
     parser.add_argument("--policy-lr", type=float, default=Args.policy_lr)
     parser.add_argument("--q-lr", type=float, default=Args.q_lr)
     parser.add_argument(
@@ -91,6 +113,13 @@ def parse_args() -> Args:
         default=Args.target_network_frequency,
     )
     parser.add_argument("--alpha", type=float, default=Args.alpha)
+    parser.add_argument("--initial-alpha", type=float, default=Args.initial_alpha)
+    parser.add_argument("--target-entropy", type=float, default=Args.target_entropy)
+    parser.add_argument(
+        "--entropy-anneal-rate",
+        type=float,
+        default=Args.entropy_anneal_rate,
+    )
     parser.add_argument("--log-frequency", type=int, default=Args.log_frequency)
     return Args(**vars(parser.parse_args()))
 
@@ -114,12 +143,16 @@ def train(args: Args) -> Path | None:
         tau=args.tau,
         batch_size=args.batch_size,
         learning_starts=args.learning_starts,
+        gradient_steps_per_iteration=args.gradient_steps_per_iteration,
         policy_lr=args.policy_lr,
         q_lr=args.q_lr,
         policy_init_std=args.policy_init_std,
         policy_frequency=args.policy_frequency,
         target_network_frequency=args.target_network_frequency,
         alpha=args.alpha,
+        initial_alpha=args.initial_alpha,
+        target_entropy=args.target_entropy,
+        entropy_anneal_rate=args.entropy_anneal_rate,
         log_frequency=args.log_frequency,
     )
     result = RLBOED(config).fit(

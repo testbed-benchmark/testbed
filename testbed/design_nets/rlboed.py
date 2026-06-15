@@ -4,24 +4,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from testbed.design_nets.modules import MLP
-
-
-def affine_rescale(
-    value: Tensor,
-    source_low,
-    source_high,
-    target_low,
-    target_high,
-) -> Tensor:
-    """Affinely rescales a tensor between bounded coordinate systems."""
-    source_low = torch.as_tensor(source_low, device=value.device, dtype=value.dtype)
-    source_high = torch.as_tensor(source_high, device=value.device, dtype=value.dtype)
-    target_low = torch.as_tensor(target_low, device=value.device, dtype=value.dtype)
-    target_high = torch.as_tensor(target_high, device=value.device, dtype=value.dtype)
-    return target_low + (value - source_low) * (
-        (target_high - target_low) / (source_high - source_low)
-    )
+from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
 
 
 class RLBOEDQNetwork(nn.Module):
@@ -52,6 +35,7 @@ class RLBOEDQNetwork(nn.Module):
             [dim_emb + dim_design, dim_h, dim_h, 1],
             activation=nn.ReLU,
         )
+        _initialize_linear_layers(self)
         self.register_buffer("design_low", torch.as_tensor(design_low))
         self.register_buffer("design_high", torch.as_tensor(design_high))
         self.register_buffer("outcome_low", torch.as_tensor(outcome_low))
@@ -71,7 +55,7 @@ class RLBOEDQNetwork(nn.Module):
             designs,
             self.design_low,
             self.design_high,
-            -1.0,
+            0.0,
             1.0,
         )
         outcomes = affine_rescale(
