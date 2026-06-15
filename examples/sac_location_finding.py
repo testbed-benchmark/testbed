@@ -39,6 +39,7 @@ class Args:
     learning_starts: int = 1_000
     policy_lr: float = 1e-4
     q_lr: float = 3e-4
+    policy_init_std: float = 3**-0.5
     policy_frequency: int = 2
     target_network_frequency: int = 1
     alpha: float = 0.2
@@ -80,6 +81,9 @@ def parse_args() -> Args:
     parser.add_argument("--learning-starts", type=int, default=Args.learning_starts)
     parser.add_argument("--policy-lr", type=float, default=Args.policy_lr)
     parser.add_argument("--q-lr", type=float, default=Args.q_lr)
+    parser.add_argument(
+        "--policy-init-std", type=float, default=Args.policy_init_std
+    )
     parser.add_argument("--policy-frequency", type=int, default=Args.policy_frequency)
     parser.add_argument(
         "--target-network-frequency",
@@ -112,6 +116,7 @@ def train(args: Args) -> Path | None:
         learning_starts=args.learning_starts,
         policy_lr=args.policy_lr,
         q_lr=args.q_lr,
+        policy_init_std=args.policy_init_std,
         policy_frequency=args.policy_frequency,
         target_network_frequency=args.target_network_frequency,
         alpha=args.alpha,

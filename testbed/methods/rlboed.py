@@ -51,6 +51,7 @@ class RLBOEDConfig:
     learning_starts: int = 1_000
     policy_lr: float = 1e-4
     q_lr: float = 3e-4
+    policy_init_std: float = 3**-0.5
     policy_frequency: int = 2
     target_network_frequency: int = 1
     alpha: float = 0.2
@@ -94,6 +95,7 @@ class RLBOED:
         actor_module = DeepSetGaussianActor(
             dim_y=dim_y,
             dim_design=dim_design,
+            init_std=cfg.policy_init_std,
         )
         actor = TanhGaussianPolicyNet(
             design_space,
@@ -329,6 +331,8 @@ class RLBOED:
             raise ValueError("outcome_low must be less than outcome_high.")
         if cfg.alpha < 0:
             raise ValueError("alpha must be non-negative.")
+        if cfg.policy_init_std <= 0:
+            raise ValueError("policy_init_std must be positive.")
         if task.likelihood_type != "explicit":
             raise ValueError("RLBOED requires a task with an explicit likelihood.")
 

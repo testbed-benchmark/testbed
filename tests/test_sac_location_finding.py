@@ -46,7 +46,26 @@ def test_actor_defaults_match_released_rl_boed_architecture():
     assert actor.log_std_head.in_features == 128
     assert actor.log_std_min == -20.0
     assert actor.log_std_max == 0.0
+    assert actor.init_std == pytest.approx(3**-0.5)
     assert not hasattr(actor, "null_enc")
+
+
+def test_actor_initializes_requested_standard_deviation():
+    actor = DeepSetGaussianActor(dim_y=1, dim_design=2, init_std=0.4)
+    y_history = torch.randn(3, 4, 1)
+    design_history = torch.randn(3, 4, 2)
+
+    _, log_std = actor(y_history, design_history)
+
+    torch.testing.assert_close(log_std.exp(), torch.full_like(log_std, 0.4))
+    assert torch.count_nonzero(actor.log_std_head.weight) == 0
+    assert actor.log_std_head.weight.requires_grad
+
+
+@pytest.mark.parametrize("init_std", [0.0, -0.1, 1.0, 1e-10])
+def test_actor_rejects_initial_std_outside_log_std_bounds(init_std):
+    with pytest.raises(ValueError, match="init_std"):
+        DeepSetGaussianActor(dim_y=1, dim_design=2, init_std=init_std)
 
 
 def test_critic_defaults_match_released_rl_boed_architecture():
@@ -263,6 +282,7 @@ def test_rlboed_config_generic_defaults_match_example():
         "learning_starts",
         "policy_lr",
         "q_lr",
+        "policy_init_std",
         "policy_frequency",
         "target_network_frequency",
         "alpha",

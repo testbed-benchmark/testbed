@@ -1,7 +1,7 @@
 """Stochastic policy networks for reinforcement learning BED agents."""
 
 from dataclasses import dataclass
-from math import log, prod
+from math import atanh, log, prod
 
 import torch
 import torch.nn as nn
@@ -114,6 +114,7 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         dim_emb: int = 64,
         log_std_min: float = -20.0,
         log_std_max: float = 0.0,
+        init_std: float = 3**-0.5,
     ):
         """Initializes the actor network.
 
@@ -124,6 +125,7 @@ class DeepSetGaussianActor(GaussianPolicyActor):
             dim_emb: History summary dimension.
             log_std_min: Lower bound for Gaussian log standard deviations.
             log_std_max: Upper bound for Gaussian log standard deviations.
+            init_std: Initial unsquashed Gaussian standard deviation.
         """
         super().__init__()
 
@@ -132,6 +134,15 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         self.dim_emb = int(dim_emb)
         self.log_std_min = float(log_std_min)
         self.log_std_max = float(log_std_max)
+        self.init_std = float(init_std)
+        if self.init_std <= 0:
+            raise ValueError("init_std must be positive.")
+        init_log_std = log(self.init_std)
+        if not self.log_std_min < init_log_std < self.log_std_max:
+            raise ValueError(
+                "init_std must have a logarithm strictly between "
+                "log_std_min and log_std_max."
+            )
 
         self.encoder_net = MLP(
             [self.dim_design + self.dim_y, dim_h, dim_h, dim_emb],
@@ -140,6 +151,12 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         self.actor_net = MLP([dim_emb, dim_h, dim_h], activation=nn.ReLU)
         self.mean_head = nn.Linear(dim_h, self.dim_design)
         self.log_std_head = nn.Linear(dim_h, self.dim_design)
+        nn.init.zeros_(self.log_std_head.weight)
+        scaled_log_std = 2.0 * (
+            (init_log_std - self.log_std_min)
+            / (self.log_std_max - self.log_std_min)
+        ) - 1.0
+        nn.init.constant_(self.log_std_head.bias, atanh(scaled_log_std))
 
     def forward(
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
