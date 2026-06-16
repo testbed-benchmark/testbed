@@ -189,3 +189,5 @@ cython_debug/
 
 AGENTS.md
 CLAUDE.md
+misc/
+uv.lock

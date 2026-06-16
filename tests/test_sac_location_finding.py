@@ -5,9 +5,7 @@ from pathlib import Path
 
 import pytest
 import torch
-from tensordict import TensorDict
 from torch import nn
-from torchrl.data import LazyTensorStorage, ReplayBuffer
 
 from testbed.design_nets import (
     DeepSetGaussianActor,
@@ -17,6 +15,7 @@ from testbed.design_nets import (
 from testbed.designers import PolicyDesigner
 from testbed.envs import BoxDesignSpace
 from testbed.methods import RLBOED, FitResult, RLBOEDConfig
+from testbed.methods.rlboed import _CompactEpisodeReplayBuffer
 from testbed.tasks import LocationFinding
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "examples" / "sac_location_finding.py"
@@ -212,73 +211,172 @@ def test_soft_q_network_uses_reference_history_and_action_coordinates():
     )
 
 
-def test_replay_buffer_keeps_physical_transitions_on_cpu():
-    buffer = ReplayBuffer(
-        storage=LazyTensorStorage(2, device="cpu"),
-        batch_size=1,
+def test_compact_replay_buffer_reconstructs_padded_transitions(monkeypatch):
+    buffer = _CompactEpisodeReplayBuffer(
+        buffer_size=3,
+        batch_size=3,
+        horizon=3,
+        event_shape_design=torch.Size([2]),
+        event_shape_y=torch.Size([1]),
+        device="cpu",
     )
-    observation = {
-        "designs": torch.tensor([[[-2.0, 2.0]]]),
-        "outcomes": torch.tensor([[[3.5]]]),
-        "mask": torch.tensor([[True]]),
-        "t": torch.tensor([1]),
-    }
-    action = torch.tensor([[-2.0, 2.0]])
+    designs = torch.tensor(
+        [[[-2.0, 2.0], [-1.0, 1.0], [0.0, 0.5]]],
+    )
+    outcomes = torch.tensor([[[3.5], [4.5], [5.5]]])
+    actions = torch.tensor(
+        [[[-1.5, 1.5], [-0.5, 0.5], [0.25, -0.25]]],
+    )
 
-    buffer.extend(
-        TensorDict(
-            {
-                "observation": observation,
-                "next_observation": observation,
-                "action": action,
-                "reward": torch.tensor([1.0]),
-                "done": torch.tensor([False]),
-            },
-            batch_size=[1],
-        )
+    buffer.extend_episode_batch(
+        designs=designs,
+        outcomes=outcomes,
+        actions=actions,
+        rewards=torch.tensor([[1.0, 2.0, 3.0]]),
+        dones=torch.tensor([[False, False, True]]),
+    )
+
+    monkeypatch.setattr(
+        torch,
+        "randint",
+        lambda high, size, device=None: torch.tensor([0, 1, 2], device=device),
     )
     sample = buffer.sample()
 
     assert sample.device == torch.device("cpu")
-    assert sample.batch_size == torch.Size([1])
-    assert sample["observation", "designs"].shape == (1, 1, 2)
+    assert sample.batch_size == torch.Size([3])
+    assert sample["observation", "designs"].shape == (3, 3, 2)
     assert sample["observation", "mask"].dtype == torch.bool
     assert sample["observation", "t"].dtype == torch.long
     assert sample["done"].dtype == torch.bool
-    torch.testing.assert_close(sample["action"][0], action[0])
+    torch.testing.assert_close(sample["action"], actions[0])
+    torch.testing.assert_close(sample["reward"], torch.tensor([1.0, 2.0, 3.0]))
+    assert sample["done"].tolist() == [False, False, True]
+    assert sample["observation", "t"].tolist() == [0, 1, 2]
+    assert sample["next_observation", "t"].tolist() == [1, 2, 3]
+    assert sample["observation", "mask"].tolist() == [
+        [False, False, False],
+        [True, False, False],
+        [True, True, False],
+    ]
+    assert sample["next_observation", "mask"].tolist() == [
+        [True, False, False],
+        [True, True, False],
+        [True, True, True],
+    ]
     torch.testing.assert_close(
-        sample["observation", "designs"][0],
-        observation["designs"][0],
+        sample["observation", "designs"][1],
+        torch.tensor([[-2.0, 2.0], [0.0, 0.0], [0.0, 0.0]]),
+    )
+    torch.testing.assert_close(
+        sample["next_observation", "outcomes"][1],
+        torch.tensor([[3.5], [4.5], [0.0]]),
     )
     assert torch.all(sample["action"][0].abs() <= 4.0)
 
 
-def test_replay_buffer_rollover_retains_newest_transitions():
-    buffer = ReplayBuffer(
-        storage=LazyTensorStorage(3, device="cpu"),
-        batch_size=3,
-    )
-    transition = TensorDict(
-        {
-            "observation": {"t": torch.arange(5)},
-            "next_observation": {"t": torch.arange(1, 6)},
-            "action": torch.arange(5, dtype=torch.float32).unsqueeze(-1),
-            "reward": torch.arange(5, dtype=torch.float32),
-            "done": torch.zeros(5, dtype=torch.bool),
-        },
-        batch_size=[5],
+def test_compact_replay_buffer_rollover_retains_newest_transitions(monkeypatch):
+    buffer = _CompactEpisodeReplayBuffer(
+        buffer_size=5,
+        batch_size=5,
+        horizon=3,
+        event_shape_design=torch.Size([1]),
+        event_shape_y=torch.Size([1]),
+        device="cpu",
     )
 
-    buffer.extend(transition)
-    stored = buffer[:]
+    for episode in range(3):
+        transition_ids = torch.arange(
+            episode * 3,
+            episode * 3 + 3,
+            dtype=torch.float32,
+        )
+        values = transition_ids.reshape(1, 3, 1)
+        buffer.extend_episode_batch(
+            designs=values,
+            outcomes=values,
+            actions=values,
+            rewards=transition_ids.reshape(1, 3),
+            dones=torch.zeros(1, 3, dtype=torch.bool),
+        )
 
-    assert len(buffer) == 3
-    assert set(stored["observation", "t"].tolist()) == {2, 3, 4}
+    monkeypatch.setattr(
+        torch,
+        "randint",
+        lambda high, size, device=None: torch.arange(high, device=device),
+    )
+    sample = buffer.sample()
+
+    assert len(buffer) == 5
+    torch.testing.assert_close(
+        sample["action"].squeeze(-1),
+        torch.tensor([4.0, 5.0, 6.0, 7.0, 8.0]),
+    )
+    torch.testing.assert_close(
+        sample["reward"],
+        torch.tensor([4.0, 5.0, 6.0, 7.0, 8.0]),
+    )
+    assert sample["observation", "t"].tolist() == [1, 2, 0, 1, 2]
 
 
 def test_rlboed_requires_outcome_bounds():
     with pytest.raises(TypeError):
         RLBOEDConfig()
+
+
+def test_compact_replay_buffer_respects_storage_device():
+    requested_device = "cuda" if torch.cuda.is_available() else "cpu"
+    buffer = _CompactEpisodeReplayBuffer(
+        buffer_size=2,
+        batch_size=1,
+        horizon=2,
+        event_shape_design=torch.Size([1]),
+        event_shape_y=torch.Size([1]),
+        device=requested_device,
+    )
+
+    assert buffer.designs.device.type == requested_device
+
+    values = torch.arange(2, dtype=torch.float32, device=buffer.designs.device).reshape(
+        1, 2, 1
+    )
+    buffer.extend_episode_batch(
+        designs=values,
+        outcomes=values,
+        actions=values,
+        rewards=values.squeeze(-1),
+        dones=torch.zeros(1, 2, dtype=torch.bool, device=buffer.designs.device),
+    )
+    sample = buffer.sample()
+
+    assert sample.device == buffer.designs.device
+    assert sample["action"].device == buffer.designs.device
+
+
+def test_rlboed_rejects_unavailable_cuda_buffer_device():
+    config = RLBOEDConfig(
+        outcome_low=-3.0,
+        outcome_high=10.0,
+        buffer_device="cuda",
+    )
+    trainer = RLBOED(config)
+
+    if torch.cuda.is_available():
+        assert trainer._resolve_buffer_device().type == "cuda"
+    else:
+        with pytest.raises(ValueError, match="requires CUDA"):
+            trainer._resolve_buffer_device()
+
+
+def test_rlboed_rejects_gpu_buffer_device_alias():
+    config = RLBOEDConfig(
+        outcome_low=-3.0,
+        outcome_high=10.0,
+        buffer_device="gpu",
+    )
+
+    with pytest.raises(ValueError, match="cpu.*cuda"):
+        RLBOED(config)._resolve_buffer_device()
 
 
 def test_rlboed_config_generic_defaults_match_example():
@@ -296,9 +394,10 @@ def test_rlboed_config_generic_defaults_match_example():
         "seed",
         "torch_deterministic",
         "n_contrastive",
-        "total_timesteps",
+        "num_training_iterations",
         "num_envs",
         "buffer_size",
+        "buffer_device",
         "gamma",
         "tau",
         "batch_size",
@@ -360,7 +459,7 @@ def test_rlboed_fit_returns_deployable_designer(tmp_path):
         outcome_low=-3.0,
         outcome_high=10.0,
         n_contrastive=2,
-        total_timesteps=3,
+        num_training_iterations=3,
         num_envs=2,
         buffer_size=20,
         batch_size=2,
@@ -388,7 +487,8 @@ def test_rlboed_fit_returns_deployable_designer(tmp_path):
     assert result.checkpoint["alpha_optimizer"] is not None
     assert result.checkpoint["optimization_step"] == 3
     assert result.checkpoint["env_steps"] == 12
-    assert result.checkpoint["global_step"] == config.total_timesteps
+    assert result.checkpoint["training_iterations"] == config.num_training_iterations
+    assert result.checkpoint["global_step"] == config.num_training_iterations
     torch.testing.assert_close(
         result.checkpoint["design_low"],
         torch.full((2,), -2.0),
@@ -420,7 +520,7 @@ def test_rlboed_fixed_alpha_disables_temperature_optimizer(alpha):
         outcome_low=-3.0,
         outcome_high=10.0,
         n_contrastive=1,
-        total_timesteps=1,
+        num_training_iterations=1,
         num_envs=2,
         buffer_size=10,
         batch_size=2,

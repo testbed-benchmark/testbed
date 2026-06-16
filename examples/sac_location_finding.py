@@ -43,9 +43,10 @@ class Args:
     outcome_low: float = -3.0
     outcome_high: float = 10.0
 
-    total_timesteps: int = 20_001
+    num_training_iterations: int = 2_001
     num_envs: int = 100
     buffer_size: int = 10_000_000
+    buffer_device: str = "cpu"
     gamma: float = 0.9
     tau: float = 1e-3
     batch_size: int = 4096
@@ -89,9 +90,15 @@ def parse_args() -> Args:
     parser.add_argument("--outcome-low", type=float, default=Args.outcome_low)
     parser.add_argument("--outcome-high", type=float, default=Args.outcome_high)
 
-    parser.add_argument("--total-timesteps", type=int, default=Args.total_timesteps)
+    parser.add_argument(
+        "--num-training-iterations",
+        type=int,
+        default=Args.num_training_iterations,
+        help="Number of SAC training iterations. The paper used 20,001.",
+    )
     parser.add_argument("--num-envs", type=int, default=Args.num_envs)
     parser.add_argument("--buffer-size", type=int, default=Args.buffer_size)
+    parser.add_argument("--buffer-device", default=Args.buffer_device)
     parser.add_argument("--gamma", type=float, default=Args.gamma)
     parser.add_argument("--tau", type=float, default=Args.tau)
     parser.add_argument("--batch-size", type=int, default=Args.batch_size)
@@ -136,9 +143,10 @@ def train(args: Args) -> Path | None:
         seed=args.seed,
         torch_deterministic=args.torch_deterministic,
         n_contrastive=args.n_contrastive,
-        total_timesteps=args.total_timesteps,
+        num_training_iterations=args.num_training_iterations,
         num_envs=args.num_envs,
         buffer_size=args.buffer_size,
+        buffer_device=args.buffer_device,
         gamma=args.gamma,
         tau=args.tau,
         batch_size=args.batch_size,
