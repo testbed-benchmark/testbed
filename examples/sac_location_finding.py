@@ -7,9 +7,16 @@ from pathlib import Path
 
 import torch
 
-from testbed.envs import BoxDesignSpace
+from testbed.envs import (
+    BEDEnv,
+    BoxDesignSpace,
+    PaddedHistoryObservation,
+    RLBOEDDenseReward,
+)
 from testbed.methods import RLBOED, RLBOEDConfig
 from testbed.tasks import LocationFinding
+
+EVAL_N_CONTRASTIVE = 1_000_000
 
 PAPER_SEEDS = (
     373693,
@@ -131,12 +138,17 @@ def parse_args() -> Args:
     return Args(**vars(parser.parse_args()))
 
 
-def train(args: Args) -> Path | None:
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+def make_task_and_design_space(args: Args, device: torch.device):
     task = LocationFinding(args.n_sources, args.dim_theta).to(device)
     design_space = BoxDesignSpace(
         args.design_low, args.design_high, event_shape=task.event_shape_design
     )
+    return task, design_space
+
+
+def train(args: Args):
+    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    task, design_space = make_task_and_design_space(args, device)
     config = RLBOEDConfig(
         outcome_low=args.outcome_low,
         outcome_high=args.outcome_high,
@@ -170,16 +182,49 @@ def train(args: Args) -> Path | None:
     )
 
     if not args.save:
-        return None
+        return result, None
 
     run_name = f"{args.exp_name}__{args.seed}__{int(time.time())}"
     checkpoint_path = Path(args.output_dir) / run_name / "sac_location_finding.pt"
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     result.save(checkpoint_path)
-    return checkpoint_path
+    return result, checkpoint_path
+
+
+@torch.no_grad()
+def evaluate_policy_mean(args: Args, policy_net) -> tuple[float, float]:
+    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    task, design_space = make_task_and_design_space(args, device)
+    env = BEDEnv(
+        task,
+        horizon=args.horizon,
+        design_space=design_space,
+        reward_fn=RLBOEDDenseReward(EVAL_N_CONTRASTIVE),
+        observation_fn=PaddedHistoryObservation(args.horizon),
+        batch_shape=(args.num_envs,),
+    )
+    policy_net.eval()
+    observation, _ = env.reset(seed=args.seed + 1)
+    returns = torch.zeros(args.num_envs, device=device)
+    for _ in range(args.horizon):
+        designs = policy_net.sample_from_observation(
+            observation, deterministic=True
+        ).action
+        observation, rewards, _, _, _ = env.step(designs)
+        returns += rewards
+
+    mean = returns.mean().item()
+    standard_error = returns.std(unbiased=True).div(args.num_envs**0.5).item()
+    return mean, standard_error
 
 
 if __name__ == "__main__":
-    checkpoint = train(parse_args())
+    args = parse_args()
+    result, checkpoint = train(args)
     if checkpoint is not None:
         print(f"saved checkpoint to {checkpoint}")
+    mean, standard_error = evaluate_policy_mean(args, result.designer.policy_net)
+    print(
+        f"policy-mean SPCE estimate with {EVAL_N_CONTRASTIVE} "
+        f"contrastive samples: {mean:.4f} ± {standard_error:.4f}"
+    )
