@@ -1,4 +1,4 @@
-"""RL-BOED training with Soft Actor-Critic."""
+"""RL-BOED training with SAC for boxes and PPO for discrete spaces."""
 
 from __future__ import annotations
 
@@ -14,8 +14,10 @@ import torch.optim as optim
 from tensordict import TensorDict
 
 from testbed.design_nets import (
+    CategoricalPolicyNet,
     DeepSetGaussianActor,
     RLBOEDQNetwork,
+    RLBOEDValueNetwork,
     TanhGaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner
@@ -25,7 +27,12 @@ from testbed.envs import (
     PaddedHistoryObservation,
     RLBOEDDenseReward,
 )
-from testbed.envs.design_spaces import DesignSpace
+from testbed.envs.design_spaces import (
+    CategoricalDesignSpace,
+    DesignSpace,
+    IntegerDesignSpace,
+    ProductDesignSpace,
+)
 from testbed.tasks.base_task import Task
 
 from .base import FitResult
@@ -223,7 +230,7 @@ class _CompactEpisodeReplayBuffer:
 
 @dataclass
 class RLBOEDConfig:
-    """RL-BOED and SAC hyperparameters."""
+    """RL-BOED training hyperparameters."""
 
     outcome_low: float
     outcome_high: float
@@ -236,7 +243,7 @@ class RLBOEDConfig:
     num_envs: int = 100
     buffer_size: int = 10_000_000
     buffer_device: str = "cpu"
-    gamma: float = 0.9
+    gamma: float = 0.99
     tau: float = 1e-3
     batch_size: int = 4096
     learning_starts: int = 100_000
@@ -250,12 +257,26 @@ class RLBOEDConfig:
     initial_alpha: float = 1.0
     target_entropy: float | None = None
     entropy_anneal_rate: float = 1 / 1.4e4
+
+    ppo_learning_rate: float = 2.5e-4
+    ppo_anneal_lr: bool = True
+    ppo_gae_lambda: float = 0.95
+    ppo_num_minibatches: int = 4
+    ppo_update_epochs: int = 4
+    ppo_norm_adv: bool = True
+    ppo_clip_coef: float = 0.2
+    ppo_clip_vloss: bool = True
+    ppo_ent_coef: float = 0.01
+    ppo_vf_coef: float = 0.5
+    ppo_max_grad_norm: float = 0.5
+    ppo_target_kl: float | None = None
+
     log_frequency: int = 100
     verbose: bool = True
 
 
 class RLBOED:
-    """Trains a policy using RL-BOED's dense reward and SAC."""
+    """Trains a policy using RL-BOED's dense reward."""
 
     def __init__(self, config: RLBOEDConfig):
         """Initializes the method configuration."""
@@ -269,10 +290,22 @@ class RLBOED:
         design_space: DesignSpace,
     ) -> FitResult:
         """Trains and returns a deployable policy designer."""
-        cfg = self.config
         self._validate(task, horizon, design_space)
         self._set_seed()
 
+        if isinstance(design_space, BoxDesignSpace):
+            return self._fit_sac(task, horizon=horizon, design_space=design_space)
+        return self._fit_ppo(task, horizon=horizon, design_space=design_space)
+
+    def _fit_sac(
+        self,
+        task: Task,
+        *,
+        horizon: int,
+        design_space: BoxDesignSpace,
+    ) -> FitResult:
+        """Trains a continuous policy with SAC."""
+        cfg = self.config
         device = task.device
         buffer_device = self._resolve_buffer_device()
         design_low = design_space.low.to(device)
@@ -538,6 +571,268 @@ class RLBOED:
             checkpoint=checkpoint,
         )
 
+    def _fit_ppo(
+        self,
+        task: Task,
+        *,
+        horizon: int,
+        design_space: DesignSpace,
+    ) -> FitResult:
+        """Trains a discrete policy with PPO."""
+        cfg = self.config
+        device = task.device
+        env = BEDEnv(
+            task,
+            horizon=horizon,
+            design_space=design_space,
+            reward_fn=RLBOEDDenseReward(cfg.n_contrastive),
+            observation_fn=PaddedHistoryObservation(horizon),
+            batch_shape=(cfg.num_envs,),
+        )
+
+        dim_y = task.event_shape_y.numel()
+        policy = CategoricalPolicyNet(
+            design_space,
+            dim_y=dim_y,
+            outcome_bounds=(cfg.outcome_low, cfg.outcome_high),
+        ).to(device)
+        value_net = RLBOEDValueNetwork(
+            dim_y=dim_y,
+            dim_design=task.event_shape_design.numel(),
+            design_low=policy.design_low,
+            design_high=policy.design_high,
+            outcome_low=cfg.outcome_low,
+            outcome_high=cfg.outcome_high,
+        ).to(device)
+        trainable_parameters = list(policy.parameters()) + list(value_net.parameters())
+        optimizer = optim.Adam(
+            trainable_parameters,
+            lr=cfg.ppo_learning_rate,
+            eps=1e-5,
+        )
+
+        batch_size = cfg.num_envs * horizon
+        minibatch_size = batch_size // cfg.ppo_num_minibatches
+        metrics: list[dict[str, float]] = []
+        start_time = time.time()
+        env_steps = 0
+        completed_episodes = 0
+        value_loss = torch.tensor(float("nan"))
+        policy_loss = torch.tensor(float("nan"))
+        entropy_loss = torch.tensor(float("nan"))
+        old_approx_kl = torch.tensor(float("nan"))
+        approx_kl = torch.tensor(float("nan"))
+        clipfrac = float("nan")
+        explained_var = float("nan")
+
+        for training_iteration in range(cfg.num_training_iterations):
+            if cfg.ppo_anneal_lr:
+                frac = 1.0 - training_iteration / cfg.num_training_iterations
+                optimizer.param_groups[0]["lr"] = frac * cfg.ppo_learning_rate
+
+            obs, _ = env.reset(seed=cfg.seed if training_iteration == 0 else None)
+            next_done = torch.zeros(cfg.num_envs, device=device)
+            rollout_obs = []
+            actions = []
+            logprobs = []
+            rewards = torch.zeros(horizon, cfg.num_envs, device=device)
+            dones = torch.zeros(horizon, cfg.num_envs, device=device)
+            values = torch.zeros(horizon, cfg.num_envs, device=device)
+            episodic_returns = torch.zeros(cfg.num_envs, device=device)
+
+            for step in range(horizon):
+                rollout_obs.append(self._clone_observation(obs))
+                dones[step] = next_done
+                with torch.no_grad():
+                    sample = policy.sample_from_observation(obs)
+                    value = value_net(obs).flatten()
+                actions.append(sample.action.detach())
+                logprobs.append(sample.log_prob.detach())
+                values[step] = value
+
+                obs, reward, terminations, truncations, _ = env.step(sample.action)
+                next_done = (terminations | truncations).float()
+                rewards[step] = reward
+                episodic_returns += reward
+                env_steps += cfg.num_envs
+
+            with torch.no_grad():
+                next_value = value_net(obs).flatten()
+                advantages = torch.zeros_like(rewards)
+                lastgaelam = 0
+                for step in reversed(range(horizon)):
+                    if step == horizon - 1:
+                        nextnonterminal = 1.0 - next_done
+                        nextvalues = next_value
+                    else:
+                        nextnonterminal = 1.0 - dones[step + 1]
+                        nextvalues = values[step + 1]
+                    delta = (
+                        rewards[step]
+                        + cfg.gamma * nextvalues * nextnonterminal
+                        - values[step]
+                    )
+                    advantages[step] = lastgaelam = (
+                        delta
+                        + cfg.gamma
+                        * cfg.ppo_gae_lambda
+                        * nextnonterminal
+                        * lastgaelam
+                    )
+                returns = advantages + values
+
+            b_obs = self._flatten_rollout_observations(rollout_obs)
+            b_actions = torch.stack(actions).reshape(
+                batch_size,
+                *task.event_shape_design,
+            )
+            b_logprobs = torch.stack(logprobs).reshape(-1)
+            b_advantages = advantages.reshape(-1)
+            b_returns = returns.reshape(-1)
+            b_values = values.reshape(-1)
+
+            b_inds = np.arange(batch_size)
+            clipfracs = []
+            for _ in range(cfg.ppo_update_epochs):
+                np.random.shuffle(b_inds)
+                for start in range(0, batch_size, minibatch_size):
+                    mb_inds = torch.as_tensor(
+                        b_inds[start : start + minibatch_size],
+                        device=device,
+                    )
+                    mb_obs = self._index_observation(b_obs, mb_inds)
+                    newlogprob, entropy = policy.evaluate_actions_from_observation(
+                        mb_obs,
+                        b_actions[mb_inds],
+                    )
+                    newvalue = value_net(mb_obs).view(-1)
+                    logratio = newlogprob - b_logprobs[mb_inds]
+                    ratio = logratio.exp()
+
+                    with torch.no_grad():
+                        old_approx_kl = (-logratio).mean()
+                        approx_kl = ((ratio - 1) - logratio).mean()
+                        clipfracs.append(
+                            ((ratio - 1.0).abs() > cfg.ppo_clip_coef)
+                            .float()
+                            .mean()
+                            .item()
+                        )
+
+                    mb_advantages = b_advantages[mb_inds]
+                    if cfg.ppo_norm_adv:
+                        mb_advantages = (mb_advantages - mb_advantages.mean()) / (
+                            mb_advantages.std(unbiased=False) + 1e-8
+                        )
+
+                    pg_loss1 = -mb_advantages * ratio
+                    pg_loss2 = -mb_advantages * torch.clamp(
+                        ratio,
+                        1 - cfg.ppo_clip_coef,
+                        1 + cfg.ppo_clip_coef,
+                    )
+                    policy_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+                    if cfg.ppo_clip_vloss:
+                        v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+                        v_clipped = b_values[mb_inds] + torch.clamp(
+                            newvalue - b_values[mb_inds],
+                            -cfg.ppo_clip_coef,
+                            cfg.ppo_clip_coef,
+                        )
+                        v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+                        value_loss = 0.5 * torch.max(
+                            v_loss_unclipped,
+                            v_loss_clipped,
+                        ).mean()
+                    else:
+                        value_loss = 0.5 * (
+                            (newvalue - b_returns[mb_inds]) ** 2
+                        ).mean()
+
+                    entropy_loss = entropy.mean()
+                    loss = (
+                        policy_loss
+                        - cfg.ppo_ent_coef * entropy_loss
+                        + cfg.ppo_vf_coef * value_loss
+                    )
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(
+                        trainable_parameters,
+                        cfg.ppo_max_grad_norm,
+                    )
+                    optimizer.step()
+
+                if cfg.ppo_target_kl is not None and approx_kl > cfg.ppo_target_kl:
+                    break
+
+            y_pred = b_values.detach().cpu().numpy()
+            y_true = b_returns.detach().cpu().numpy()
+            var_y = np.var(y_true)
+            explained_var = (
+                np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+            )
+            clipfrac = float(np.mean(clipfracs)) if clipfracs else float("nan")
+            completed_episodes += cfg.num_envs
+
+            episode_metrics = {
+                "step": float(training_iteration),
+                "env_steps": float(env_steps),
+                "episodes": float(completed_episodes),
+                "episodic_return": episodic_returns.mean().item(),
+            }
+            metrics.append(episode_metrics)
+
+            if training_iteration % cfg.log_frequency == 0:
+                step_metrics = {
+                    "step": float(training_iteration),
+                    "env_steps": float(env_steps),
+                    "sps": float(int(env_steps / (time.time() - start_time))),
+                    "value_loss": value_loss.item(),
+                    "policy_loss": policy_loss.item(),
+                    "entropy": entropy_loss.item(),
+                    "old_approx_kl": old_approx_kl.item(),
+                    "approx_kl": approx_kl.item(),
+                    "clipfrac": clipfrac,
+                    "explained_variance": float(explained_var),
+                }
+                metrics.append(step_metrics)
+                if cfg.verbose:
+                    print(
+                        f"iteration={training_iteration}, "
+                        f"env_steps={env_steps}, "
+                        f"return={episode_metrics['episodic_return']:.4f}, "
+                        f"value_loss={step_metrics['value_loss']:.4f}, "
+                        f"policy_loss={step_metrics['policy_loss']:.4f}, "
+                        f"entropy={step_metrics['entropy']:.4f}"
+                    )
+
+        policy.eval()
+        designer = PolicyDesigner(task, horizon, policy, deterministic=False)
+        checkpoint = {
+            "algorithm": "ppo",
+            "config": asdict(cfg),
+            "horizon": horizon,
+            "design_low": policy.design_low.detach().cpu(),
+            "design_high": policy.design_high.detach().cpu(),
+            "outcome_low": torch.as_tensor(cfg.outcome_low),
+            "outcome_high": torch.as_tensor(cfg.outcome_high),
+            "designer": policy.state_dict(),
+            "policy": policy.state_dict(),
+            "value_net": value_net.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "env_steps": env_steps,
+            "training_iterations": cfg.num_training_iterations,
+            "global_step": env_steps,
+        }
+        return FitResult(
+            designer=designer,
+            metrics=metrics,
+            checkpoint=checkpoint,
+        )
+
     def _soft_update(self, source, target) -> None:
         """Polyak-updates a target Q network."""
         for param, target_param in zip(source.parameters(), target.parameters()):
@@ -545,6 +840,33 @@ class RLBOED:
                 self.config.tau * param.data
                 + (1.0 - self.config.tau) * target_param.data
             )
+
+    @staticmethod
+    def _clone_observation(obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Copies a padded-history observation before BEDEnv mutates it."""
+        return {key: value.detach().clone() for key, value in obs.items()}
+
+    @staticmethod
+    def _flatten_rollout_observations(
+        observations: list[dict[str, torch.Tensor]],
+    ) -> dict[str, torch.Tensor]:
+        """Flattens [time, env] rollout observations into one batch axis."""
+        stacked = {
+            key: torch.stack([obs[key] for obs in observations])
+            for key in observations[0]
+        }
+        return {
+            key: value.reshape(value.shape[0] * value.shape[1], *value.shape[2:])
+            for key, value in stacked.items()
+        }
+
+    @staticmethod
+    def _index_observation(
+        obs: dict[str, torch.Tensor],
+        indices: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Indexes each tensor in an observation dictionary."""
+        return {key: value[indices] for key, value in obs.items()}
 
     def _resolve_buffer_device(self) -> torch.device:
         """Returns the replay storage device requested by the config."""
@@ -597,28 +919,63 @@ class RLBOED:
             "log_frequency": cfg.log_frequency,
             "policy_frequency": cfg.policy_frequency,
             "target_network_frequency": cfg.target_network_frequency,
+            "ppo_num_minibatches": cfg.ppo_num_minibatches,
+            "ppo_update_epochs": cfg.ppo_update_epochs,
         }
         for name, value in positive_ints.items():
             if value <= 0:
                 raise ValueError(f"{name} must be positive.")
         if cfg.n_contrastive < 0:
             raise ValueError("n_contrastive must be non-negative.")
-        if cfg.buffer_size < cfg.learning_starts:
-            raise ValueError("buffer_size must be at least learning_starts.")
         if cfg.outcome_low >= cfg.outcome_high:
             raise ValueError("outcome_low must be less than outcome_high.")
-        if cfg.alpha is not None and cfg.alpha < 0:
-            raise ValueError("alpha must be non-negative when fixed.")
-        if cfg.initial_alpha <= 0:
-            raise ValueError("initial_alpha must be positive.")
-        if cfg.learning_starts < 0:
-            raise ValueError("learning_starts must be non-negative.")
-        if cfg.entropy_anneal_rate < 0:
-            raise ValueError("entropy_anneal_rate must be non-negative.")
-        if cfg.policy_init_std <= 0:
-            raise ValueError("policy_init_std must be positive.")
         if task.likelihood_type != "explicit":
             raise ValueError("RLBOED requires a task with an explicit likelihood.")
 
-        if not isinstance(design_space, BoxDesignSpace):
-            raise TypeError("This RLBOED SAC implementation requires a BoxDesignSpace.")
+        if isinstance(design_space, BoxDesignSpace):
+            if cfg.buffer_size < cfg.learning_starts:
+                raise ValueError("buffer_size must be at least learning_starts.")
+            if cfg.alpha is not None and cfg.alpha < 0:
+                raise ValueError("alpha must be non-negative when fixed.")
+            if cfg.initial_alpha <= 0:
+                raise ValueError("initial_alpha must be positive.")
+            if cfg.learning_starts < 0:
+                raise ValueError("learning_starts must be non-negative.")
+            if cfg.entropy_anneal_rate < 0:
+                raise ValueError("entropy_anneal_rate must be non-negative.")
+            if cfg.policy_init_std <= 0:
+                raise ValueError("policy_init_std must be positive.")
+            return
+
+        if not self._is_supported_discrete_space(design_space):
+            raise TypeError(
+                "RLBOED PPO requires CategoricalDesignSpace, IntegerDesignSpace, "
+                "or an all-discrete ProductDesignSpace."
+            )
+        ppo_batch_size = cfg.num_envs * horizon
+        if ppo_batch_size % cfg.ppo_num_minibatches != 0:
+            raise ValueError(
+                "num_envs * horizon must be divisible by ppo_num_minibatches."
+            )
+        if not 0.0 <= cfg.ppo_gae_lambda <= 1.0:
+            raise ValueError("ppo_gae_lambda must be between 0 and 1.")
+        if cfg.ppo_learning_rate <= 0:
+            raise ValueError("ppo_learning_rate must be positive.")
+        if cfg.ppo_clip_coef <= 0:
+            raise ValueError("ppo_clip_coef must be positive.")
+        if cfg.ppo_ent_coef < 0:
+            raise ValueError("ppo_ent_coef must be non-negative.")
+        if cfg.ppo_vf_coef < 0:
+            raise ValueError("ppo_vf_coef must be non-negative.")
+        if cfg.ppo_max_grad_norm <= 0:
+            raise ValueError("ppo_max_grad_norm must be positive.")
+        if cfg.ppo_target_kl is not None and cfg.ppo_target_kl <= 0:
+            raise ValueError("ppo_target_kl must be positive when set.")
+
+    def _is_supported_discrete_space(self, design_space: DesignSpace) -> bool:
+        """Returns whether PPO can factorize the discrete design space."""
+        if isinstance(design_space, (CategoricalDesignSpace, IntegerDesignSpace)):
+            return True
+        if isinstance(design_space, ProductDesignSpace):
+            return all(self._is_supported_discrete_space(s) for s in design_space.spaces)
+        return False

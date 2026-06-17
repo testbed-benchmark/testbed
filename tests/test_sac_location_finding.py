@@ -398,7 +398,6 @@ def test_rlboed_config_generic_defaults_match_example():
         "num_envs",
         "buffer_size",
         "buffer_device",
-        "gamma",
         "tau",
         "batch_size",
         "learning_starts",
@@ -417,6 +416,7 @@ def test_rlboed_config_generic_defaults_match_example():
         assert getattr(config, field_name) == getattr(
             sac_location_finding.Args, field_name
         )
+    assert config.gamma == 0.99
 
 
 def test_rlboed_requires_design_space():

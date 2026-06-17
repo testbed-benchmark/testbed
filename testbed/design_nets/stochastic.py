@@ -6,11 +6,22 @@ from math import atanh, log, prod
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.distributions import Normal
+from torch.distributions import Categorical, Normal
 
 from testbed.design_nets.base_design_net import DesignNet
-from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
-from testbed.envs.design_spaces import BoxDesignSpace
+from testbed.design_nets.modules import (
+    MLP,
+    _initialize_linear_layers,
+    _initialize_ppo_linear_layers,
+    affine_rescale,
+)
+from testbed.envs.design_spaces import (
+    BoxDesignSpace,
+    CategoricalDesignSpace,
+    DesignSpace,
+    IntegerDesignSpace,
+    ProductDesignSpace,
+)
 
 
 @dataclass
@@ -188,6 +199,330 @@ class DeepSetGaussianActor(GaussianPolicyActor):
             log_std + 1
         )
         return mean, log_std
+
+
+class _DiscreteActionCodec:
+    """Converts discrete physical designs to factorized categorical indices."""
+
+    def __init__(self, design_space: DesignSpace):
+        """Builds flattened component bounds from a discrete design space."""
+        if not design_space.is_discrete:
+            raise TypeError("CategoricalPolicyNet requires a discrete design space.")
+        self.design_space = design_space
+        lows, nvec = self._components(design_space)
+        self.low = torch.tensor(lows, dtype=torch.long)
+        self.nvec = tuple(int(n) for n in nvec)
+        self.high = self.low + torch.tensor(self.nvec, dtype=torch.long) - 1
+        if any(n <= 0 for n in self.nvec):
+            raise ValueError("Discrete design-space components must be non-empty.")
+
+    @property
+    def dim_design(self) -> int:
+        """Returns flattened physical design dimension."""
+        return len(self.nvec)
+
+    @property
+    def num_logits(self) -> int:
+        """Returns total logits needed for all components."""
+        return sum(self.nvec)
+
+    @staticmethod
+    def _components(space: DesignSpace) -> tuple[list[int], list[int]]:
+        if isinstance(space, CategoricalDesignSpace):
+            return [0], [space.n]
+        if isinstance(space, IntegerDesignSpace):
+            low = space.low.reshape(-1)
+            high = space.high.reshape(-1)
+            return low.tolist(), (high - low + 1).tolist()
+        if isinstance(space, ProductDesignSpace):
+            lows: list[int] = []
+            nvec: list[int] = []
+            for part in space.spaces:
+                if not part.is_discrete:
+                    raise TypeError(
+                        "CategoricalPolicyNet requires every product component "
+                        "to be discrete."
+                    )
+                part_lows, part_nvec = _DiscreteActionCodec._components(part)
+                lows.extend(part_lows)
+                nvec.extend(part_nvec)
+            return lows, nvec
+        raise TypeError(
+            "CategoricalPolicyNet supports CategoricalDesignSpace, "
+            "IntegerDesignSpace, and all-discrete ProductDesignSpace."
+        )
+
+    def action_to_indices(self, action: Tensor, low: Tensor) -> Tensor:
+        """Maps physical actions to zero-based categorical indices."""
+        return action.reshape(-1, self.dim_design).long() - low
+
+    def flat_indices_to_action(self, indices: Tensor, low: Tensor) -> Tensor:
+        """Maps zero-based categorical indices to physical design values."""
+        action_flat = indices + low
+        return action_flat.reshape(*indices.shape[:-1], *self.design_space.event_shape)
+
+
+class CategoricalPolicyActor(nn.Module):
+    """Maps flattened experimental histories to discrete action logits."""
+
+    def forward(
+        self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
+    ) -> Tensor:
+        """Computes logits with shape [batch, sum(nvec)]."""
+        raise NotImplementedError
+
+
+class DeepSetCategoricalActor(CategoricalPolicyActor):
+    """DeepSets-style categorical actor using masked sum pooling over history."""
+
+    def __init__(
+        self,
+        *,
+        dim_design: int,
+        num_logits: int,
+        dim_y: int = 1,
+        dim_h: int = 128,
+        dim_emb: int = 64,
+    ):
+        """Initializes the actor network."""
+        super().__init__()
+
+        self.dim_y = int(dim_y)
+        self.dim_design = int(dim_design)
+        self.num_logits = int(num_logits)
+        self.dim_emb = int(dim_emb)
+        self.encoder_net = MLP(
+            [self.dim_design + self.dim_y, dim_h, dim_h, dim_emb],
+            activation=nn.ReLU,
+        )
+        self.actor_net = MLP([dim_emb, dim_h, dim_h], activation=nn.ReLU)
+        self.logits_head = nn.Linear(dim_h, self.num_logits)
+        _initialize_ppo_linear_layers(self, output_scales={self.logits_head: 0.01})
+
+    def forward(
+        self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
+    ) -> Tensor:
+        """Computes logits from flattened histories."""
+        b_flat, T, _ = design_history.shape
+
+        if T == 0:
+            summary = torch.zeros(
+                b_flat,
+                self.dim_emb,
+                device=design_history.device,
+                dtype=design_history.dtype,
+            )
+        else:
+            enc_input = torch.cat([y_history, design_history], dim=-1)
+            enc = self.encoder_net(enc_input)
+
+            if mask is not None:
+                enc = enc * mask.to(dtype=enc.dtype).unsqueeze(-1)
+
+            summary = enc.sum(dim=1)
+
+        return self.logits_head(self.actor_net(summary))
+
+
+class CategoricalPolicyNet(StochasticDesignNet):
+    """Factorized categorical policy for discrete design spaces."""
+
+    def __init__(
+        self,
+        design_space: DesignSpace,
+        actor: CategoricalPolicyActor | None = None,
+        *,
+        dim_y: int = 1,
+        outcome_bounds: tuple[float, float] | None = None,
+    ):
+        """Initializes the policy network."""
+        super().__init__()
+
+        self.design_space = design_space
+        self.event_shape_design = torch.Size(design_space.event_shape)
+        self.codec = _DiscreteActionCodec(design_space)
+        self.dim_design = self.codec.dim_design
+        self.nvec = self.codec.nvec
+        self.actor = actor or DeepSetCategoricalActor(
+            dim_y=dim_y,
+            dim_design=self.dim_design,
+            num_logits=self.codec.num_logits,
+        )
+        self.register_buffer("design_low", self.codec.low)
+        self.register_buffer("design_high", self.codec.high)
+
+        if outcome_bounds is None:
+            outcome_low = torch.tensor(float("nan"))
+            outcome_high = torch.tensor(float("nan"))
+        else:
+            outcome_low, outcome_high = (
+                torch.as_tensor(bound, dtype=torch.get_default_dtype())
+                for bound in outcome_bounds
+            )
+            if torch.any(outcome_low >= outcome_high):
+                raise ValueError("outcome_bounds must satisfy low < high.")
+        self.register_buffer("outcome_low", outcome_low)
+        self.register_buffer("outcome_high", outcome_high)
+        self._normalize_outcomes = outcome_bounds is not None
+
+    def forward(self, y_history, design_history) -> Tensor:
+        """Returns the deterministic discrete action for a history."""
+        return self.sample(y_history, design_history, deterministic=True).action
+
+    def sample(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask: Tensor | None = None,
+        deterministic: bool = False,
+    ) -> PolicySample:
+        """Samples a factorized categorical action."""
+        batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
+            y_history,
+            design_history,
+            mask=mask,
+        )
+        logits = self.actor(y_flat, design_flat, mask=mask_flat)
+        dists = self._distributions(logits)
+
+        indices = []
+        deterministic_indices = []
+        log_probs = []
+        for dist in dists:
+            deterministic_index = dist.logits.argmax(dim=-1)
+            index = deterministic_index if deterministic else dist.sample()
+            indices.append(index)
+            deterministic_indices.append(deterministic_index)
+            log_probs.append(dist.log_prob(index))
+
+        index_tensor = torch.stack(indices, dim=-1)
+        deterministic_index_tensor = torch.stack(deterministic_indices, dim=-1)
+        low = self.design_low.to(index_tensor.device)
+        action = self.codec.flat_indices_to_action(index_tensor, low)
+        deterministic_action = self.codec.flat_indices_to_action(
+            deterministic_index_tensor,
+            low,
+        )
+        return PolicySample(
+            action=action.reshape(*batch_shape, *self.event_shape_design),
+            log_prob=torch.stack(log_probs, dim=-1).sum(dim=-1).reshape(batch_shape),
+            deterministic_action=deterministic_action.reshape(
+                *batch_shape,
+                *self.event_shape_design,
+            ),
+            raw_action=index_tensor.reshape(*batch_shape, self.dim_design),
+        )
+
+    def evaluate_actions(
+        self,
+        y_history,
+        design_history,
+        action,
+        *,
+        mask: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        """Returns log probability and entropy for provided physical actions."""
+        batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
+            y_history,
+            design_history,
+            mask=mask,
+        )
+        action = torch.as_tensor(action, device=self.design_low.device)
+        action_flat = action.reshape(-1, self.dim_design)
+        indices = self.codec.action_to_indices(
+            action_flat,
+            self.design_low.to(action_flat.device),
+        )
+        logits = self.actor(y_flat, design_flat, mask=mask_flat)
+        dists = self._distributions(logits)
+        log_probs = []
+        entropies = []
+        for component, dist in enumerate(dists):
+            log_probs.append(dist.log_prob(indices[:, component]))
+            entropies.append(dist.entropy())
+        return (
+            torch.stack(log_probs, dim=-1).sum(dim=-1).reshape(batch_shape),
+            torch.stack(entropies, dim=-1).sum(dim=-1).reshape(batch_shape),
+        )
+
+    def evaluate_actions_from_observation(
+        self,
+        obs,
+        action,
+    ) -> tuple[Tensor, Tensor]:
+        """Evaluates physical actions from a padded-history observation."""
+        return self.evaluate_actions(
+            obs["outcomes"],
+            obs["designs"],
+            action,
+            mask=obs.get("mask"),
+        )
+
+    def _prepare_histories(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask: Tensor | None = None,
+    ) -> tuple[torch.Size, Tensor, Tensor, Tensor | None]:
+        dtype = self.outcome_low.dtype
+        device = self.design_low.device
+        y_history = torch.as_tensor(y_history, device=device, dtype=dtype)
+        design_history = torch.as_tensor(design_history, device=device, dtype=dtype)
+
+        design_event_ndim = len(self.event_shape_design)
+        design_t_dim = design_history.ndim - design_event_ndim - 1
+        if design_t_dim < 0:
+            raise ValueError(
+                "design_history must have shape "
+                f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
+            )
+
+        batch_shape = torch.Size(design_history.shape[:design_t_dim])
+        T = design_history.shape[design_t_dim]
+        if y_history.shape[: len(batch_shape)] != batch_shape:
+            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
+        if y_history.shape[len(batch_shape)] != T:
+            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
+
+        b_flat = prod(batch_shape) if batch_shape else 1
+        dim_y = prod(y_history.shape[len(batch_shape) + 1 :])
+        y_flat = y_history.reshape(b_flat, T, dim_y)
+        design_flat = design_history.reshape(b_flat, T, self.dim_design)
+
+        low = self.design_low.to(device=device, dtype=dtype)
+        high = self.design_high.to(device=device, dtype=dtype)
+        denom = torch.where(high > low, high - low, torch.ones_like(high))
+        design_flat = (design_flat - low) / denom
+        if self._normalize_outcomes:
+            y_flat = affine_rescale(
+                y_flat, self.outcome_low, self.outcome_high, 0.0, 1.0
+            )
+
+        mask_flat = None
+        if mask is not None:
+            mask = torch.as_tensor(mask, device=device)
+            expected_mask_shape = (*batch_shape, T)
+            if mask.shape != expected_mask_shape:
+                raise ValueError(
+                    "mask must have shape "
+                    f"[*batch_shape, T]; expected {expected_mask_shape}."
+                )
+            mask_flat = mask.reshape(b_flat, T)
+
+        return batch_shape, y_flat, design_flat, mask_flat
+
+    def _distributions(self, logits: Tensor) -> list[Categorical]:
+        if logits.shape != (logits.shape[0], sum(self.nvec)):
+            raise ValueError(
+                "actor logits must have shape "
+                f"[batch, {sum(self.nvec)}]; got {tuple(logits.shape)}."
+            )
+        return [
+            Categorical(logits=component_logits)
+            for component_logits in torch.split(logits, self.nvec, dim=-1)
+        ]
 
 
 class TanhGaussianPolicyNet(StochasticDesignNet):

@@ -2,6 +2,8 @@ import pytest
 import torch
 
 from testbed.design_nets import (
+    CategoricalPolicyActor,
+    CategoricalPolicyNet,
     DeepSetGaussianActor,
     GaussianPolicyActor,
     PolicySample,
@@ -12,7 +14,9 @@ from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
     CategoricalDesignSpace,
+    IntegerDesignSpace,
     PaddedHistoryObservation,
+    ProductDesignSpace,
     ZeroReward,
 )
 from testbed.tasks import LocationFinding
@@ -72,6 +76,21 @@ class BadShapeGaussianActor(GaussianPolicyActor):
             torch.zeros(batch_size, 1, device=design_history.device),
             torch.zeros(batch_size, 1, device=design_history.device),
         )
+
+
+class RecordingCategoricalActor(CategoricalPolicyActor):
+    def __init__(self, logits):
+        super().__init__()
+        self.register_buffer("logits", torch.as_tensor(logits, dtype=torch.float32))
+        self.y_history = None
+        self.design_history = None
+        self.mask = None
+
+    def forward(self, y_history, design_history, *, mask=None):
+        self.y_history = y_history.detach().clone()
+        self.design_history = design_history.detach().clone()
+        self.mask = mask
+        return self.logits.expand(design_history.shape[0], -1)
 
 
 def test_tanh_gaussian_policy_samples_bounded_actions_and_log_probs():
@@ -325,3 +344,54 @@ def test_tanh_gaussian_policy_rejects_invalid_actor_output_shape():
 
 def test_stochastic_design_net_sample_is_abstract_extension():
     assert issubclass(TanhGaussianPolicyNet, StochasticDesignNet)
+
+
+def test_categorical_policy_samples_scalar_designs_and_log_probs():
+    actor = RecordingCategoricalActor([0.0, 1.0, 2.0])
+    policy = CategoricalPolicyNet(
+        CategoricalDesignSpace(3),
+        actor=actor,
+        outcome_bounds=(0.0, 1.0),
+    )
+    y_history = torch.tensor([[[0.0], [1.0]]])
+    design_history = torch.tensor([[0, 2]])
+
+    sample = policy.sample(y_history, design_history, deterministic=True)
+
+    assert sample.action.shape == (1,)
+    assert sample.action.dtype == torch.long
+    assert sample.action.item() == 2
+    assert CategoricalDesignSpace(3).contains(sample.action)
+    expected = torch.log_softmax(torch.tensor([0.0, 1.0, 2.0]), dim=-1)[2]
+    torch.testing.assert_close(sample.log_prob, expected.unsqueeze(0))
+    torch.testing.assert_close(actor.y_history, torch.tensor([[[0.0], [1.0]]]))
+    torch.testing.assert_close(actor.design_history, torch.tensor([[[0.0], [1.0]]]))
+
+
+def test_categorical_policy_factorizes_integer_and_product_spaces():
+    space = ProductDesignSpace(
+        [
+            IntegerDesignSpace(-1, 1, event_shape=(1,)),
+            CategoricalDesignSpace(2),
+        ]
+    )
+    actor = RecordingCategoricalActor([0.0, 0.0, 3.0, 2.0, 0.0])
+    policy = CategoricalPolicyNet(space, actor=actor, outcome_bounds=(0.0, 1.0))
+
+    sample = policy.sample(
+        torch.empty(4, 0, 1),
+        torch.empty(4, 0, 2),
+        deterministic=True,
+    )
+    log_prob, entropy = policy.evaluate_actions(
+        torch.empty(4, 0, 1),
+        torch.empty(4, 0, 2),
+        sample.action,
+    )
+
+    assert sample.action.shape == (4, 2)
+    assert torch.equal(sample.action[0], torch.tensor([1, 0]))
+    assert space.contains(sample.action)
+    torch.testing.assert_close(log_prob, sample.log_prob)
+    assert entropy.shape == (4,)
+    assert torch.all(entropy > 0)

@@ -3,8 +3,11 @@
 from .base_design_net import DesignNet
 from .dad_net import DADNet, DADNet_v2, DADNet_v3
 from .modules import affine_rescale
-from .rlboed import RLBOEDQNetwork
+from .rlboed import RLBOEDQNetwork, RLBOEDValueNetwork
 from .stochastic import (
+    CategoricalPolicyActor,
+    CategoricalPolicyNet,
+    DeepSetCategoricalActor,
     DeepSetGaussianActor,
     GaussianPolicyActor,
     PolicySample,

@@ -1,5 +1,7 @@
 """Neural-network building blocks."""
 
+from math import sqrt
+
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -10,6 +12,19 @@ def _initialize_linear_layers(module: nn.Module) -> None:
     for layer in module.modules():
         if isinstance(layer, nn.Linear):
             nn.init.xavier_uniform_(layer.weight)
+            nn.init.zeros_(layer.bias)
+
+
+def _initialize_ppo_linear_layers(
+    module: nn.Module,
+    *,
+    output_scales: dict[nn.Linear, float] | None = None,
+) -> None:
+    """Matches the orthogonal initialization used by CleanRL PPO."""
+    output_scales = output_scales or {}
+    for layer in module.modules():
+        if isinstance(layer, nn.Linear):
+            nn.init.orthogonal_(layer.weight, output_scales.get(layer, sqrt(2.0)))
             nn.init.zeros_(layer.bias)
 
 
