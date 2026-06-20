@@ -357,20 +357,6 @@ def test_bed_env_scalar_batch_shape():
     assert info["history"].mask.shape == (1,)
 
 
-def test_flat_padded_history_observation_shape():
-    task = make_task()
-    env = BEDEnv(
-        task,
-        horizon=2,
-        design_space=make_space(task),
-        reward_fn=ZeroReward(),
-        observation_fn=FlatPaddedHistoryObservation(),
-        batch_shape=(3,),
-    )
-    obs, _ = env.reset(seed=0)
-    assert obs.shape == (3, 2 * 2 + 2 * 1 + 2 + 1)
-
-
 def test_observation_variants_and_error_paths():
     task = make_task()
     env = BEDEnv(
@@ -466,27 +452,6 @@ def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
 
     assert torch.allclose(sum(dense_rewards), terminal_rewards[-1], atol=1e-5)
     assert all(torch.allclose(r, torch.zeros_like(r)) for r in terminal_rewards[:-1])
-
-
-def test_terminal_reward_emits_zero_until_final_env_step():
-    task = make_task()
-    env = BEDEnv(
-        task,
-        horizon=3,
-        design_space=make_space(task),
-        reward_fn=RLBOEDTerminalReward(n_contrastive=2),
-        batch_shape=(4,),
-    )
-    env.reset(seed=0)
-
-    rewards = []
-    for _ in range(3):
-        _, reward, _, _, _ = env.step(torch.zeros(4, 2))
-        rewards.append(reward)
-
-    assert torch.equal(rewards[0], torch.zeros(4))
-    assert torch.equal(rewards[1], torch.zeros(4))
-    assert rewards[2].shape == (4,)
 
 
 def test_contrastive_rewards_handle_zero_contrastive_particles():

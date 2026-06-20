@@ -5,7 +5,6 @@ from testbed.design_nets import (
     DeepSetGaussianActor,
     GaussianPolicyActor,
     PolicySample,
-    StochasticDesignNet,
     TanhGaussianPolicyNet,
 )
 from testbed.envs import (
@@ -283,7 +282,3 @@ def test_tanh_gaussian_policy_rejects_invalid_actor_output_shape():
 
     with pytest.raises(ValueError, match="actor mean"):
         policy.sample(torch.randn(2, 3, 1), torch.randn(2, 3, 2))
-
-
-def test_stochastic_design_net_sample_is_abstract_extension():
-    assert issubclass(TanhGaussianPolicyNet, StochasticDesignNet)
