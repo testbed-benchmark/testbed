@@ -145,16 +145,22 @@ class _CompactEpisodeReplayBuffer:
                 "dones must have shape "
                 f"{(batch_size, self.horizon)}; got {tuple(dones.shape)}."
             )
+        if batch_size > self.capacity_episodes:
+            raise ValueError(
+                f"batch_size ({batch_size}) exceeds buffer capacity ({self.capacity_episodes} episodes). "
+                "Increase buffer_size or reduce num_envs."
+            )
 
-        for episode_idx in range(batch_size):
-            slot = self._next_episode
-            self.designs[slot].copy_(designs[episode_idx])
-            self.outcomes[slot].copy_(outcomes[episode_idx])
-            self.actions[slot].copy_(actions[episode_idx])
-            self.rewards[slot].copy_(rewards[episode_idx])
-            self.dones[slot].copy_(dones[episode_idx])
-            self._next_episode = (self._next_episode + 1) % self.capacity_episodes
-            self._episodes_written += 1
+        slots = (
+            self._next_episode + torch.arange(batch_size, device=self.device)
+        ) % self.capacity_episodes
+        self.designs[slots] = designs
+        self.outcomes[slots] = outcomes
+        self.actions[slots] = actions
+        self.rewards[slots] = rewards
+        self.dones[slots] = dones
+        self._next_episode = (self._next_episode + batch_size) % self.capacity_episodes
+        self._episodes_written += batch_size
 
     def sample(self) -> TensorDict:
         """Samples transitions and reconstructs padded-history observations."""
