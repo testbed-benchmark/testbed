@@ -7,12 +7,7 @@ from testbed.design_nets import (
     PolicySample,
     TanhGaussianPolicyNet,
 )
-from testbed.envs import (
-    BEDEnv,
-    BoxDesignSpace,
-    CategoricalDesignSpace,
-    ZeroReward,
-)
+from testbed.envs import BEDEnv, BoxDesignSpace, ZeroReward
 from testbed.tasks import LocationFinding
 
 

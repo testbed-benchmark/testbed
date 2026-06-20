@@ -5,10 +5,7 @@ from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
     CallableReward,
-    CategoricalDesignSpace,
     History,
-    IntegerDesignSpace,
-    ProductDesignSpace,
     RLBOEDDenseReward,
     RLBOEDTerminalReward,
     ZeroReward,
@@ -48,64 +45,6 @@ def test_box_design_space_rejects_invalid_bounds_and_shapes():
         space.project(torch.tensor([-2.0, 3.0])),
         torch.tensor([-1.0, 2.0]),
     )
-
-
-def test_integer_design_space_samples_contains_and_projects():
-    space = IntegerDesignSpace(torch.tensor([0, 2]), torch.tensor([3, 4]))
-
-    sample = space.sample((5,))
-
-    assert sample.dtype == torch.long
-    assert sample.shape == (5, 2)
-    assert space.contains(sample)
-    assert space.contains(torch.tensor([[0.0, 2.0], [3.0, 4.0]]))
-    assert not space.contains(torch.tensor([1.5, 3.0]))
-    assert not space.contains(torch.tensor([-1, 3]))
-    assert torch.equal(space.project(torch.tensor([-1.2, 4.8])), torch.tensor([0, 4]))
-    with pytest.raises(ValueError):
-        IntegerDesignSpace(2, 1)
-
-
-def test_categorical_design_space_samples_contains_and_projects():
-    space = CategoricalDesignSpace(3)
-
-    sample = space.sample((6,))
-
-    assert sample.shape == (6,)
-    assert sample.dtype == torch.long
-    assert space.contains(sample)
-    assert space.contains(torch.tensor([0.0, 1.0, 2.0]))
-    assert not space.contains(torch.tensor([0.5]))
-    assert not space.contains(torch.tensor([-1, 3]))
-    assert torch.equal(
-        space.project(torch.tensor([-2.0, 1.6, 5.0])), torch.tensor([0, 2, 2])
-    )
-    with pytest.raises(ValueError):
-        CategoricalDesignSpace(0)
-
-
-def test_product_design_space_samples_contains_and_projects_components():
-    space = ProductDesignSpace(
-        [
-            BoxDesignSpace(-1.0, 1.0, event_shape=(2,)),
-            IntegerDesignSpace(0, 2, event_shape=(1,)),
-            CategoricalDesignSpace(4),
-        ]
-    )
-
-    sample = space.sample((3,))
-    projected = space.project(torch.tensor([[-2.0, 0.5, 2.7, 8.0]]))
-
-    assert sample.shape == (3, 4)
-    assert space.event_shape == torch.Size([4])
-    assert not space.is_discrete
-    assert space.contains(sample)
-    assert space.contains(projected)
-    assert torch.equal(projected, torch.tensor([[-1.0, 0.5, 2.0, 3.0]]))
-    assert not space.contains(torch.tensor([[0.0, 0.0, 1.0]]))
-    assert not space.contains(torch.tensor([[0.0, 0.0, 2.5, 1.0]]))
-    with pytest.raises(ValueError):
-        ProductDesignSpace([])
 
 
 def test_history_empty_write_append_prefix_and_bounds():
