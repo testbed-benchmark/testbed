@@ -1,7 +1,6 @@
 """Design spaces for BED environments."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
 
 import torch
 from torch import Tensor
