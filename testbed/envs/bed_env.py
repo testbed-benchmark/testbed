@@ -112,9 +112,7 @@ class BEDEnv:
                 )
             self.theta_0 = theta_all_tensor.select(dim=len(self.batch_shape), index=0)
         elif theta is not None:
-            theta_0 = self._detach_if_needed(
-                torch.as_tensor(theta, device=self.device)
-            )
+            theta_0 = self._detach_if_needed(torch.as_tensor(theta, device=self.device))
             expected = (*self.batch_shape, *event_shape)
             if theta_0.shape != expected:
                 raise ValueError(
@@ -124,7 +122,9 @@ class BEDEnv:
         else:
             n = prod(self.batch_shape)
             self.theta_0 = self._detach_if_needed(
-                self.task.sample_current_prior(n).reshape(*self.batch_shape, *event_shape)
+                self.task.sample_current_prior(n).reshape(
+                    *self.batch_shape, *event_shape
+                )
             )
 
         self._history = History.empty(

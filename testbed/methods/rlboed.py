@@ -23,9 +23,9 @@ from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
 )
-from testbed.envs.rewards import batched_logp_against_theta_all
 from testbed.envs.design_spaces import DesignSpace
 from testbed.envs.history import History
+from testbed.envs.rewards import batched_logp_against_theta_all
 from testbed.tasks.base_task import Task
 
 from .base import FitResult

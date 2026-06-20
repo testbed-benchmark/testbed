@@ -110,9 +110,11 @@ class _ContrastiveReward(RewardFunction):
             self.theta_all = env.theta_0.unsqueeze(particle_dim).detach()
         else:
             n = math.prod(batch_shape) * self.n_contrastive
-            theta_contrastive = env.task.sample_current_prior(n).reshape(
-                *batch_shape, self.n_contrastive, *event_shape
-            ).detach()
+            theta_contrastive = (
+                env.task.sample_current_prior(n)
+                .reshape(*batch_shape, self.n_contrastive, *event_shape)
+                .detach()
+            )
             self.theta_all = torch.cat(
                 [env.theta_0.unsqueeze(particle_dim), theta_contrastive],
                 dim=particle_dim,
