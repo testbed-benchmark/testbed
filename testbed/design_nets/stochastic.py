@@ -201,7 +201,6 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         normalize_design_history: bool = False,
         design_history_bounds: tuple[float, float] = (-1.0, 1.0),
         outcome_bounds: tuple[float, float] | None = None,
-        physical_action_log_prob: bool = True,
     ):
         """Initializes the policy network.
 
@@ -215,9 +214,6 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             design_history_bounds: Target bounds for normalized design history.
             outcome_bounds: Optional lower and upper bounds used to affinely map
                 physical outcome histories to [0, 1] before actor evaluation.
-            physical_action_log_prob: Include the affine design-space scale in
-                returned log probabilities. Disable this when reproducing SAC
-                implementations that optimize entropy in normalized action space.
         """
         super().__init__()
 
@@ -231,7 +227,6 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             or self.design_history_bounds[0] >= self.design_history_bounds[1]
         ):
             raise ValueError("design_history_bounds must satisfy low < high.")
-        self.physical_action_log_prob = bool(physical_action_log_prob)
         self.actor = actor or DeepSetGaussianActor(
             dim_design=self.dim_design,
         )
@@ -365,9 +360,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         tanh_log_det = 2.0 * (
             log(2.0) - raw_action - nn.functional.softplus(-2.0 * raw_action)
         )
-        if self.physical_action_log_prob:
-            return torch.log(self.action_scale) + tanh_log_det
-        return tanh_log_det
+        return torch.log(self.action_scale) + tanh_log_det
 
     def _prepare_histories(
         self,

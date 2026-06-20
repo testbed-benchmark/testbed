@@ -479,7 +479,6 @@ def test_rlboed_fit_returns_deployable_designer(tmp_path):
     assert isinstance(result.designer, PolicyDesigner)
     assert isinstance(result.designer.policy_net, TanhGaussianPolicyNet)
     assert not result.designer.deterministic
-    assert not result.designer.policy_net.physical_action_log_prob
     assert result.designer.policy_net.design_history_bounds == (0.0, 1.0)
     assert result.checkpoint["config"]["gamma"] == config.gamma
     assert result.checkpoint["alpha"].item() > 0

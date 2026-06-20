@@ -299,7 +299,6 @@ class RLBOED:
             normalize_design_history=True,
             design_history_bounds=(0.0, 1.0),
             outcome_bounds=(cfg.outcome_low, cfg.outcome_high),
-            physical_action_log_prob=False,
         ).to(device)
 
         critic_kwargs = {

@@ -90,43 +90,6 @@ def test_tanh_gaussian_policy_samples_bounded_actions_and_log_probs():
     assert make_space().contains(sample.deterministic_action)
 
 
-def test_tanh_gaussian_policy_can_report_normalized_action_log_prob():
-    actor = RecordingGaussianActor(mean=[0.2, -0.1], log_std=[-0.5, -0.25])
-    space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
-    physical_policy = TanhGaussianPolicyNet(
-        space,
-        actor=actor,
-        physical_action_log_prob=True,
-    )
-    normalized_policy = TanhGaussianPolicyNet(
-        space,
-        actor=actor,
-        physical_action_log_prob=False,
-    )
-    y_history = torch.empty(1, 0, 1)
-    design_history = torch.empty(1, 0, 2)
-
-    physical = physical_policy.sample(
-        y_history,
-        design_history,
-        deterministic=True,
-    )
-    normalized = normalized_policy.sample(
-        y_history,
-        design_history,
-        deterministic=True,
-    )
-
-    torch.testing.assert_close(physical.action, normalized.action)
-    expected_difference = torch.full_like(
-        physical.log_prob,
-        -2 * torch.log(torch.tensor(4.0)).item(),
-    )
-    torch.testing.assert_close(
-        physical.log_prob - normalized.log_prob,
-        expected_difference,
-    )
-
 
 def test_tanh_gaussian_policy_raw_actions_are_approximately_normal():
     torch.manual_seed(0)
