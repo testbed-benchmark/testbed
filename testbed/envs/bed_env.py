@@ -48,7 +48,6 @@ class BEDEnv:
         self._has_reset = False
         self._history: History | None = None
         self.theta_0: Tensor | None = None
-        self.theta_all: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -97,8 +96,37 @@ class BEDEnv:
             self.batch_shape = torch.Size(batch_shape)
 
         self.t = 0
-        self.theta_all = self._init_theta_all(theta=theta, theta_all=theta_all)
-        self.theta_0 = self.theta_all.select(dim=len(self.batch_shape), index=0)
+        event_shape = self.task.event_shape_theta
+
+        theta_all_tensor: Tensor | None = None
+        if theta_all is not None:
+            theta_all_tensor = self._detach_if_needed(
+                torch.as_tensor(theta_all, device=self.device)
+            )
+            L = int(getattr(self.reward_fn, "n_contrastive", 0)) + 1
+            expected = (*self.batch_shape, L, *event_shape)
+            if theta_all_tensor.shape != expected:
+                raise ValueError(
+                    f"theta_all must have shape {expected}; "
+                    f"got {tuple(theta_all_tensor.shape)}."
+                )
+            self.theta_0 = theta_all_tensor.select(dim=len(self.batch_shape), index=0)
+        elif theta is not None:
+            theta_0 = self._detach_if_needed(
+                torch.as_tensor(theta, device=self.device)
+            )
+            expected = (*self.batch_shape, *event_shape)
+            if theta_0.shape != expected:
+                raise ValueError(
+                    f"theta must have shape {expected}; got {tuple(theta_0.shape)}."
+                )
+            self.theta_0 = theta_0
+        else:
+            n = prod(self.batch_shape)
+            self.theta_0 = self._detach_if_needed(
+                self.task.sample_current_prior(n).reshape(*self.batch_shape, *event_shape)
+            )
+
         self._history = History.empty(
             self.batch_shape,
             self.horizon,
@@ -106,15 +134,14 @@ class BEDEnv:
             self.task.event_shape_y,
             device=self.device,
         )
+        self.reward_fn.reset(self, theta_all=theta_all_tensor)
         self._has_reset = True
-        self.reward_fn.reset(self)
 
         info: dict[str, Any] = {"t": self.t, "history": self.history}
         if options:
             info["options"] = options
         if self.include_theta_in_info:
             info["theta_0"] = self.theta_0
-            info["theta_all"] = self.theta_all
         return self.history, info
 
     def step(self, design: Tensor) -> tuple[Any, Tensor, Tensor, Tensor, dict]:
@@ -148,51 +175,7 @@ class BEDEnv:
         }
         if self.include_theta_in_info:
             info["theta_0"] = self.theta_0
-            info["theta_all"] = self.theta_all
         return self.history, reward, self.terminated, self.truncated, info
-
-    def _init_theta_all(
-        self, *, theta: Tensor | None = None, theta_all: Tensor | None = None
-    ) -> Tensor:
-        """Samples or validates true and contrastive parameters."""
-        n_contrastive = int(getattr(self.reward_fn, "n_contrastive", 0))
-        L = n_contrastive + 1
-        event_shape = self.task.event_shape_theta
-
-        if theta_all is not None:
-            theta_all = torch.as_tensor(theta_all, device=self.device)
-            expected = (*self.batch_shape, L, *event_shape)
-            if theta_all.shape != expected:
-                raise ValueError(
-                    f"theta_all must have shape {expected}; got {tuple(theta_all.shape)}."
-                )
-            return self._detach_if_needed(theta_all)
-
-        if theta is not None:
-            theta_0 = torch.as_tensor(theta, device=self.device)
-            expected = (*self.batch_shape, *event_shape)
-            if theta_0.shape != expected:
-                raise ValueError(
-                    f"theta must have shape {expected}; got {tuple(theta_0.shape)}."
-                )
-        else:
-            n = prod(self.batch_shape)
-            theta_0 = self.task.sample_current_prior(n).reshape(
-                *self.batch_shape, *event_shape
-            )
-
-        if n_contrastive == 0:
-            return self._detach_if_needed(theta_0.unsqueeze(len(self.batch_shape)))
-
-        n = prod(self.batch_shape) * n_contrastive
-        theta_contrastive = self.task.sample_current_prior(n).reshape(
-            *self.batch_shape, n_contrastive, *event_shape
-        )
-        particle_dim = len(self.batch_shape)
-        theta_all = torch.cat(
-            [theta_0.unsqueeze(particle_dim), theta_contrastive], dim=particle_dim
-        )
-        return self._detach_if_needed(theta_all)
 
     def _detach_if_needed(self, tensor: Tensor) -> Tensor:
         """Detaches rollout tensors unless differentiable env interaction is enabled."""

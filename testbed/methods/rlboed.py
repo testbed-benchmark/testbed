@@ -22,8 +22,8 @@ from testbed.designers import PolicyDesigner
 from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
-    RLBOEDDenseReward,
 )
+from testbed.envs.rewards import batched_logp_against_theta_all
 from testbed.envs.design_spaces import DesignSpace
 from testbed.envs.history import History
 from testbed.tasks.base_task import Task
@@ -316,9 +316,10 @@ class RLBOED:
             task,
             horizon=horizon,
             design_space=design_space,
-            reward_fn=RLBOEDDenseReward(cfg.n_contrastive),
             batch_shape=(cfg.num_envs,),
         )
+        n_c = cfg.n_contrastive
+        event_shape_theta = task.event_shape_theta
 
         dim_y = task.event_shape_y.numel()
         dim_design = task.event_shape_design.numel()
@@ -404,6 +405,18 @@ class RLBOED:
                     cfg.seed if training_iteration == 0 and episode_batch == 0 else None
                 )
                 obs, _ = env.reset(seed=seed)
+
+                # Sample contrastive state for this episode.
+                with torch.no_grad():
+                    theta_contrastive = task.sample_current_prior(
+                        cfg.num_envs * n_c
+                    ).reshape(cfg.num_envs, n_c, *event_shape_theta)
+                    theta_all = torch.cat(
+                        [env.theta_0.unsqueeze(1), theta_contrastive], dim=1
+                    )
+                log_c = torch.zeros(cfg.num_envs, n_c + 1, device=device)
+                last_logsumexp = torch.logsumexp(log_c, dim=-1)
+
                 episodic_returns = torch.zeros(cfg.num_envs, device=device)
                 episode_policy_designs = []
                 episode_rewards = []
@@ -413,7 +426,18 @@ class RLBOED:
                     with torch.no_grad():
                         policy_sample = actor.sample_from_observation(obs)
                         designs = policy_sample.design
-                    next_obs, rewards, terminations, truncations, _ = env.step(designs)
+                    next_obs, _, terminations, truncations, info = env.step(designs)
+                    outcome = info["outcome"]
+
+                    with torch.no_grad():
+                        logp = batched_logp_against_theta_all(
+                            task, outcome, designs, theta_all
+                        )
+                        log_c += logp
+                        logsumexp = torch.logsumexp(log_c, dim=-1)
+                        rewards = logp[..., 0] + last_logsumexp - logsumexp
+                        last_logsumexp = logsumexp
+
                     dones = terminations | truncations
                     episode_policy_designs.append(designs.detach())
                     episode_rewards.append(rewards.detach())

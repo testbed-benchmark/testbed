@@ -164,7 +164,7 @@ def test_bed_env_reset_and_step_shapes():
     assert obs.designs.shape == (5, 3, 2)
     assert obs.outcomes.shape == (5, 3, 1)
     assert obs.mask.shape == (5, 3)
-    assert env.theta_all.shape == (5, 3, 1, 2)
+    assert env.reward_fn.theta_all.shape == (5, 3, 1, 2)
 
     design = torch.zeros(5, 2)
     obs, reward, terminated, truncated, info = env.step(design)
@@ -206,7 +206,7 @@ def test_bed_env_reset_accepts_explicit_theta_and_info_options():
 
     assert info["options"] == {"tag": "episode"}
     assert torch.equal(info["theta_0"], theta)
-    assert info["theta_all"].shape == (2, 2, 1, 2)
+    assert env.reward_fn.theta_all.shape == (2, 2, 1, 2)
     assert torch.equal(env.theta_0, theta)
 
 
@@ -224,7 +224,7 @@ def test_bed_env_reset_accepts_theta_all_and_batch_shape_override():
     obs, _ = env.reset(theta_all=theta_all, batch_shape=(4,))
 
     assert env.batch_shape == torch.Size([4])
-    assert torch.equal(env.theta_all, theta_all)
+    assert torch.equal(env.reward_fn.theta_all, theta_all)
     assert torch.equal(env.theta_0, theta_all[:, 0])
     assert obs.designs.shape == (4, 1, 2)
 
@@ -243,6 +243,20 @@ def test_bed_env_reset_rejects_bad_theta_shapes():
         env.reset(theta=torch.zeros(1, 2))
     with pytest.raises(ValueError, match="theta_all must have shape"):
         env.reset(theta_all=torch.zeros(2, 1, 1, 2))
+
+
+def test_bed_env_reset_rejects_bad_theta_all_shape_with_zero_reward():
+    task = make_task()
+    env = BEDEnv(
+        task,
+        horizon=1,
+        design_space=make_space(task),
+        reward_fn=ZeroReward(),
+        batch_shape=(2,),
+    )
+
+    with pytest.raises(ValueError, match="theta_all must have shape"):
+        env.reset(theta_all=torch.zeros(2, 2, 1, 2))
 
 
 def test_bed_env_design_validation_without_projection():
@@ -376,7 +390,7 @@ def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
     )
 
     dense_env.reset(seed=11)
-    theta_all = dense_env.theta_all.detach().clone()
+    theta_all = dense_env.reward_fn.theta_all.detach().clone()
     terminal_env.reset(theta_all=theta_all)
 
     generator = torch.Generator().manual_seed(22)
@@ -425,7 +439,7 @@ def test_contrastive_rewards_handle_zero_contrastive_particles():
     )
 
     dense_env.reset(seed=5)
-    terminal_env.reset(theta_all=dense_env.theta_all.detach().clone())
+    terminal_env.reset(theta_all=dense_env.reward_fn.theta_all.detach().clone())
 
     for _ in range(2):
         _, dense_reward, _, _, dense_info = dense_env.step(torch.zeros(3, 2))

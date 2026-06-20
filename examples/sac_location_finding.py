@@ -205,7 +205,7 @@ def evaluate_policy_mean(args: Args, policy_net) -> tuple[float, float]:
     for _ in range(args.horizon):
         designs = policy_net.sample_from_observation(
             observation, deterministic=True
-        ).action
+        ).design
         observation, rewards, _, _, _ = env.step(designs)
         returns += rewards
 
