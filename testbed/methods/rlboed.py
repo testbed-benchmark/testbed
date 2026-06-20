@@ -502,6 +502,7 @@ class RLBOED:
 
         actor.eval()
         designer = PolicyDesigner(task, horizon, actor, deterministic=False)
+        actor_state_dict = actor.state_dict()
         checkpoint = {
             "config": asdict(cfg),
             "horizon": horizon,
@@ -512,8 +513,8 @@ class RLBOED:
             # The trained actor is the deployable designer, so its weights are
             # stored under both keys: "designer" for inference-only loading and
             # "actor" for resuming SAC training alongside the critic/optimizers.
-            "designer": actor.state_dict(),
-            "actor": actor.state_dict(),
+            "designer": actor_state_dict,
+            "actor": actor_state_dict,
             "qf1": qf1.state_dict(),
             "qf2": qf2.state_dict(),
             "qf1_target": qf1_target.state_dict(),
