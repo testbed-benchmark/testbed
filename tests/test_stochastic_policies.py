@@ -90,7 +90,6 @@ def test_tanh_gaussian_policy_samples_bounded_actions_and_log_probs():
     assert make_space().contains(sample.deterministic_action)
 
 
-
 def test_tanh_gaussian_policy_raw_actions_are_approximately_normal():
     torch.manual_seed(0)
     policy = make_policy()

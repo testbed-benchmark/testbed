@@ -153,10 +153,14 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         self.log_std_head = nn.Linear(dim_h, self.dim_design)
         _initialize_linear_layers(self)
         nn.init.zeros_(self.log_std_head.weight)
-        scaled_log_std = 2.0 * (
-            (init_log_std - self.log_std_min)
-            / (self.log_std_max - self.log_std_min)
-        ) - 1.0
+        scaled_log_std = (
+            2.0
+            * (
+                (init_log_std - self.log_std_min)
+                / (self.log_std_max - self.log_std_min)
+            )
+            - 1.0
+        )
         nn.init.constant_(self.log_std_head.bias, atanh(scaled_log_std))
 
     def forward(

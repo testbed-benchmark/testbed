@@ -117,9 +117,7 @@ def parse_args() -> Args:
     )
     parser.add_argument("--policy-lr", type=float, default=Args.policy_lr)
     parser.add_argument("--q-lr", type=float, default=Args.q_lr)
-    parser.add_argument(
-        "--policy-init-std", type=float, default=Args.policy_init_std
-    )
+    parser.add_argument("--policy-init-std", type=float, default=Args.policy_init_std)
     parser.add_argument("--policy-frequency", type=int, default=Args.policy_frequency)
     parser.add_argument(
         "--target-network-frequency",
