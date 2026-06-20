@@ -250,33 +250,33 @@ def test_compact_replay_buffer_reconstructs_padded_transitions(monkeypatch):
     )
     sample = buffer.sample()
 
-    assert sample.device == torch.device("cpu")
-    assert sample.batch_size == torch.Size([3])
-    assert sample["observation", "designs"].shape == (3, 3, 2)
-    assert sample["observation", "mask"].dtype == torch.bool
-    assert sample["done"].dtype == torch.bool
-    torch.testing.assert_close(sample["action"], actions[0])
-    torch.testing.assert_close(sample["reward"], torch.tensor([1.0, 2.0, 3.0]))
-    assert sample["done"].tolist() == [False, False, True]
-    assert sample["observation", "mask"].tolist() == [
+    assert sample.action.device == torch.device("cpu")
+    assert sample.action.shape[:1] == torch.Size([3])
+    assert sample.observation["designs"].shape == (3, 3, 2)
+    assert sample.observation["mask"].dtype == torch.bool
+    assert sample.done.dtype == torch.bool
+    torch.testing.assert_close(sample.action, actions[0])
+    torch.testing.assert_close(sample.reward, torch.tensor([1.0, 2.0, 3.0]))
+    assert sample.done.tolist() == [False, False, True]
+    assert sample.observation["mask"].tolist() == [
         [False, False, False],
         [True, False, False],
         [True, True, False],
     ]
-    assert sample["next_observation", "mask"].tolist() == [
+    assert sample.next_observation["mask"].tolist() == [
         [True, False, False],
         [True, True, False],
         [True, True, True],
     ]
     torch.testing.assert_close(
-        sample["observation", "designs"][1],
+        sample.observation["designs"][1],
         torch.tensor([[-2.0, 2.0], [0.0, 0.0], [0.0, 0.0]]),
     )
     torch.testing.assert_close(
-        sample["next_observation", "outcomes"][1],
+        sample.next_observation["outcomes"][1],
         torch.tensor([[3.5], [4.5], [0.0]]),
     )
-    assert torch.all(sample["action"][0].abs() <= 4.0)
+    assert torch.all(sample.action[0].abs() <= 4.0)
 
 
 def test_compact_replay_buffer_rollover_retains_newest_transitions(monkeypatch):
@@ -313,11 +313,11 @@ def test_compact_replay_buffer_rollover_retains_newest_transitions(monkeypatch):
 
     assert len(buffer) == 5
     torch.testing.assert_close(
-        sample["action"].squeeze(-1),
+        sample.action.squeeze(-1),
         torch.tensor([4.0, 5.0, 6.0, 7.0, 8.0]),
     )
     torch.testing.assert_close(
-        sample["reward"],
+        sample.reward,
         torch.tensor([4.0, 5.0, 6.0, 7.0, 8.0]),
     )
 
@@ -352,8 +352,7 @@ def test_compact_replay_buffer_respects_storage_device():
     )
     sample = buffer.sample()
 
-    assert sample.device == buffer.designs.device
-    assert sample["action"].device == buffer.designs.device
+    assert sample.action.device == buffer.designs.device
 
 
 def test_rlboed_rejects_unavailable_cuda_buffer_device():

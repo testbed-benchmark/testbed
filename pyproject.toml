@@ -17,9 +17,7 @@ urls = {Homepage = 'https://github.com/testbed-benchmark/testbed'}
 
 dependencies = [
     'numpy>=1.24',
-    "tensordict>=0.12",
     "torch>=2.1",
-    "torchrl>=0.12",
 ]
 
 [project.optional-dependencies]

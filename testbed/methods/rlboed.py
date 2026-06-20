@@ -12,7 +12,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from tensordict import TensorDict
 
 from testbed.design_nets import (
     DeepSetGaussianActor,
@@ -30,6 +29,32 @@ from testbed.envs.history import History
 from testbed.tasks.base_task import Task
 
 from .base import FitResult
+
+
+@dataclass
+class ReplayBatch:
+    """A batch of transitions sampled from the replay buffer."""
+
+    observation: dict[str, torch.Tensor]
+    next_observation: dict[str, torch.Tensor]
+    action: torch.Tensor
+    reward: torch.Tensor
+    done: torch.Tensor
+
+
+def _to_device(
+    batch: ReplayBatch, device: torch.device, *, non_blocking: bool = False
+) -> ReplayBatch:
+    def move(x: torch.Tensor) -> torch.Tensor:
+        return x.to(device, non_blocking=non_blocking)
+
+    return ReplayBatch(
+        observation={k: move(v) for k, v in batch.observation.items()},
+        next_observation={k: move(v) for k, v in batch.next_observation.items()},
+        action=move(batch.action),
+        reward=move(batch.reward),
+        done=move(batch.done),
+    )
 
 
 class _CompactEpisodeReplayBuffer:
@@ -163,7 +188,7 @@ class _CompactEpisodeReplayBuffer:
         self._next_episode = (self._next_episode + batch_size) % self.capacity_episodes
         self._episodes_written += batch_size
 
-    def sample(self) -> TensorDict:
+    def sample(self) -> ReplayBatch:
         """Samples transitions and reconstructs padded-history observations."""
         n_transitions = len(self)
         if n_transitions < self.batch_size:
@@ -178,19 +203,23 @@ class _CompactEpisodeReplayBuffer:
 
         observation = self._build_observation(slots, timesteps)
         next_observation = self._build_observation(slots, timesteps + 1)
-        data = TensorDict(
-            {
-                "observation": observation,
-                "next_observation": next_observation,
-                "action": self.actions[slots, timesteps],
-                "reward": self.rewards[slots, timesteps],
-                "done": self.dones[slots, timesteps],
-            },
-            batch_size=[self.batch_size],
-            device=self.device,
+        data = ReplayBatch(
+            observation=observation,
+            next_observation=next_observation,
+            action=self.actions[slots, timesteps],
+            reward=self.rewards[slots, timesteps],
+            done=self.dones[slots, timesteps],
         )
         if self.pin_memory:
-            data = data.pin_memory()
+            data = ReplayBatch(
+                observation={k: v.pin_memory() for k, v in data.observation.items()},
+                next_observation={
+                    k: v.pin_memory() for k, v in data.next_observation.items()
+                },
+                action=data.action.pin_memory(),
+                reward=data.reward.pin_memory(),
+                done=data.done.pin_memory(),
+            )
         return data
 
     def _build_observation(
@@ -416,24 +445,22 @@ class RLBOED:
                 and len(replay_buffer) >= cfg.batch_size
             ):
                 for _ in range(cfg.gradient_steps_per_iteration):
-                    data = replay_buffer.sample().to(device, non_blocking=True)
-                    _obs = data["observation"]
-                    _next_obs = data["next_observation"]
+                    data = _to_device(replay_buffer.sample(), device, non_blocking=True)
                     data_obs = History(
                         max_episode_length=horizon,
-                        designs=_obs["designs"],
-                        outcomes=_obs["outcomes"],
-                        mask=_obs["mask"],
+                        designs=data.observation["designs"],
+                        outcomes=data.observation["outcomes"],
+                        mask=data.observation["mask"],
                     )
                     data_next_obs = History(
                         max_episode_length=horizon,
-                        designs=_next_obs["designs"],
-                        outcomes=_next_obs["outcomes"],
-                        mask=_next_obs["mask"],
+                        designs=data.next_observation["designs"],
+                        outcomes=data.next_observation["outcomes"],
+                        mask=data.next_observation["mask"],
                     )
-                    data_actions = data["action"]
-                    data_rewards = data["reward"]
-                    data_dones = data["done"]
+                    data_actions = data.action
+                    data_rewards = data.reward
+                    data_dones = data.done
                     alpha = log_alpha.exp().detach()
 
                     with torch.no_grad():
