@@ -37,7 +37,7 @@ class ReplayBatch:
 
     observation: dict[str, torch.Tensor]
     next_observation: dict[str, torch.Tensor]
-    action: torch.Tensor
+    design: torch.Tensor
     reward: torch.Tensor
     done: torch.Tensor
 
@@ -51,7 +51,7 @@ def _to_device(
     return ReplayBatch(
         observation={k: move(v) for k, v in batch.observation.items()},
         next_observation={k: move(v) for k, v in batch.next_observation.items()},
-        action=move(batch.action),
+        design=move(batch.design),
         reward=move(batch.reward),
         done=move(batch.done),
     )
@@ -103,7 +103,7 @@ class _CompactEpisodeReplayBuffer:
             *self.event_shape_y,
             device=self.device,
         )
-        self.actions = torch.zeros(
+        self.policy_designs = torch.zeros(
             self.capacity_episodes,
             self.horizon,
             *self.event_shape_design,
@@ -132,14 +132,14 @@ class _CompactEpisodeReplayBuffer:
         *,
         designs: torch.Tensor,
         outcomes: torch.Tensor,
-        actions: torch.Tensor,
+        policy_designs: torch.Tensor,
         rewards: torch.Tensor,
         dones: torch.Tensor,
     ) -> None:
         """Stores a batch of complete episodes."""
         designs = designs.detach().to(self.device)
         outcomes = outcomes.detach().to(self.device)
-        actions = actions.detach().to(self.device)
+        policy_designs = policy_designs.detach().to(self.device)
         rewards = rewards.detach().to(self.device)
         dones = dones.detach().to(self.device)
 
@@ -156,10 +156,10 @@ class _CompactEpisodeReplayBuffer:
                 f"outcomes must have shape {expected_outcomes}; "
                 f"got {tuple(outcomes.shape)}."
             )
-        if actions.shape != expected_designs:
+        if policy_designs.shape != expected_designs:
             raise ValueError(
-                f"actions must have shape {expected_designs}; "
-                f"got {tuple(actions.shape)}."
+                f"policy_designs must have shape {expected_designs}; "
+                f"got {tuple(policy_designs.shape)}."
             )
         if rewards.shape != (batch_size, self.horizon):
             raise ValueError(
@@ -182,7 +182,7 @@ class _CompactEpisodeReplayBuffer:
         ) % self.capacity_episodes
         self.designs[slots] = designs
         self.outcomes[slots] = outcomes
-        self.actions[slots] = actions
+        self.policy_designs[slots] = policy_designs
         self.rewards[slots] = rewards
         self.dones[slots] = dones
         self._next_episode = (self._next_episode + batch_size) % self.capacity_episodes
@@ -206,7 +206,7 @@ class _CompactEpisodeReplayBuffer:
         data = ReplayBatch(
             observation=observation,
             next_observation=next_observation,
-            action=self.actions[slots, timesteps],
+            design=self.policy_designs[slots, timesteps],
             reward=self.rewards[slots, timesteps],
             done=self.dones[slots, timesteps],
         )
@@ -216,7 +216,7 @@ class _CompactEpisodeReplayBuffer:
                 next_observation={
                     k: v.pin_memory() for k, v in data.next_observation.items()
                 },
-                action=data.action.pin_memory(),
+                design=data.design.pin_memory(),
                 reward=data.reward.pin_memory(),
                 done=data.done.pin_memory(),
             )
@@ -405,17 +405,17 @@ class RLBOED:
                 )
                 obs, _ = env.reset(seed=seed)
                 episodic_returns = torch.zeros(cfg.num_envs, device=device)
-                episode_actions = []
+                episode_policy_designs = []
                 episode_rewards = []
                 episode_dones = []
 
                 for _ in range(horizon):
                     with torch.no_grad():
                         policy_sample = actor.sample_from_observation(obs)
-                        designs = policy_sample.action
+                        designs = policy_sample.design
                     next_obs, rewards, terminations, truncations, _ = env.step(designs)
                     dones = terminations | truncations
-                    episode_actions.append(designs.detach())
+                    episode_policy_designs.append(designs.detach())
                     episode_rewards.append(rewards.detach())
                     episode_dones.append(dones.detach())
                     episodic_returns += rewards
@@ -425,7 +425,7 @@ class RLBOED:
                 replay_buffer.extend_episode_batch(
                     designs=env.history.designs,
                     outcomes=env.history.outcomes,
-                    actions=torch.stack(episode_actions, dim=1),
+                    policy_designs=torch.stack(episode_policy_designs, dim=1),
                     rewards=torch.stack(episode_rewards, dim=1),
                     dones=torch.stack(episode_dones, dim=1),
                 )
@@ -458,7 +458,7 @@ class RLBOED:
                         outcomes=data.next_observation["outcomes"],
                         mask=data.next_observation["mask"],
                     )
-                    data_actions = data.action
+                    data_designs = data.design
                     data_rewards = data.reward
                     data_dones = data.done
                     alpha = log_alpha.exp().detach()
@@ -467,10 +467,10 @@ class RLBOED:
                         next_policy_sample = actor.sample_from_observation(
                             data_next_obs
                         )
-                        next_actions = next_policy_sample.action
+                        next_designs = next_policy_sample.design
                         next_log_pi = next_policy_sample.log_prob.unsqueeze(-1)
-                        qf1_next_target = qf1_target(data_next_obs, next_actions)
-                        qf2_next_target = qf2_target(data_next_obs, next_actions)
+                        qf1_next_target = qf1_target(data_next_obs, next_designs)
+                        qf2_next_target = qf2_target(data_next_obs, next_designs)
                         min_qf_next_target = (
                             torch.min(qf1_next_target, qf2_next_target)
                             - alpha * next_log_pi
@@ -479,8 +479,8 @@ class RLBOED:
                             1.0 - data_dones.float()
                         ) * cfg.gamma * min_qf_next_target.view(-1)
 
-                    qf1_a_values = qf1(data_obs, data_actions).view(-1)
-                    qf2_a_values = qf2(data_obs, data_actions).view(-1)
+                    qf1_a_values = qf1(data_obs, data_designs).view(-1)
+                    qf2_a_values = qf2(data_obs, data_designs).view(-1)
                     qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
                     qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
                     qf_loss = qf1_loss + qf2_loss
@@ -491,7 +491,7 @@ class RLBOED:
 
                     if optimization_step % cfg.policy_frequency == 0:
                         policy_sample = actor.sample_from_observation(data_obs)
-                        pi = policy_sample.action
+                        pi = policy_sample.design
                         log_pi = policy_sample.log_prob.unsqueeze(-1)
                         min_qf_pi = torch.min(
                             qf1(data_obs, pi),

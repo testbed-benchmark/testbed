@@ -15,26 +15,26 @@ from testbed.envs.design_spaces import BoxDesignSpace
 
 @dataclass
 class PolicySample:
-    """Sampled action and log-probability from a stochastic policy.
+    """Sampled design and log-probability from a stochastic policy.
 
     Attributes:
-        action: Sampled bounded design with shape
+        design: Sampled bounded design with shape
             [*batch_shape, *event_shape_design].
-        log_prob: Summed action log probability with shape [*batch_shape].
-        deterministic_action: Bounded deterministic action, typically the squashed
+        log_prob: Summed design log probability with shape [*batch_shape].
+        deterministic_design: Bounded deterministic design, typically the squashed
             policy mean, with shape [*batch_shape, *event_shape_design].
-        raw_action: Optional unsquashed Gaussian action with shape
+        raw_design: Optional unsquashed Gaussian design with shape
             [*batch_shape, *event_shape_design].
     """
 
-    action: Tensor
+    design: Tensor
     log_prob: Tensor
-    deterministic_action: Tensor
-    raw_action: Tensor | None = None
+    deterministic_design: Tensor
+    raw_design: Tensor | None = None
 
 
 class StochasticDesignNet(DesignNet):
-    """Design network with an RL-friendly stochastic action API."""
+    """Design network with an RL-friendly stochastic design API."""
 
     def sample(
         self,
@@ -44,7 +44,7 @@ class StochasticDesignNet(DesignNet):
         mask: Tensor | None = None,
         deterministic: bool = False,
     ) -> PolicySample:
-        """Samples an action and returns its policy log probability.
+        """Samples a design and returns its policy log probability.
 
         Args:
             y_history: Outcome history with shape
@@ -53,12 +53,12 @@ class StochasticDesignNet(DesignNet):
                 [*batch_shape, T, *event_shape_design].
             mask: Optional boolean mask for padded histories with shape
                 [*batch_shape, T].
-            deterministic: If True, return the deterministic policy action instead
+            deterministic: If True, return the deterministic design instead
                 of a random sample.
 
         Returns:
-            A policy sample containing the action, log probability, deterministic
-            action, and optional raw action.
+            A policy sample containing the design, log probability, deterministic
+            design, and optional raw design.
         """
         raise NotImplementedError
 
@@ -67,7 +67,7 @@ class StochasticDesignNet(DesignNet):
 
         Args:
             obs: ``History`` returned by ``BEDEnv.reset()`` or ``BEDEnv.step()``.
-            deterministic: If True, return the deterministic policy action instead
+            deterministic: If True, return the deterministic design instead
                 of a random sample.
 
         Returns:
@@ -240,8 +240,8 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             raise ValueError(
                 "TanhGaussianPolicyNet requires finite-width design bounds."
             )
-        self.register_buffer("action_scale", (high - low) / 2.0)
-        self.register_buffer("action_bias", (high + low) / 2.0)
+        self.register_buffer("design_scale", (high - low) / 2.0)
+        self.register_buffer("design_bias", (high + low) / 2.0)
 
         if outcome_bounds is None:
             outcome_low = torch.tensor(float("nan"), dtype=low.dtype)
@@ -257,7 +257,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         self._normalize_outcomes = outcome_bounds is not None
 
     def forward(self, y_history, design_history) -> Tensor:
-        """Returns the deterministic bounded action for a history.
+        """Returns the deterministic bounded design for a history.
 
         Args:
             y_history: Outcome history with shape
@@ -269,7 +269,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             Deterministic bounded design with shape
             [*batch_shape, *event_shape_design].
         """
-        return self.sample(y_history, design_history, deterministic=True).action
+        return self.sample(y_history, design_history, deterministic=True).design
 
     def sample(
         self,
@@ -279,7 +279,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         mask: Tensor | None = None,
         deterministic: bool = False,
     ) -> PolicySample:
-        """Samples a tanh-squashed action and computes its log probability.
+        """Samples a tanh-squashed design and computes its log probability.
 
         Args:
             y_history: Outcome history with shape
@@ -292,9 +292,9 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 reparameterized sample.
 
         Returns:
-            A policy sample containing a bounded action, its corrected log
-            probability, the deterministic bounded action, and the unsquashed
-            Gaussian action.
+            A policy sample containing a bounded design, its corrected log
+            probability, the deterministic bounded design, and the unsquashed
+            Gaussian design.
         """
         batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
             y_history,
@@ -325,45 +325,45 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         normal = Normal(mean, std)
 
         if deterministic:
-            raw_action = mean
+            raw_design = mean
         else:
-            raw_action = normal.rsample()
+            raw_design = normal.rsample()
 
-        action_flat = self._squash(raw_action)
+        squashed_flat = self._squash(raw_design)
         deterministic_flat = self._squash(mean)
-        log_prob = (normal.log_prob(raw_action) - self._squash_log_det(raw_action)).sum(
+        log_prob = (normal.log_prob(raw_design) - self._squash_log_det(raw_design)).sum(
             dim=-1
         )
 
-        action = action_flat.reshape(*batch_shape, *self.event_shape_design)
-        deterministic_action = deterministic_flat.reshape(
+        design = squashed_flat.reshape(*batch_shape, *self.event_shape_design)
+        deterministic_design = deterministic_flat.reshape(
             *batch_shape, *self.event_shape_design
         )
-        raw_action = raw_action.reshape(*batch_shape, *self.event_shape_design)
+        raw_design = raw_design.reshape(*batch_shape, *self.event_shape_design)
 
         return PolicySample(
-            action=action,
+            design=design,
             log_prob=log_prob.reshape(batch_shape),
-            deterministic_action=deterministic_action,
-            raw_action=raw_action,
+            deterministic_design=deterministic_design,
+            raw_design=raw_design,
         )
 
-    def _squash(self, raw_action: Tensor) -> Tensor:
+    def _squash(self, raw_design: Tensor) -> Tensor:
         """Maps an unsquashed Gaussian sample into the bounded design box."""
-        return self.action_bias + self.action_scale * torch.tanh(raw_action)
+        return self.design_bias + self.design_scale * torch.tanh(raw_design)
 
-    def _squash_log_det(self, raw_action: Tensor) -> Tensor:
+    def _squash_log_det(self, raw_design: Tensor) -> Tensor:
         """Log absolute determinant of the tanh-then-affine squash, per dimension.
 
         Computed in the forward direction to stay finite for any finite
-        ``raw_action``; inverting via ``atanh`` would diverge once ``tanh``
+        ``raw_design``; inverting via ``atanh`` would diverge once ``tanh``
         saturates to +/-1 in floating point.
         """
         # log(1 - tanh(x)^2) in a numerically stable form (SpinUp / Denis Yarats).
         tanh_log_det = 2.0 * (
-            log(2.0) - raw_action - nn.functional.softplus(-2.0 * raw_action)
+            log(2.0) - raw_design - nn.functional.softplus(-2.0 * raw_design)
         )
-        return torch.log(self.action_scale) + tanh_log_det
+        return torch.log(self.design_scale) + tanh_log_det
 
     def _prepare_histories(
         self,
@@ -386,8 +386,8 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             The original batch shape, flattened outcome history, flattened design
             history, and optional flattened mask.
         """
-        dtype = self.action_scale.dtype
-        device = self.action_scale.device
+        dtype = self.design_scale.dtype
+        device = self.design_scale.device
         y_history = torch.as_tensor(y_history, device=device, dtype=dtype)
         design_history = torch.as_tensor(design_history, device=device, dtype=dtype)
 
@@ -428,8 +428,8 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             target_low, target_high = self.design_history_bounds
             design_flat = affine_rescale(
                 design_flat,
-                self.action_bias - self.action_scale,
-                self.action_bias + self.action_scale,
+                self.design_bias - self.design_scale,
+                self.design_bias + self.design_scale,
                 target_low,
                 target_high,
             )

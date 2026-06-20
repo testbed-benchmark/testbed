@@ -104,5 +104,5 @@ class PolicyDesigner(Designer):
             # call policy_net.sample_from_observation(obs, deterministic=True) directly.
             design = self.policy_net(y_history, design_history)
         else:
-            design = self.policy_net.sample(y_history, design_history, mask=mask).action
+            design = self.policy_net.sample(y_history, design_history, mask=mask).design
         return design

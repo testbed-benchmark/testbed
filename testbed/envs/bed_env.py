@@ -24,8 +24,8 @@ class BEDEnv:
         design_space: DesignSpace | None = None,
         reward_fn: RewardFunction | None = None,
         batch_shape: tuple[int, ...] = (),
-        validate_actions: bool = True,
-        project_actions: bool = True,
+        validate_designs: bool = True,
+        project_designs: bool = True,
         include_theta_in_info: bool = False,
         track_grad: bool = False,
     ):
@@ -39,8 +39,8 @@ class BEDEnv:
         )
         self.reward_fn = reward_fn if reward_fn is not None else ZeroReward()
         self.batch_shape = torch.Size(batch_shape)
-        self.validate_actions = validate_actions
-        self.project_actions = project_actions
+        self.validate_designs = validate_designs
+        self.project_designs = project_designs
         self.include_theta_in_info = include_theta_in_info
         self.track_grad = track_grad
 
@@ -117,7 +117,7 @@ class BEDEnv:
             info["theta_all"] = self.theta_all
         return self.history, info
 
-    def step(self, action: Tensor) -> tuple[Any, Tensor, Tensor, Tensor, dict]:
+    def step(self, design: Tensor) -> tuple[Any, Tensor, Tensor, Tensor, dict]:
         """Advances the environment by one design/outcome pair.
 
         Returns the updated ``env.history`` as the observation. The ``History``
@@ -129,11 +129,11 @@ class BEDEnv:
         if self.t >= self.horizon:
             raise RuntimeError("Cannot step a terminated environment; call reset().")
 
-        raw_action = self._detach_if_needed(torch.as_tensor(action, device=self.device))
+        raw_design = self._detach_if_needed(torch.as_tensor(design, device=self.device))
 
         grad_context = torch.enable_grad() if self.track_grad else torch.no_grad()
         with grad_context:
-            design = self._prepare_design(raw_action)
+            design = self._prepare_design(raw_design)
             outcome = self.task.sample_outcome(self.theta_0, design)
             self.history.write(self.t, design, outcome)
             reward = self.reward_fn.step(self, design, outcome)
@@ -144,7 +144,7 @@ class BEDEnv:
             "design": design,
             "outcome": outcome,
             "history": self.history,
-            "raw_action": raw_action,
+            "raw_design": raw_design,
         }
         if self.include_theta_in_info:
             info["theta_0"] = self.theta_0
@@ -200,15 +200,15 @@ class BEDEnv:
             return tensor
         return tensor.detach()
 
-    def _prepare_design(self, raw_action: Tensor) -> Tensor:
-        """Converts, projects, validates, and shape-checks an action."""
-        design = raw_action
+    def _prepare_design(self, raw_design: Tensor) -> Tensor:
+        """Converts, projects, validates, and shape-checks a design."""
+        design = raw_design
         design_space = self.design_space
         if design_space is not None:
-            if self.project_actions:
+            if self.project_designs:
                 design = design_space.project(design)
-            if self.validate_actions and not design_space.contains(design):
-                raise ValueError("Action is outside the design space.")
+            if self.validate_designs and not design_space.contains(design):
+                raise ValueError("Design is outside the design space.")
 
         expected_event_shape = (
             design_space.event_shape
@@ -218,6 +218,6 @@ class BEDEnv:
         expected = (*self.batch_shape, *expected_event_shape)
         if design.shape != expected:
             raise ValueError(
-                f"Action must have shape {expected}; got {tuple(design.shape)}."
+                f"Design must have shape {expected}; got {tuple(design.shape)}."
             )
         return design

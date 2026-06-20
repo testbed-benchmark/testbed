@@ -132,7 +132,7 @@ def test_soft_q_network_is_permutation_invariant():
     observation = History(
         max_episode_length=5, designs=designs, outcomes=outcomes, mask=mask
     )
-    action = torch.randn(3, 2)
+    design = torch.randn(3, 2)
     permutation = torch.tensor([2, 0, 4, 1, 3])
     permuted_observation = History(
         max_episode_length=5,
@@ -141,8 +141,8 @@ def test_soft_q_network_is_permutation_invariant():
         mask=mask[:, permutation],
     )
 
-    actual = critic(observation, action)
-    permuted = critic(permuted_observation, action)
+    actual = critic(observation, design)
+    permuted = critic(permuted_observation, design)
 
     torch.testing.assert_close(actual, permuted)
 
@@ -170,16 +170,16 @@ def test_soft_q_network_ignores_masked_history_entries():
     modified_observation = History(
         max_episode_length=4, designs=mod_designs, outcomes=mod_outcomes, mask=mask
     )
-    action = torch.randn(2, 2)
+    design = torch.randn(2, 2)
 
-    actual = critic(observation, action)
-    modified = critic(modified_observation, action)
+    actual = critic(observation, design)
+    modified = critic(modified_observation, design)
 
     assert actual.shape == (2, 1)
     torch.testing.assert_close(actual, modified)
 
 
-def test_soft_q_network_uses_reference_history_and_action_coordinates():
+def test_soft_q_network_uses_reference_history_and_design_coordinates():
     critic = SoftQNetwork(
         dim_y=1,
         dim_design=2,
@@ -231,14 +231,14 @@ def test_compact_replay_buffer_reconstructs_padded_transitions(monkeypatch):
         [[[-2.0, 2.0], [-1.0, 1.0], [0.0, 0.5]]],
     )
     outcomes = torch.tensor([[[3.5], [4.5], [5.5]]])
-    actions = torch.tensor(
+    policy_designs = torch.tensor(
         [[[-1.5, 1.5], [-0.5, 0.5], [0.25, -0.25]]],
     )
 
     buffer.extend_episode_batch(
         designs=designs,
         outcomes=outcomes,
-        actions=actions,
+        policy_designs=policy_designs,
         rewards=torch.tensor([[1.0, 2.0, 3.0]]),
         dones=torch.tensor([[False, False, True]]),
     )
@@ -250,12 +250,12 @@ def test_compact_replay_buffer_reconstructs_padded_transitions(monkeypatch):
     )
     sample = buffer.sample()
 
-    assert sample.action.device == torch.device("cpu")
-    assert sample.action.shape[:1] == torch.Size([3])
+    assert sample.design.device == torch.device("cpu")
+    assert sample.design.shape[:1] == torch.Size([3])
     assert sample.observation["designs"].shape == (3, 3, 2)
     assert sample.observation["mask"].dtype == torch.bool
     assert sample.done.dtype == torch.bool
-    torch.testing.assert_close(sample.action, actions[0])
+    torch.testing.assert_close(sample.design, policy_designs[0])
     torch.testing.assert_close(sample.reward, torch.tensor([1.0, 2.0, 3.0]))
     assert sample.done.tolist() == [False, False, True]
     assert sample.observation["mask"].tolist() == [
@@ -276,7 +276,7 @@ def test_compact_replay_buffer_reconstructs_padded_transitions(monkeypatch):
         sample.next_observation["outcomes"][1],
         torch.tensor([[3.5], [4.5], [0.0]]),
     )
-    assert torch.all(sample.action[0].abs() <= 4.0)
+    assert torch.all(sample.design[0].abs() <= 4.0)
 
 
 def test_compact_replay_buffer_rollover_retains_newest_transitions(monkeypatch):
@@ -299,7 +299,7 @@ def test_compact_replay_buffer_rollover_retains_newest_transitions(monkeypatch):
         buffer.extend_episode_batch(
             designs=values,
             outcomes=values,
-            actions=values,
+            policy_designs=values,
             rewards=transition_ids.reshape(1, 3),
             dones=torch.zeros(1, 3, dtype=torch.bool),
         )
@@ -313,7 +313,7 @@ def test_compact_replay_buffer_rollover_retains_newest_transitions(monkeypatch):
 
     assert len(buffer) == 5
     torch.testing.assert_close(
-        sample.action.squeeze(-1),
+        sample.design.squeeze(-1),
         torch.tensor([4.0, 5.0, 6.0, 7.0, 8.0]),
     )
     torch.testing.assert_close(
@@ -346,13 +346,13 @@ def test_compact_replay_buffer_respects_storage_device():
     buffer.extend_episode_batch(
         designs=values,
         outcomes=values,
-        actions=values,
+        policy_designs=values,
         rewards=values.squeeze(-1),
         dones=torch.zeros(1, 2, dtype=torch.bool, device=buffer.designs.device),
     )
     sample = buffer.sample()
 
-    assert sample.action.device == buffer.designs.device
+    assert sample.design.device == buffer.designs.device
 
 
 def test_rlboed_rejects_unavailable_cuda_buffer_device():

@@ -166,8 +166,8 @@ def test_bed_env_reset_and_step_shapes():
     assert obs.mask.shape == (5, 3)
     assert env.theta_all.shape == (5, 3, 1, 2)
 
-    action = torch.zeros(5, 2)
-    obs, reward, terminated, truncated, info = env.step(action)
+    design = torch.zeros(5, 2)
+    obs, reward, terminated, truncated, info = env.step(design)
     assert reward.shape == (5,)
     assert terminated.shape == (5,)
     assert not terminated.any()
@@ -245,7 +245,7 @@ def test_bed_env_reset_rejects_bad_theta_shapes():
         env.reset(theta_all=torch.zeros(2, 1, 1, 2))
 
 
-def test_bed_env_action_validation_without_projection():
+def test_bed_env_design_validation_without_projection():
     task = make_task()
     env = BEDEnv(
         task,
@@ -253,7 +253,7 @@ def test_bed_env_action_validation_without_projection():
         design_space=make_space(task),
         reward_fn=ZeroReward(),
         batch_shape=(2,),
-        project_actions=False,
+        project_designs=False,
     )
     env.reset(seed=0)
 
@@ -261,7 +261,7 @@ def test_bed_env_action_validation_without_projection():
         env.step(torch.tensor([[2.0, 0.0], [0.0, 0.0]]))
 
 
-def test_bed_env_rejects_wrong_action_shape_after_projection():
+def test_bed_env_rejects_wrong_design_shape_after_projection():
     task = make_task()
     env = BEDEnv(
         task,
@@ -272,7 +272,7 @@ def test_bed_env_rejects_wrong_action_shape_after_projection():
     )
     env.reset(seed=0)
 
-    with pytest.raises(ValueError, match="Action must have shape"):
+    with pytest.raises(ValueError, match="Design must have shape"):
         env.step(torch.zeros(2))
 
 
@@ -290,7 +290,7 @@ def test_bed_env_can_reset_after_termination():
     assert obs.mask.sum() == 0
 
 
-def test_bed_env_projects_box_actions():
+def test_bed_env_projects_box_designs():
     task = make_task()
     env = BEDEnv(
         task,
@@ -316,18 +316,18 @@ def test_bed_env_step_detaches_rollout_tensors_by_default():
         horizon=1,
         design_space=make_space(task),
         reward_fn=CallableReward(lambda env, design, outcome: design.sum(dim=-1)),
-        project_actions=False,
+        project_designs=False,
     )
-    action = torch.zeros(2, requires_grad=True)
+    design = torch.zeros(2, requires_grad=True)
 
     env.reset(seed=0)
-    obs, reward, _, _, info = env.step(action)
+    obs, reward, _, _, info = env.step(design)
 
-    assert action.requires_grad
+    assert design.requires_grad
     assert not reward.requires_grad
     assert not obs.designs.requires_grad
     assert not obs.outcomes.requires_grad
-    assert not info["raw_action"].requires_grad
+    assert not info["raw_design"].requires_grad
     assert not info["design"].requires_grad
     assert not info["outcome"].requires_grad
 
@@ -380,7 +380,7 @@ def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
     terminal_env.reset(theta_all=theta_all)
 
     generator = torch.Generator().manual_seed(22)
-    actions = [
+    designs = [
         -1.0
         + 2.0 * torch.rand(*batch_shape, *task.event_shape_design, generator=generator)
         for _ in range(horizon)
@@ -388,9 +388,9 @@ def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
 
     dense_rewards = []
     terminal_rewards = []
-    for action in actions:
+    for design in designs:
         torch.manual_seed(33 + len(dense_rewards))
-        _, reward, _, _, dense_info = dense_env.step(action)
+        _, reward, _, _, dense_info = dense_env.step(design)
         dense_rewards.append(reward)
 
         terminal_env.history.write(

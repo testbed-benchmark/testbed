@@ -23,7 +23,7 @@ class RLBOEDQNetwork(nn.Module):
         dim_h: int = 128,
         dim_emb: int = 64,
     ):
-        """Initializes the history encoder and action-conditioned emitter."""
+        """Initializes the history encoder and design-conditioned emitter."""
         super().__init__()
         self.dim_y = dim_y
         self.dim_design = dim_design
@@ -42,18 +42,18 @@ class RLBOEDQNetwork(nn.Module):
         self.register_buffer("outcome_low", torch.as_tensor(outcome_low))
         self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
 
-    def forward(self, observation: History, action: Tensor) -> Tensor:
-        """Estimates Q from a permutation-invariant history summary and action."""
-        designs = observation.designs
+    def forward(self, observation: History, design: Tensor) -> Tensor:
+        """Estimates Q from a permutation-invariant history summary and design."""
+        hist_designs = observation.designs
         outcomes = observation.outcomes
         mask = observation.mask
-        batch_size = designs.shape[0]
-        history_length = designs.shape[1]
-        designs = designs.reshape(batch_size, history_length, self.dim_design)
+        batch_size = hist_designs.shape[0]
+        history_length = hist_designs.shape[1]
+        hist_designs = hist_designs.reshape(batch_size, history_length, self.dim_design)
         outcomes = outcomes.reshape(batch_size, history_length, self.dim_y)
-        action = action.reshape(batch_size, self.dim_design)
-        designs = affine_rescale(
-            designs,
+        design = design.reshape(batch_size, self.dim_design)
+        hist_designs = affine_rescale(
+            hist_designs,
             self.design_low,
             self.design_high,
             0.0,
@@ -66,8 +66,8 @@ class RLBOEDQNetwork(nn.Module):
             0.0,
             1.0,
         )
-        action = affine_rescale(
-            action,
+        design = affine_rescale(
+            design,
             self.design_low,
             self.design_high,
             -1.0,
@@ -75,13 +75,13 @@ class RLBOEDQNetwork(nn.Module):
         )
 
         if history_length == 0:
-            history_summary = designs.new_zeros(batch_size, self.dim_emb)
+            history_summary = hist_designs.new_zeros(batch_size, self.dim_emb)
         else:
-            encoded_history = self.encoder_net(torch.cat([outcomes, designs], dim=-1))
+            encoded_history = self.encoder_net(torch.cat([outcomes, hist_designs], dim=-1))
             if mask is not None:
                 encoded_history = encoded_history * mask.to(
                     dtype=encoded_history.dtype
                 ).unsqueeze(-1)
             history_summary = encoded_history.sum(dim=1)
 
-        return self.emitter_net(torch.cat([history_summary, action], dim=-1))
+        return self.emitter_net(torch.cat([history_summary, design], dim=-1))
