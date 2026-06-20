@@ -95,11 +95,6 @@ class History:
         self.outcomes.narrow(batch_ndim, t, 1).copy_(outcome.unsqueeze(batch_ndim))
         self.mask[..., t] = True
 
-    def append(self, design: Tensor, outcome: Tensor) -> "History":
-        """Writes the next unfilled timestep and returns self."""
-        self.write(self.T, design, outcome)
-        return self
-
     def prefix(self, t: int) -> "History":
         """Returns a padded history containing only the first t slots."""
         batch_ndim = len(self.batch_shape)

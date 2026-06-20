@@ -134,7 +134,7 @@ class RLBOEDTerminalReward(_ContrastiveReward):
         if self.log_c is None:
             raise RuntimeError("Reward function has not been reset.")
         self.update_log_c(env, design, outcome)
-        if env.t + 1 < env.horizon:
+        if env.t < env.horizon - 1:
             return torch.zeros(env.batch_shape, device=env.device)
         log_L = math.log(self.n_contrastive + 1)
         return self.log_c[..., 0] - torch.logsumexp(self.log_c, dim=-1) + log_L

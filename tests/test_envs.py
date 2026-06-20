@@ -136,7 +136,7 @@ def test_history_empty_write_append_prefix_and_bounds():
 
     design1 = torch.zeros(2, 2, dtype=torch.float64)
     outcome1 = torch.ones(2, 1)
-    assert history.append(design1, outcome1) is history
+    history.write(1, design1, outcome1)
     assert history.T == 2
 
     prefix = history.prefix(1)
