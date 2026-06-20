@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import random
 import time
 from dataclasses import asdict, dataclass
@@ -317,10 +318,8 @@ class RLBOED:
         }
         qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
         qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf1_target = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf2_target = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf1_target.load_state_dict(qf1.state_dict())
-        qf2_target.load_state_dict(qf2.state_dict())
+        qf1_target = copy.deepcopy(qf1)
+        qf2_target = copy.deepcopy(qf2)
 
         q_optimizer = optim.Adam(
             list(qf1.parameters()) + list(qf2.parameters()),

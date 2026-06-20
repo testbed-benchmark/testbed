@@ -413,11 +413,11 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
             )
 
-        if y_history.ndim < len(batch_shape) + 2:
-            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
-        if y_history.shape[: len(batch_shape)] != batch_shape:
-            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
-        if y_history.shape[len(batch_shape)] != T:
+        if (
+            y_history.ndim < len(batch_shape) + 2
+            or y_history.shape[: len(batch_shape)] != batch_shape
+            or y_history.shape[len(batch_shape)] != T
+        ):
             raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
 
         b_flat = prod(batch_shape) if batch_shape else 1
