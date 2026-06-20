@@ -10,7 +10,6 @@ import torch
 from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
-    PaddedHistoryObservation,
     RLBOEDDenseReward,
 )
 from testbed.methods import RLBOED, RLBOEDConfig
@@ -198,7 +197,6 @@ def evaluate_policy_mean(args: Args, policy_net) -> tuple[float, float]:
         horizon=args.horizon,
         design_space=design_space,
         reward_fn=RLBOEDDenseReward(EVAL_N_CONTRASTIVE),
-        observation_fn=PaddedHistoryObservation(args.horizon),
         batch_shape=(args.num_envs,),
     )
     policy_net.eval()

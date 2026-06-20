@@ -14,6 +14,7 @@ from testbed.design_nets import (
 )
 from testbed.designers import PolicyDesigner
 from testbed.envs import BoxDesignSpace
+from testbed.envs.history import History
 from testbed.methods import RLBOED, FitResult, RLBOEDConfig
 from testbed.methods.rlboed import _CompactEpisodeReplayBuffer
 from testbed.tasks import LocationFinding
@@ -119,26 +120,26 @@ def test_soft_q_network_is_permutation_invariant():
         outcome_low=-3.0,
         outcome_high=10.0,
     )
-    observation = {
-        "designs": torch.randn(3, 5, 2),
-        "outcomes": torch.randn(3, 5, 1),
-        "mask": torch.tensor(
-            [
-                [True, True, True, False, False],
-                [True, True, True, True, True],
-                [True, False, False, False, False],
-            ]
-        ),
-        "t": torch.tensor([3, 5, 1]),
-    }
+    designs = torch.randn(3, 5, 2)
+    outcomes = torch.randn(3, 5, 1)
+    mask = torch.tensor(
+        [
+            [True, True, True, False, False],
+            [True, True, True, True, True],
+            [True, False, False, False, False],
+        ]
+    )
+    observation = History(
+        max_episode_length=5, designs=designs, outcomes=outcomes, mask=mask
+    )
     action = torch.randn(3, 2)
     permutation = torch.tensor([2, 0, 4, 1, 3])
-    permuted_observation = {
-        "designs": observation["designs"][:, permutation],
-        "outcomes": observation["outcomes"][:, permutation],
-        "mask": observation["mask"][:, permutation],
-        "t": observation["t"],
-    }
+    permuted_observation = History(
+        max_episode_length=5,
+        designs=designs[:, permutation],
+        outcomes=outcomes[:, permutation],
+        mask=mask[:, permutation],
+    )
 
     actual = critic(observation, action)
     permuted = critic(permuted_observation, action)
@@ -156,14 +157,19 @@ def test_soft_q_network_ignores_masked_history_entries():
         outcome_low=-3.0,
         outcome_high=10.0,
     )
-    observation = {
-        "designs": torch.randn(2, 4, 2),
-        "outcomes": torch.randn(2, 4, 1),
-        "mask": torch.tensor([[True, True, False, False], [True, False, False, False]]),
-    }
-    modified_observation = {key: value.clone() for key, value in observation.items()}
-    modified_observation["designs"][~observation["mask"]] = 1000.0
-    modified_observation["outcomes"][~observation["mask"]] = -1000.0
+    designs = torch.randn(2, 4, 2)
+    outcomes = torch.randn(2, 4, 1)
+    mask = torch.tensor([[True, True, False, False], [True, False, False, False]])
+    observation = History(
+        max_episode_length=4, designs=designs, outcomes=outcomes, mask=mask
+    )
+    mod_designs = designs.clone()
+    mod_outcomes = outcomes.clone()
+    mod_designs[~mask] = 1000.0
+    mod_outcomes[~mask] = -1000.0
+    modified_observation = History(
+        max_episode_length=4, designs=mod_designs, outcomes=mod_outcomes, mask=mask
+    )
     action = torch.randn(2, 2)
 
     actual = critic(observation, action)
@@ -193,11 +199,12 @@ def test_soft_q_network_uses_reference_history_and_action_coordinates():
     critic.encoder_net.register_forward_pre_hook(record_encoder_input)
     critic.emitter_net.register_forward_pre_hook(record_emitter_input)
     physical_design = torch.tensor([[1.0, 4.0]])
-    observation = {
-        "designs": physical_design.unsqueeze(1),
-        "outcomes": torch.tensor([[[3.5]]]),
-        "mask": torch.tensor([[True]]),
-    }
+    observation = History(
+        max_episode_length=1,
+        designs=physical_design.unsqueeze(1),
+        outcomes=torch.tensor([[[3.5]]]),
+        mask=torch.tensor([[True]]),
+    )
 
     critic(observation, physical_design)
 
@@ -247,13 +254,10 @@ def test_compact_replay_buffer_reconstructs_padded_transitions(monkeypatch):
     assert sample.batch_size == torch.Size([3])
     assert sample["observation", "designs"].shape == (3, 3, 2)
     assert sample["observation", "mask"].dtype == torch.bool
-    assert sample["observation", "t"].dtype == torch.long
     assert sample["done"].dtype == torch.bool
     torch.testing.assert_close(sample["action"], actions[0])
     torch.testing.assert_close(sample["reward"], torch.tensor([1.0, 2.0, 3.0]))
     assert sample["done"].tolist() == [False, False, True]
-    assert sample["observation", "t"].tolist() == [0, 1, 2]
-    assert sample["next_observation", "t"].tolist() == [1, 2, 3]
     assert sample["observation", "mask"].tolist() == [
         [False, False, False],
         [True, False, False],
@@ -316,7 +320,6 @@ def test_compact_replay_buffer_rollover_retains_newest_transitions(monkeypatch):
         sample["reward"],
         torch.tensor([4.0, 5.0, 6.0, 7.0, 8.0]),
     )
-    assert sample["observation", "t"].tolist() == [1, 2, 0, 1, 2]
 
 
 def test_rlboed_requires_outcome_bounds():

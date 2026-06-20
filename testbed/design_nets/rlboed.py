@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
+from testbed.envs.history import History
 
 
 class RLBOEDQNetwork(nn.Module):
@@ -41,11 +42,11 @@ class RLBOEDQNetwork(nn.Module):
         self.register_buffer("outcome_low", torch.as_tensor(outcome_low))
         self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
 
-    def forward(self, observation: dict[str, Tensor], action: Tensor) -> Tensor:
+    def forward(self, observation: History, action: Tensor) -> Tensor:
         """Estimates Q from a permutation-invariant history summary and action."""
-        designs = observation["designs"]
-        outcomes = observation["outcomes"]
-        mask = observation.get("mask")
+        designs = observation.designs
+        outcomes = observation.outcomes
+        mask = observation.mask
         batch_size = designs.shape[0]
         history_length = designs.shape[1]
         designs = designs.reshape(batch_size, history_length, self.dim_design)

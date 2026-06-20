@@ -23,10 +23,10 @@ from testbed.designers import PolicyDesigner
 from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
-    PaddedHistoryObservation,
     RLBOEDDenseReward,
 )
 from testbed.envs.design_spaces import DesignSpace
+from testbed.envs.history import History
 from testbed.tasks.base_task import Task
 
 from .base import FitResult
@@ -224,7 +224,6 @@ class _CompactEpisodeReplayBuffer:
             "designs": designs,
             "outcomes": outcomes,
             "mask": mask,
-            "t": history_lengths.to(dtype=torch.long),
         }
 
 
@@ -289,7 +288,6 @@ class RLBOED:
             horizon=horizon,
             design_space=design_space,
             reward_fn=RLBOEDDenseReward(cfg.n_contrastive),
-            observation_fn=PaddedHistoryObservation(horizon),
             batch_shape=(cfg.num_envs,),
         )
 
@@ -419,8 +417,20 @@ class RLBOED:
             ):
                 for _ in range(cfg.gradient_steps_per_iteration):
                     data = replay_buffer.sample().to(device, non_blocking=True)
-                    data_obs = data["observation"]
-                    data_next_obs = data["next_observation"]
+                    _obs = data["observation"]
+                    _next_obs = data["next_observation"]
+                    data_obs = History(
+                        max_episode_length=horizon,
+                        designs=_obs["designs"],
+                        outcomes=_obs["outcomes"],
+                        mask=_obs["mask"],
+                    )
+                    data_next_obs = History(
+                        max_episode_length=horizon,
+                        designs=_next_obs["designs"],
+                        outcomes=_next_obs["outcomes"],
+                        mask=_next_obs["mask"],
+                    )
                     data_actions = data["action"]
                     data_rewards = data["reward"]
                     data_dones = data["done"]

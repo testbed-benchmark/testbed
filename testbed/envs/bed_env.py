@@ -11,7 +11,6 @@ from torch import Tensor
 from ..tasks.base_task import Task
 from .design_spaces import DesignSpace
 from .history import History
-from .observations import ObservationFunction, PaddedHistoryObservation
 from .rewards import RewardFunction, ZeroReward
 
 
@@ -24,7 +23,6 @@ class BEDEnv:
         horizon: int,
         design_space: DesignSpace | None = None,
         reward_fn: RewardFunction | None = None,
-        observation_fn: ObservationFunction | None = None,
         batch_shape: tuple[int, ...] = (),
         validate_actions: bool = True,
         project_actions: bool = True,
@@ -40,11 +38,6 @@ class BEDEnv:
             design_space if design_space is not None else task.design_space
         )
         self.reward_fn = reward_fn if reward_fn is not None else ZeroReward()
-        self.observation_fn = (
-            observation_fn
-            if observation_fn is not None
-            else PaddedHistoryObservation(self.horizon)
-        )
         self.batch_shape = torch.Size(batch_shape)
         self.validate_actions = validate_actions
         self.project_actions = project_actions
@@ -94,10 +87,9 @@ class BEDEnv:
     ) -> tuple[Any, dict]:
         """Starts a new episode.
 
-        Observation functions may return views or references to mutable environment
-        state. In particular, ``PaddedHistoryObservation`` returns the tensors owned
-        by ``env.history``. Callers that retain an observation across ``step()`` or
-        ``reset()`` must clone it first.
+        Returns ``env.history`` as the observation. The returned ``History`` owns
+        mutable tensor state; callers that retain an observation across ``step()``
+        or ``reset()`` must clone its tensors first.
         """
         if seed is not None:
             torch.manual_seed(seed)
@@ -116,7 +108,6 @@ class BEDEnv:
         )
         self._has_reset = True
         self.reward_fn.reset(self)
-        self.observation_fn.reset(self)
 
         info: dict[str, Any] = {"t": self.t, "history": self.history}
         if options:
@@ -124,15 +115,14 @@ class BEDEnv:
         if self.include_theta_in_info:
             info["theta_0"] = self.theta_0
             info["theta_all"] = self.theta_all
-        return self.observation_fn(self), info
+        return self.history, info
 
     def step(self, action: Tensor) -> tuple[Any, Tensor, Tensor, Tensor, dict]:
         """Advances the environment by one design/outcome pair.
 
-        This updates ``env.history`` in place before constructing the returned
-        observation. Previously returned observations that reference the history,
-        including those from ``PaddedHistoryObservation``, therefore change during
-        this call. Clone observations before ``step()`` when storing transitions.
+        Returns the updated ``env.history`` as the observation. The ``History``
+        tensors are mutated in place, so clone them before ``step()`` if you need
+        to retain the pre-step values (e.g. when storing transitions).
         """
         if not self._has_reset:
             raise RuntimeError("Environment must be reset before step().")
@@ -159,7 +149,7 @@ class BEDEnv:
         if self.include_theta_in_info:
             info["theta_0"] = self.theta_0
             info["theta_all"] = self.theta_all
-        return self.observation_fn(self), reward, self.terminated, self.truncated, info
+        return self.history, reward, self.terminated, self.truncated, info
 
     def _init_theta_all(
         self, *, theta: Tensor | None = None, theta_all: Tensor | None = None

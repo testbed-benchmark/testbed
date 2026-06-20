@@ -63,11 +63,10 @@ class StochasticDesignNet(DesignNet):
         raise NotImplementedError
 
     def sample_from_observation(self, obs, *, deterministic: bool = False):
-        """Samples from a padded-history observation dictionary.
+        """Samples from a ``History`` observation.
 
         Args:
-            obs: Observation dictionary produced by `PaddedHistoryObservation`,
-                containing `outcomes`, `designs`, and optionally `mask`.
+            obs: ``History`` returned by ``BEDEnv.reset()`` or ``BEDEnv.step()``.
             deterministic: If True, return the deterministic policy action instead
                 of a random sample.
 
@@ -75,9 +74,9 @@ class StochasticDesignNet(DesignNet):
             A policy sample for the observation.
         """
         return self.sample(
-            obs["outcomes"],
-            obs["designs"],
-            mask=obs.get("mask"),
+            obs.outcomes,
+            obs.designs,
+            mask=obs.mask,
             deterministic=deterministic,
         )
 

@@ -6,11 +6,8 @@ from testbed.envs import (
     BoxDesignSpace,
     CallableReward,
     CategoricalDesignSpace,
-    FlatPaddedHistoryObservation,
     History,
-    HistoryObservation,
     IntegerDesignSpace,
-    PaddedHistoryObservation,
     ProductDesignSpace,
     RLBOEDDenseReward,
     RLBOEDTerminalReward,
@@ -159,15 +156,14 @@ def test_bed_env_reset_and_step_shapes():
         horizon=3,
         design_space=make_space(task),
         reward_fn=RLBOEDDenseReward(n_contrastive=2),
-        observation_fn=PaddedHistoryObservation(),
         batch_shape=(5,),
     )
 
     obs, info = env.reset(seed=123)
     assert info["t"] == 0
-    assert obs["designs"].shape == (5, 3, 2)
-    assert obs["outcomes"].shape == (5, 3, 1)
-    assert obs["mask"].shape == (5, 3)
+    assert obs.designs.shape == (5, 3, 2)
+    assert obs.outcomes.shape == (5, 3, 1)
+    assert obs.mask.shape == (5, 3)
     assert env.theta_all.shape == (5, 3, 1, 2)
 
     action = torch.zeros(5, 2)
@@ -178,7 +174,7 @@ def test_bed_env_reset_and_step_shapes():
     assert not truncated.any()
     assert info["history"].designs.shape == (5, 3, 2)
     assert info["history"].mask.shape == (5, 3)
-    assert obs["mask"].sum().item() == 5
+    assert obs.mask.sum().item() == 5
 
 
 def test_bed_env_requires_reset_and_rejects_invalid_horizon():
@@ -230,7 +226,7 @@ def test_bed_env_reset_accepts_theta_all_and_batch_shape_override():
     assert env.batch_shape == torch.Size([4])
     assert torch.equal(env.theta_all, theta_all)
     assert torch.equal(env.theta_0, theta_all[:, 0])
-    assert obs["designs"].shape == (4, 1, 2)
+    assert obs.designs.shape == (4, 1, 2)
 
 
 def test_bed_env_reset_rejects_bad_theta_shapes():
@@ -291,7 +287,7 @@ def test_bed_env_can_reset_after_termination():
     obs, info = env.reset(seed=1)
     assert info["t"] == 0
     assert not env.terminated
-    assert obs["mask"].sum() == 0
+    assert obs.mask.sum() == 0
 
 
 def test_bed_env_projects_box_actions():
@@ -329,8 +325,8 @@ def test_bed_env_step_detaches_rollout_tensors_by_default():
 
     assert action.requires_grad
     assert not reward.requires_grad
-    assert not obs["designs"].requires_grad
-    assert not obs["outcomes"].requires_grad
+    assert not obs.designs.requires_grad
+    assert not obs.outcomes.requires_grad
     assert not info["raw_action"].requires_grad
     assert not info["design"].requires_grad
     assert not info["outcome"].requires_grad
@@ -348,56 +344,13 @@ def test_bed_env_scalar_batch_shape():
     obs, _ = env.reset(seed=0)
     _, reward, terminated, truncated, info = env.step(torch.zeros(2))
 
-    assert obs["designs"].shape == (1, 2)
+    assert obs.designs.shape == (1, 2)
     assert reward.shape == ()
     assert terminated.shape == ()
     assert terminated
     assert not truncated
     assert info["history"].outcomes.shape == (1, 1)
     assert info["history"].mask.shape == (1,)
-
-
-def test_observation_variants_and_error_paths():
-    task = make_task()
-    env = BEDEnv(
-        task,
-        horizon=2,
-        design_space=make_space(task),
-        reward_fn=ZeroReward(),
-        observation_fn=HistoryObservation(),
-        batch_shape=(2,),
-    )
-
-    obs, _ = env.reset(seed=0)
-    assert obs is env.history
-
-    env.observation_fn = PaddedHistoryObservation(include_timestep=False)
-    obs = env.observation_fn(env)
-    assert set(obs) == {"designs", "outcomes", "mask"}
-
-    env.observation_fn = PaddedHistoryObservation(horizon=3)
-    with pytest.raises(ValueError, match="horizon must match"):
-        env.observation_fn(env)
-
-
-def test_flat_padded_history_observation_without_timestep_and_scaled_timestep():
-    task = make_task()
-    env = BEDEnv(
-        task,
-        horizon=2,
-        design_space=make_space(task),
-        reward_fn=ZeroReward(),
-        observation_fn=FlatPaddedHistoryObservation(include_timestep=False),
-        batch_shape=(1,),
-    )
-
-    obs, _ = env.reset(seed=0)
-    assert obs.shape == (1, 2 * 2 + 2 * 1 + 2)
-
-    env.observation_fn = FlatPaddedHistoryObservation()
-    obs, *_ = env.step(torch.zeros(1, 2))
-    assert obs.shape == (1, 2 * 2 + 2 * 1 + 2 + 1)
-    assert torch.equal(obs[:, -1], torch.tensor([0.5]))
 
 
 def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():

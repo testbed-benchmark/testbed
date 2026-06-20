@@ -9,12 +9,6 @@ from .design_spaces import (
     ProductDesignSpace,
 )
 from .history import History
-from .observations import (
-    FlatPaddedHistoryObservation,
-    HistoryObservation,
-    ObservationFunction,
-    PaddedHistoryObservation,
-)
 from .rewards import (
     CallableReward,
     RewardFunction,

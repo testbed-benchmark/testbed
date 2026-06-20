@@ -11,7 +11,6 @@ from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
     CategoricalDesignSpace,
-    PaddedHistoryObservation,
     ZeroReward,
 )
 from testbed.tasks import LocationFinding
@@ -175,7 +174,7 @@ def test_tanh_gaussian_forward_returns_deterministic_action():
     assert torch.equal(forward_action, sample.deterministic_action)
 
 
-def test_tanh_gaussian_policy_accepts_padded_observation_dict():
+def test_tanh_gaussian_policy_accepts_history_observation():
     task = LocationFinding(n_sources=1, dim_theta=2, noise_scale=0.2)
     space = make_space()
     env = BEDEnv(
@@ -183,7 +182,6 @@ def test_tanh_gaussian_policy_accepts_padded_observation_dict():
         horizon=3,
         design_space=space,
         reward_fn=ZeroReward(),
-        observation_fn=PaddedHistoryObservation(),
         batch_shape=(4,),
     )
     policy = TanhGaussianPolicyNet(space)
