@@ -15,8 +15,8 @@ from testbed.design_nets import (
 from testbed.designers import PolicyDesigner
 from testbed.envs import BoxDesignSpace
 from testbed.envs.history import History
-from testbed.methods import RLBOED, FitResult, RLBOEDConfig
-from testbed.methods.rlboed import _CompactEpisodeReplayBuffer
+from testbed.methods import FitResult, RLBOEDConfig, fit_rlboed
+from testbed.methods.rlboed import _CompactEpisodeReplayBuffer, _resolve_buffer_device
 from testbed.tasks import LocationFinding
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "examples" / "sac_location_finding.py"
@@ -361,13 +361,12 @@ def test_rlboed_rejects_unavailable_cuda_buffer_device():
         outcome_high=10.0,
         buffer_device="cuda",
     )
-    trainer = RLBOED(config)
 
     if torch.cuda.is_available():
-        assert trainer._resolve_buffer_device().type == "cuda"
+        assert _resolve_buffer_device(config).type == "cuda"
     else:
         with pytest.raises(ValueError, match="requires CUDA"):
-            trainer._resolve_buffer_device()
+            _resolve_buffer_device(config)
 
 
 def test_rlboed_rejects_gpu_buffer_device_alias():
@@ -378,7 +377,7 @@ def test_rlboed_rejects_gpu_buffer_device_alias():
     )
 
     with pytest.raises(ValueError, match="cpu.*cuda"):
-        RLBOED(config)._resolve_buffer_device()
+        _resolve_buffer_device(config)
 
 
 def test_rlboed_config_generic_defaults_match_example():
@@ -421,12 +420,12 @@ def test_rlboed_config_generic_defaults_match_example():
         )
 
 
-def test_rlboed_requires_design_space():
+def test_rlboed_requires_box_design_space():
     task = LocationFinding(n_sources=1, dim_theta=2)
     config = RLBOEDConfig(outcome_low=-3.0, outcome_high=10.0)
 
-    with pytest.raises(TypeError):
-        RLBOED(config).fit(task, horizon=2)
+    with pytest.raises(TypeError, match="BoxDesignSpace"):
+        fit_rlboed(task, 2, object(), config)
 
 
 def test_deployable_policy_maps_raw_history_to_physical_designs():
@@ -471,11 +470,7 @@ def test_rlboed_fit_returns_deployable_designer(tmp_path):
         verbose=False,
     )
 
-    result = RLBOED(config).fit(
-        task,
-        horizon=2,
-        design_space=design_space,
-    )
+    result = fit_rlboed(task, 2, design_space, config)
 
     assert isinstance(result, FitResult)
     assert isinstance(result.designer, PolicyDesigner)
@@ -531,7 +526,7 @@ def test_rlboed_fixed_alpha_disables_temperature_optimizer(alpha):
         verbose=False,
     )
 
-    result = RLBOED(config).fit(task, horizon=2, design_space=design_space)
+    result = fit_rlboed(task, 2, design_space, config)
 
     assert result.checkpoint["alpha"].item() == pytest.approx(alpha)
     assert result.checkpoint["alpha_optimizer"] is None

@@ -12,7 +12,7 @@ from testbed.envs import (
     BoxDesignSpace,
     RLBOEDDenseReward,
 )
-from testbed.methods import RLBOED, RLBOEDConfig
+from testbed.methods import RLBOEDConfig, fit_rlboed
 from testbed.tasks import LocationFinding
 
 EVAL_N_CONTRASTIVE = 1_000_000
@@ -172,11 +172,7 @@ def train(args: Args):
         entropy_anneal_rate=args.entropy_anneal_rate,
         log_frequency=args.log_frequency,
     )
-    result = RLBOED(config).fit(
-        task,
-        horizon=args.horizon,
-        design_space=design_space,
-    )
+    result = fit_rlboed(task, args.horizon, design_space, config)
 
     if not args.save:
         return result, None

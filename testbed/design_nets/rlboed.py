@@ -74,16 +74,11 @@ class RLBOEDQNetwork(nn.Module):
             1.0,
         )
 
-        if history_length == 0:
-            history_summary = hist_designs.new_zeros(batch_size, self.dim_emb)
-        else:
-            encoded_history = self.encoder_net(
-                torch.cat([outcomes, hist_designs], dim=-1)
-            )
-            if mask is not None:
-                encoded_history = encoded_history * mask.to(
-                    dtype=encoded_history.dtype
-                ).unsqueeze(-1)
-            history_summary = encoded_history.sum(dim=1)
+        encoded_history = self.encoder_net(torch.cat([outcomes, hist_designs], dim=-1))
+        if mask is not None:
+            encoded_history = encoded_history * mask.to(
+                dtype=encoded_history.dtype
+            ).unsqueeze(-1)
+        history_summary = encoded_history.sum(dim=1)
 
         return self.emitter_net(torch.cat([history_summary, design], dim=-1))
