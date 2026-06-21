@@ -17,24 +17,11 @@ from testbed.tasks import LocationFinding
 
 EVAL_N_CONTRASTIVE = 1_000_000
 
-PAPER_SEEDS = (
-    373693,
-    943929,
-    675273,
-    79387,
-    508137,
-    557390,
-    756177,
-    155183,
-    262598,
-    572185,
-)
-
 
 @dataclass
 class Args:
     exp_name: str = Path(__file__).stem
-    seed: int = PAPER_SEEDS[0]
+    seed: int = 373693
     torch_deterministic: bool = True
     cuda: bool = True
     save: bool = True
