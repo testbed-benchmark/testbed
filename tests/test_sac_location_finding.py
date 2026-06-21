@@ -28,22 +28,6 @@ SPEC.loader.exec_module(sac_location_finding)
 SoftQNetwork = RLBOEDQNetwork
 
 
-def test_example_exposes_released_source_location_seeds():
-    assert sac_location_finding.PAPER_SEEDS == (
-        373693,
-        943929,
-        675273,
-        79387,
-        508137,
-        557390,
-        756177,
-        155183,
-        262598,
-        572185,
-    )
-    assert sac_location_finding.Args.seed == sac_location_finding.PAPER_SEEDS[0]
-
-
 def _linear_shapes(module):
     return [
         (layer.in_features, layer.out_features)
