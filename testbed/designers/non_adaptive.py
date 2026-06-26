@@ -19,7 +19,7 @@ class StaticDesigner(Designer, nn.Module):
         """Returns the design parameter device."""
         return self.design.device
 
-    def propose_design(self, y_history, design_history):
+    def propose_design(self, y_history, design_history, *, mask=None):
         """Returns the design for the current step."""
         # y_history: [b, t, *event_shape_y]; t is the current step index
         t = y_history.shape[1]
@@ -59,7 +59,7 @@ class RandomDesigner(Designer):
         """Returns the distribution device."""
         return self.dist.device
 
-    def propose_design(self, y_history, design_history):
+    def propose_design(self, y_history, design_history, *, mask=None):
         """Samples one design per batch item."""
         # y_history, design_history: [b, T, **dim]
         # returns: [b, **dim_design]

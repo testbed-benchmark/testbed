@@ -2,6 +2,32 @@
 
 import torch
 import torch.nn as nn
+from torch import Tensor
+
+
+def _initialize_linear_layers(module: nn.Module) -> None:
+    """Matches the Xavier/zero-bias initialization used by Garage."""
+    for layer in module.modules():
+        if isinstance(layer, nn.Linear):
+            nn.init.xavier_uniform_(layer.weight)
+            nn.init.zeros_(layer.bias)
+
+
+def affine_rescale(
+    value: Tensor,
+    source_low,
+    source_high,
+    target_low,
+    target_high,
+) -> Tensor:
+    """Affinely rescales a tensor between bounded coordinate systems."""
+    source_low = torch.as_tensor(source_low, device=value.device, dtype=value.dtype)
+    source_high = torch.as_tensor(source_high, device=value.device, dtype=value.dtype)
+    target_low = torch.as_tensor(target_low, device=value.device, dtype=value.dtype)
+    target_high = torch.as_tensor(target_high, device=value.device, dtype=value.dtype)
+    return target_low + (value - source_low) * (
+        (target_high - target_low) / (source_high - source_low)
+    )
 
 
 class MLP(nn.Module):
