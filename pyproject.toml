@@ -27,7 +27,8 @@ full = [
     'notebook',
     'omegaconf',
     'pyyaml',
-    'pyro-ppl'
+    'pyro-ppl',
+    'hydra-core',
 ]
 dev = ["pytest", "pre-commit", "ruff", 'rich']
 docs = ["sphinx"]
