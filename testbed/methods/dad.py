@@ -55,8 +55,8 @@ class Trainer:
                 eval_metrics = self.evaluate()
                 eval_metrics['step'] = step
 
-                if self.metric_logger is not None:
-                    self.metric_logger.log(eval_metrics)
+                if self.manager.metric_logger is not None:
+                    self.manager.metric_logger.log(eval_metrics)
 
             self._maybe_save_best(step, metrics, min_step=500)
         
@@ -93,7 +93,7 @@ class Trainer:
             'gain': gain.item(),
         }
 
-    def evaluate():
+    def evaluate(self):
         """Evaluates training progress using SNMC/SPCE lower/upper bounds."""
         # TODO
         # Evaluating with a large inner sample size slows down training quite a bit. 

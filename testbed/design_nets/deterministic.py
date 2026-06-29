@@ -5,11 +5,12 @@ from math import prod
 import torch
 from torch import nn
 
+from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP
 
 
-class DeterministicPolicyNet(nn.Module):
+class DeterministicPolicyNet(DesignNet):
     """Arbitrary encoder followed by an MLP readout layer.
     
     The MLP readout produces a flat output which is reshaped to event_shape_out.
