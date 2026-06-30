@@ -50,13 +50,3 @@ ruff format
 pytest
 ```
 4. Submit a pull request with a clear description of your changes and why they are needed.
-
-# Recipes
-
-> [!WARNING]
-> These recipes are only meant as a guideline/illustration -- you will likely need to modify them for your use case.
-
-While TestBED is intended as a general-purpose library, we have also included some basic recipes to help get you started:
-- `recipes/train.py` provides a basic `Trainer` class for end-to-end training of policy networks
-- `recipes/location_finding/train_lf.py` is an example script that glues together all of the TestBED components
-- `recipes/location_finding/config.yaml` gives some suggested default hyperparameters which will yield a strong baseline

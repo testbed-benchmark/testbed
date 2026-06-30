@@ -102,3 +102,15 @@ def normal_log_prob(y, loc, scale):
 def normal_cdf(x):
     """Computes the standard normal CDF."""
     return 0.5 * (1 + torch.erf(x / 2**0.5))
+
+
+def sort_by_norm(x):
+    """Sorts n_objects according to their norm."""
+    # x: [batch, n_objects, *object_shape]
+    b, n = x.shape[:2]
+
+    norms = torch.linalg.norm(x.flatten(start_dim=2), dim=-1)
+    idx = torch.argsort(norms, dim=1)
+
+    idx = idx.view(b, n, *([1] * (x.ndim - 2))).expand_as(x)
+    return torch.gather(x, dim=1, index=idx)

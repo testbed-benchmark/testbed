@@ -18,6 +18,8 @@ urls = {Homepage = 'https://github.com/testbed-benchmark/testbed'}
 dependencies = [
     'numpy>=1.24',
     "torch>=2.1",
+    'pyyaml',
+    'hydra-core',
 ]
 
 [project.optional-dependencies]
@@ -26,8 +28,7 @@ full = [
     'jupyterlab',
     'notebook',
     'omegaconf',
-    'pyyaml',
-    'pyro-ppl'
+    'pyro-ppl',
 ]
 dev = ["pytest", "pre-commit", "ruff", 'rich']
 docs = ["sphinx"]
