@@ -147,26 +147,26 @@ class ConstantElasticityOfSubstitution(Task):
         """Computes the mean and scale of the latent Gaussian eta.
 
         Args:
-            theta: Parameter tensor of shape `[b, 5]`, where the columns are
+            theta: Parameter tensor of shape `[..., 5]`, where the columns are
                 `(rho, alpha_1, alpha_2, alpha_3, u)`.
-            design: Design tensor of shape `[b, 6]`, representing two baskets
+            design: Design tensor of shape `[..., 6]`, representing two baskets
                 of goods `(x, x')` each in `[0, 100]^3`, flattened.
 
         Returns:
-            A tuple `(mu, sigma)`, each of shape `[b, 1]`, giving the mean and
+            A tuple `(mu, sigma)`, each of shape `[..., 1]`, giving the mean and
             standard deviation of the latent Gaussian `eta`.
         """
-        rho = theta[:, 0:1]
-        alpha = theta[:, 1:4]
-        u = theta[:, 4:5]
+        rho = theta[..., 0:1]
+        alpha = theta[..., 1:4]
+        u = theta[..., 4:5]
 
         def utility(basket):
             base = basket.clamp(min=self.clamp_val)
             inner = (base.pow(rho) * alpha).sum(dim=-1, keepdim=True)
             return inner.pow(1.0 / rho)
 
-        x = design[:, 0:3]
-        x_prime = design[:, 3:6]
+        x = design[..., 0:3]
+        x_prime = design[..., 3:6]
 
         u_x = utility(x)
         u_xp = utility(x_prime)
@@ -192,8 +192,13 @@ class ConstantElasticityOfSubstitution(Task):
 
         # Continuous part: y = sigmoid(eta), eta = logit(y).
         # p(y) = N(logit(y); mu, sigma^2) / (y (1 - y)).
-        log_y = torch.log(y)
-        log1m_y = torch.log1p(-y)
+        # Clamp y into [eps, 1 - eps] before taking logs. Boundary observations
+        # select the censoring branches below, but feeding log(0) into the
+        # unused continuous branch would otherwise poison the backward pass with
+        # NaNs (0 * -inf) in theta.grad / design.grad.
+        y_safe = y.clamp(self.epsilon, 1.0 - self.epsilon)
+        log_y = torch.log(y_safe)
+        log1m_y = torch.log1p(-y_safe)
         logit_y = log_y - log1m_y
         log_cont = normal_log_prob(logit_y, mu, sigma) - log_y - log1m_y
 
