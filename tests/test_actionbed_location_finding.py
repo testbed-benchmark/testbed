@@ -10,7 +10,7 @@ from testbed.core.manager import Manager
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import MSELoss, SortedMSELoss
 from testbed.designers import PolicyDesigner
-from testbed.methods.actionbed import ActionBEDTrainer, resolve_event_shape_action
+from testbed.methods.actionbed import Trainer, resolve_event_shape_action
 from testbed.tasks import LocationFinding
 
 
@@ -40,7 +40,7 @@ def _make_trainer(task=None, cfg=None, manager=None):
     all_params = list(policy_net.parameters()) + list(action_net.parameters())
     optimizer = torch.optim.Adam(all_params, lr=1e-3)
     return (
-        ActionBEDTrainer(task, designer, action_net, loss_fn, optimizer, cfg, manager),
+        Trainer(task, designer, action_net, loss_fn, optimizer, cfg, manager),
         policy_net,
         action_net,
     )
@@ -57,7 +57,7 @@ def test_trainer_requires_policy_designer():
     optimizer = torch.optim.Adam(action_net.parameters(), lr=1e-3)
 
     with pytest.raises(AssertionError):
-        ActionBEDTrainer(task, object(), action_net, MSELoss(), optimizer, cfg)
+        Trainer(task, object(), action_net, MSELoss(), optimizer, cfg)
 
 
 def test_train_step_returns_loss_key():
@@ -168,7 +168,7 @@ def test_sorted_mse_loss_is_compatible_with_train_step():
     designer = PolicyDesigner(task, T=3, policy_net=policy_net)
     all_params = list(policy_net.parameters()) + list(action_net.parameters())
     optimizer = torch.optim.Adam(all_params, lr=1e-3)
-    trainer = ActionBEDTrainer(
+    trainer = Trainer(
         task, designer, action_net, SortedMSELoss(), optimizer, cfg, manager=None
     )
 

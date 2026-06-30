@@ -42,7 +42,7 @@ class Trainer:
             metrics = self.train_step()
             metrics["step"] = step
 
-            if self.manager.metric_logger is not None:
+            if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
 
             # evaluation

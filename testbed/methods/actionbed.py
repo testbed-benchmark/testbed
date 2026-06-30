@@ -14,7 +14,7 @@ from testbed.designers import PolicyDesigner
 # ============================================================================
 
 
-class ActionBEDTrainer:
+class Trainer:
     """Training class for ActionBED-style training."""
 
     def __init__(
@@ -31,6 +31,7 @@ class ActionBEDTrainer:
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.cfg = cfg
+
         self.manager = manager
 
         # checkpointing
@@ -45,7 +46,7 @@ class ActionBEDTrainer:
             metrics = self.train_step()
             metrics["step"] = step
 
-            if self.manager.metric_logger is not None:
+            if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
 
             # evaluation
@@ -53,7 +54,7 @@ class ActionBEDTrainer:
                 eval_metrics = self.evaluate()
                 eval_metrics["step"] = step
 
-                if self.manager is not None:
+                if self.manager:
                     self.manager.event_logger.info(
                         f"[Eval @ step {step}/{self.cfg.n_train_iter}]: loss={eval_metrics['eval/loss']}"
                     )
@@ -65,7 +66,8 @@ class ActionBEDTrainer:
         save_path = self.manager.path("final_step.pt")
         torch.save(
             {
-                "model": self.designer.policy_net.state_dict(),
+                "design_net": self.designer.policy_net.state_dict(),
+                "action_net": self.action_net.state_dict(),
                 "step": step,
             },
             save_path,
@@ -111,6 +113,9 @@ class ActionBEDTrainer:
             y_obs, design_obs = self.designer.rollout(theta)
             action = self.action_net(y_obs, design_obs)
             loss = self.loss_fn(action, theta)
+
+        self.designer.policy_net.train()
+        self.action_net.train()
 
         return {
             "eval/loss": loss.item(),
@@ -224,7 +229,7 @@ if __name__ == "__main__":
 
     loss_fn = instantiate(cfg.loss)
 
-    trainer = ActionBEDTrainer(
+    trainer = Trainer(
         task=task,
         designer=designer,
         action_net=action_net,
