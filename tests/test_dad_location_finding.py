@@ -142,7 +142,8 @@ def test_train_runs_with_periodic_evaluation(tmp_path):
     assert "model" in checkpoint
 
     records = [
-        json.loads(line) for line in (run_dir / "metrics.jsonl").read_text().splitlines()
+        json.loads(line)
+        for line in (run_dir / "metrics.jsonl").read_text().splitlines()
     ]
     assert any("gain" in record for record in records)
     assert any("eval/spce" in record for record in records)

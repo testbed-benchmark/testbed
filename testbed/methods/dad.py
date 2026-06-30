@@ -14,20 +14,15 @@ from testbed.designers import PolicyDesigner
 # Training class
 # ============================================================================
 
+
 class Trainer:
     """Training class for DAD-style training."""
 
-    def __init__(
-        self,
-        task,
-        designer,
-        objective,
-        optimizer,
-        cfg,
-        manager=None
-    ):
+    def __init__(self, task, designer, objective, optimizer, cfg, manager=None):
         """Initializes the trainer."""
-        assert isinstance(designer, PolicyDesigner), 'This Trainer assumes your designer is a PolicyDesigner object.'
+        assert isinstance(designer, PolicyDesigner), (
+            "This Trainer assumes your designer is a PolicyDesigner object."
+        )
 
         self.task = task
         self.designer = designer
@@ -45,7 +40,7 @@ class Trainer:
 
         for step in range(self.cfg.n_train_iter):
             metrics = self.train_step()
-            metrics['step'] = step
+            metrics["step"] = step
 
             if self.manager.metric_logger is not None:
                 self.manager.metric_logger.log(metrics)
@@ -53,19 +48,22 @@ class Trainer:
             # evaluation
             if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
                 eval_metrics = self.evaluate()
-                eval_metrics['step'] = step
+                eval_metrics["step"] = step
 
                 if self.manager.metric_logger is not None:
                     self.manager.metric_logger.log(eval_metrics)
 
             self._maybe_save_best(step, metrics, min_step=500)
-        
+
         save_path = self.manager.path("final_step.pt")
-        torch.save({
-            "model": self.designer.policy_net.state_dict(),
-            "step": step,
-        }, save_path)
-    
+        torch.save(
+            {
+                "model": self.designer.policy_net.state_dict(),
+                "step": step,
+            },
+            save_path,
+        )
+
         if self.manager.metric_logger is not None:
             self.manager.metric_logger.close()
 
@@ -90,33 +88,30 @@ class Trainer:
         self.optimizer.step()
 
         return {
-            'gain': gain.item(),
+            "gain": gain.item(),
         }
 
     def evaluate(self):
         """Evaluates training progress using SNMC/SPCE lower/upper bounds."""
-        # TODO
-        # Evaluating with a large inner sample size slows down training quite a bit. 
-        # It's also memory intensive and kills my local machine. 
+        # TODO
+        # Evaluating with a large inner sample size slows down training quite a bit.
+        # It's also memory intensive and kills my local machine.
 
-        return {
-            'eval/spce': 0.0,
-            'eval/snmc': 0.0
-        }
+        return {"eval/spce": 0.0, "eval/snmc": 0.0}
 
     def _maybe_save_best(self, step, metrics, min_step=0):
         # Saves a checkpoint of the model if it's the lowest training loss seen so far
         # NB: assumes our objective is maximizing a gain
-        
-        # min_step controls how long we wait before saving; useful for avoiding a ton of i/o at the start
+
+        # min_step controls how long we wait before saving; useful for avoiding a ton of i/o at the start
         if step < min_step:
             return
 
         if self.manager is None:
             return
 
-        step = metrics['step']
-        metric_val = metrics['gain']
+        step = metrics["step"]
+        metric_val = metrics["gain"]
         is_better = metric_val > self.best_metric
 
         if is_better:
@@ -124,18 +119,24 @@ class Trainer:
 
             chkpt_path = self.manager.path("best.pt")
 
-            torch.save({
-                "model": self.designer.policy_net.state_dict(),
-                "step": step,
-                "metric": metric_val,
-            }, chkpt_path)
+            torch.save(
+                {
+                    "model": self.designer.policy_net.state_dict(),
+                    "step": step,
+                    "metric": metric_val,
+                },
+                chkpt_path,
+            )
 
-            self.manager.event_logger.info(f'Saving new best checkpoint : gain={metric_val} @ step={step}')
+            self.manager.event_logger.info(
+                f"Saving new best checkpoint : gain={metric_val} @ step={step}"
+            )
 
 
 # ============================================================================
 # Helper + factory functions
 # ============================================================================
+
 
 def build_design_net(cfg, task):
     """Instantiates the design policy network."""
@@ -146,14 +147,15 @@ def build_design_net(cfg, task):
         event_shape_out=task.event_shape_design,
     )
 
+
 def build_objective(cfg, task):
     """Instantiates the objective for training DAD.
 
     SNMC/SPCE need the task to construct, so it can't be a pure instantiate.
     """
     objectives = {
-        'snmc': lambda: SNMC(task, n_contrastive=cfg.objective.n_inner),
-        'spce': lambda: SPCE(task, n_contrastive=cfg.objective.n_inner),
+        "snmc": lambda: SNMC(task, n_contrastive=cfg.objective.n_inner),
+        "spce": lambda: SPCE(task, n_contrastive=cfg.objective.n_inner),
     }
     name = cfg.objective.name
     return objectives[name]()
@@ -163,7 +165,7 @@ def build_objective(cfg, task):
 # Entry point
 # ============================================================================
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     """ Entry point for DAD training.
 
     Usage: python dad.py config='./path/to/config.yaml' save_dir='./save_path/'
@@ -200,8 +202,7 @@ if __name__ == '__main__':
         objective=objective,
         optimizer=optimizer,
         cfg=cfg,
-        manager=manager
+        manager=manager,
     )
 
     trainer.train()
-    

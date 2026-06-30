@@ -7,4 +7,13 @@ from .loss import LogMSELoss, SortedLogMSELoss, SortedMSELoss
 from .snmc import NMC, SNMC
 from .spce import PCE, SPCE
 
-__all__ = ["NMC", "PCE", "SNMC", "SPCE", "MSELoss", "LogMSELoss", "SortedMSELoss", "SortedLogMSELoss"]
+__all__ = [
+    "NMC",
+    "PCE",
+    "SNMC",
+    "SPCE",
+    "MSELoss",
+    "LogMSELoss",
+    "SortedMSELoss",
+    "SortedLogMSELoss",
+]

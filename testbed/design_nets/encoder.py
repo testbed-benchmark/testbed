@@ -59,14 +59,16 @@ class HistoryEncoder(nn.Module, ABC):
 
     def empty_encoding(self, b):
         """Encoding for the empty history (T=0) case."""
-        return self.null_enc.unsqueeze(0).expand(b, -1) # [b, dim_emb]
+        return self.null_enc.unsqueeze(0).expand(b, -1)  # [b, dim_emb]
 
     def forward(self, y_history, design_history, mask=None):
         """Runs the forward pass of the encoder."""
         b, T = y_history.shape[0], y_history.shape[1]
         tokens = torch.cat(
-            [y_history.reshape(b, T, self.dim_y),
-             design_history.reshape(b, T, self.dim_design)],
+            [
+                y_history.reshape(b, T, self.dim_y),
+                design_history.reshape(b, T, self.dim_design),
+            ],
             dim=-1,
         )  # [b, T, dim_in]
         return self.encode_tokens(tokens, mask)
@@ -75,8 +77,15 @@ class HistoryEncoder(nn.Module, ABC):
 class AttentiveEncoder(HistoryEncoder):
     """Transformer + CLS-token pooling. No positional encoding, so permutation invariant."""
 
-    def __init__(self, event_shape_y, event_shape_design,
-                 dim_h=256, dim_emb=128, num_heads=4, num_blocks=3):
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        dim_h=256,
+        dim_emb=128,
+        num_heads=4,
+        num_blocks=3,
+    ):
         """Initializes."""
         super().__init__(event_shape_y, event_shape_design, dim_emb)
 
@@ -95,26 +104,28 @@ class AttentiveEncoder(HistoryEncoder):
         Note that masking is not yet supported for the AttentiveEncoder.
         """
         if mask is not None:
-            raise NotImplementedError('Masking not yet supported with an attention-based encoder.')
-        
+            raise NotImplementedError(
+                "Masking not yet supported with an attention-based encoder."
+            )
+
         b, T, _ = tokens.shape
 
-        # Note: you could remove this branch entirely. 
+        # Note: you could remove this branch entirely.
         # In that case, the cls_token is passed through the transformer, and the resulting output
         # is used as the T=0 encoding. This is entirely valid, but in my (limited) testing,
         # keeping a separate null encoding worked a bit better. YMMV. -- Gav
         if T == 0:
             return self.empty_encoding(b)
-        
+
         # Pre-attention embeddings
-        enc = self.input_encoder(tokens)              # [b, T, dim_emb]
-        cls = self.cls_token.expand(b, -1, -1)        # [b, 1, dim_emb]
-        enc = torch.cat([cls, enc], dim=1)            # [b, T+1, dim_emb]
+        enc = self.input_encoder(tokens)  # [b, T, dim_emb]
+        cls = self.cls_token.expand(b, -1, -1)  # [b, 1, dim_emb]
+        enc = torch.cat([cls, enc], dim=1)  # [b, T+1, dim_emb]
 
         # Attention blocks
-        for block in self.blocks:                     
+        for block in self.blocks:
             enc = block(enc)
-        
+
         # CLS readout
         return enc[:, 0, :]
 
@@ -122,8 +133,9 @@ class AttentiveEncoder(HistoryEncoder):
 class DeepSetEncoder(HistoryEncoder):
     """Per-step MLP + masked sum pooling (DeepSets style). Permutation invariant."""
 
-    def __init__(self, event_shape_y, event_shape_design, 
-                 dim_h=128, hidden_layers=2, dim_emb=64):
+    def __init__(
+        self, event_shape_y, event_shape_design, dim_h=128, hidden_layers=2, dim_emb=64
+    ):
         """Initializes."""
         super().__init__(event_shape_y, event_shape_design, dim_emb)
 
@@ -136,21 +148,21 @@ class DeepSetEncoder(HistoryEncoder):
 
         if T == 0:
             return self.empty_encoding(b)
-        
-        enc = self.encoder_net(tokens)                 # [b, T, dim_emb]
+
+        enc = self.encoder_net(tokens)  # [b, T, dim_emb]
 
         if mask is not None:
-            m = mask.to(enc.dtype).unsqueeze(-1)               # [b, T, 1]
+            m = mask.to(enc.dtype).unsqueeze(-1)  # [b, T, 1]
             enc = enc * m
-            pooled = enc.sum(dim=1)                            # [b, dim_emb]
-            
+            pooled = enc.sum(dim=1)  # [b, dim_emb]
+
             # Need to handle the case that the tokens are fully masked
             # Here, we return self.null_enc instead of just zeroes
-            empty_row = mask.any(dim=1).logical_not()          # [b] — True if all padding
+            empty_row = mask.any(dim=1).logical_not()  # [b] — True if all padding
             pooled = torch.where(
                 empty_row.unsqueeze(-1), self.empty_encoding(b), pooled
             )
 
             return pooled
-        
-        return enc.sum(dim=1)                          # [b, dim_emb]
+
+        return enc.sum(dim=1)  # [b, dim_emb]

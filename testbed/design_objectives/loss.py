@@ -29,6 +29,7 @@ class LogMSELoss(_Loss):
         mse = F.mse_loss(input, target, reduction=self.reduction)
         return mse + torch.log(mse + self.epsilon)
 
+
 class SortedMSELoss(_Loss):
     """Implements the OrderedMSE Loss proposed in the ActionBED paper.
 
@@ -36,6 +37,7 @@ class SortedMSELoss(_Loss):
     Note that they only propose this for the "Log-MSE" loss, but this version
     is for the standard MSE loss, up to sorting.
     """
+
     __constants__ = ["reduction", "epsilon"]
 
     def __init__(
@@ -67,6 +69,7 @@ class SortedLogMSELoss(_Loss):
 
     See https://arxiv.org/abs/2606.23662 Equation 56.
     """
+
     __constants__ = ["reduction", "epsilon"]
 
     def __init__(
