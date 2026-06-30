@@ -1,7 +1,7 @@
 """Constant elasticity of substitution (CES) task.
 
 References:
-    1. https://arxiv.org/abs/1911.00294
+    1. https://arxiv.org/abs/1903.05480
     2. https://arxiv.org/abs/2202.00821
 """
 
@@ -18,10 +18,11 @@ from .base_task import Task
 class CESPrior(Distribution):
     """Prior over the CES latent variables (rho, alpha, u).
 
-    Follows Foster et al. (2020), Appendix B.2 of the RL-BOED paper:
+    The default prior is:
         rho   ~ Beta(1, 1)
         alpha ~ Dirichlet([1, 1, 1])
         log u ~ N(1, 3).
+
     Convention: theta = (rho, alpha_1, alpha_2, alpha_3, u).
     """
 
@@ -89,7 +90,7 @@ class CESPrior(Distribution):
         return logp_rho + logp_alpha + logp_u
 
 
-class ConstantElasticityOfSubstitution(Task):
+class CES(Task):
     """Implements the constant elasticity of substitution (CES) model.
 
     A participant compares two baskets of goods x, x' in [0, 100]^3 and rates
@@ -139,9 +140,7 @@ class ConstantElasticityOfSubstitution(Task):
 
     def __repr__(self):
         """Returns a compact representation."""
-        return (
-            f"ConstantElasticityOfSubstitution(tau={self.tau}, epsilon={self.epsilon})"
-        )
+        return f"CES(tau={self.tau}, epsilon={self.epsilon})"
 
     def make_eta_params(self, theta, design):
         """Computes the mean and scale of the latent Gaussian eta.

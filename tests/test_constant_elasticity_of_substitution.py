@@ -1,10 +1,10 @@
 import torch
 
-from testbed.tasks import ConstantElasticityOfSubstitution
+from testbed.tasks import CES
 
 
 def make_task():
-    return ConstantElasticityOfSubstitution()
+    return CES()
 
 
 def make_design(batch_shape=(4,)):
