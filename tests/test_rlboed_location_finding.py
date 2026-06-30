@@ -1,12 +1,14 @@
-"""Tests for the SAC location-finding example."""
+"""Tests for the RL-BOED (SAC) training components."""
 
-import importlib.util
+import json
 from pathlib import Path
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 from torch import nn
 
+from testbed.core.manager import Manager
 from testbed.design_nets import (
     DeepSetGaussianActor,
     RLBOEDQNetwork,
@@ -15,17 +17,28 @@ from testbed.design_nets import (
 from testbed.designers import PolicyDesigner
 from testbed.envs import BoxDesignSpace
 from testbed.envs.history import History
-from testbed.methods import FitResult, RLBOEDConfig, fit_rlboed
-from testbed.methods.rlboed import _CompactEpisodeReplayBuffer, _resolve_buffer_device
+from testbed.methods.rlboed import (
+    Trainer,
+    _CompactEpisodeReplayBuffer,
+    _resolve_buffer_device,
+    _set_seed,
+    build_design_space,
+    build_env,
+    build_replay_buffer,
+    make_networks,
+    validate_config,
+)
 from testbed.tasks import LocationFinding
 
-EXAMPLE_PATH = Path(__file__).parents[1] / "examples" / "sac_location_finding.py"
-SPEC = importlib.util.spec_from_file_location("sac_location_finding", EXAMPLE_PATH)
-assert SPEC is not None
-assert SPEC.loader is not None
-sac_location_finding = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(sac_location_finding)
 SoftQNetwork = RLBOEDQNetwork
+
+RECIPE_PATH = (
+    Path(__file__).parents[1]
+    / "testbed"
+    / "recipes"
+    / "location_finding"
+    / "rlboed.yaml"
+)
 
 
 def _linear_shapes(module):
@@ -34,6 +47,11 @@ def _linear_shapes(module):
         for layer in module.modules()
         if isinstance(layer, nn.Linear)
     ]
+
+
+# ============================================================================
+# Network architecture
+# ============================================================================
 
 
 def test_actor_defaults_match_released_rl_boed_architecture():
@@ -202,6 +220,36 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
     )
 
 
+def test_deployable_policy_maps_raw_history_to_physical_designs():
+    design_space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
+    actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
+    policy = TanhGaussianPolicyNet(
+        design_space,
+        actor=actor,
+        normalize_design_history=True,
+        design_history_bounds=(0.0, 1.0),
+        outcome_bounds=(-3.0, 10.0),
+    )
+    raw_y = torch.tensor([[[3.5]]])
+    raw_designs = torch.tensor([[[-4.0, 4.0]]])
+
+    mean, _ = actor(
+        torch.tensor([[[0.5]]]),
+        torch.tensor([[[0.0, 1.0]]]),
+    )
+    expected = torch.tanh(mean) * 4.0
+    actual = policy(raw_y, raw_designs)
+
+    torch.testing.assert_close(actual, expected)
+    assert torch.all(actual >= -4.0)
+    assert torch.all(actual <= 4.0)
+
+
+# ============================================================================
+# Replay buffer
+# ============================================================================
+
+
 def test_compact_replay_buffer_reconstructs_padded_transitions(monkeypatch):
     buffer = _CompactEpisodeReplayBuffer(
         buffer_size=3,
@@ -306,11 +354,6 @@ def test_compact_replay_buffer_rollover_retains_newest_transitions(monkeypatch):
     )
 
 
-def test_rlboed_requires_outcome_bounds():
-    with pytest.raises(TypeError):
-        RLBOEDConfig()
-
-
 def test_compact_replay_buffer_respects_storage_device():
     requested_device = "cuda" if torch.cuda.is_available() else "cpu"
     buffer = _CompactEpisodeReplayBuffer(
@@ -339,178 +382,245 @@ def test_compact_replay_buffer_respects_storage_device():
     assert sample.design.device == buffer.designs.device
 
 
-def test_rlboed_rejects_unavailable_cuda_buffer_device():
-    config = RLBOEDConfig(
-        outcome_low=-3.0,
-        outcome_high=10.0,
-        buffer_device="cuda",
-    )
+# ============================================================================
+# Buffer-device resolution
+# ============================================================================
 
+
+def test_rlboed_rejects_unavailable_cuda_buffer_device():
     if torch.cuda.is_available():
-        assert _resolve_buffer_device(config).type == "cuda"
+        assert _resolve_buffer_device("cuda").type == "cuda"
     else:
         with pytest.raises(ValueError, match="requires CUDA"):
-            _resolve_buffer_device(config)
+            _resolve_buffer_device("cuda")
 
 
 def test_rlboed_rejects_gpu_buffer_device_alias():
-    config = RLBOEDConfig(
-        outcome_low=-3.0,
-        outcome_high=10.0,
-        buffer_device="gpu",
-    )
-
     with pytest.raises(ValueError, match="cpu.*cuda"):
-        _resolve_buffer_device(config)
+        _resolve_buffer_device("gpu")
 
 
-def test_rlboed_config_generic_defaults_match_example():
-    config = RLBOEDConfig(
-        outcome_low=sac_location_finding.Args.outcome_low,
-        outcome_high=sac_location_finding.Args.outcome_high,
+# ============================================================================
+# Trainer
+# ============================================================================
+
+
+def _tiny_cfg(**sac_overrides):
+    """A small CPU config that exercises a full warm-up + gradient step."""
+    cfg = OmegaConf.create(
+        {
+            "seed": 373693,
+            "torch_deterministic": True,
+            "device": "cpu",
+            "horizon": 2,
+            "design_space": {"low": -2.0, "high": 3.0},
+            "reward": {"n_contrastive": 2, "outcome_low": -3.0, "outcome_high": 10.0},
+            "eval_every": 0,
+            "eval_n_contrastive": 4,
+            "sac": {
+                "num_training_iterations": 3,
+                "num_envs": 2,
+                "buffer_size": 20,
+                "buffer_device": "cpu",
+                "gamma": 0.9,
+                "tau": 1e-3,
+                "batch_size": 2,
+                "learning_starts": 1,
+                "gradient_steps_per_iteration": 1,
+                "policy_lr": 1e-4,
+                "q_lr": 3e-4,
+                "policy_init_std": 3**-0.5,
+                "policy_frequency": 1,
+                "target_network_frequency": 1,
+                "alpha": None,
+                "initial_alpha": 1.0,
+                "target_entropy": None,
+                "entropy_anneal_rate": 1 / 1.4e4,
+                "log_frequency": 1,
+            },
+        }
     )
-
-    assert config.outcome_low == sac_location_finding.Args.outcome_low
-    assert config.outcome_high == sac_location_finding.Args.outcome_high
-    assert not hasattr(config, "design_low")
-    assert not hasattr(config, "design_high")
-
-    for field_name in (
-        "seed",
-        "torch_deterministic",
-        "n_contrastive",
-        "num_training_iterations",
-        "num_envs",
-        "buffer_size",
-        "buffer_device",
-        "gamma",
-        "tau",
-        "batch_size",
-        "learning_starts",
-        "gradient_steps_per_iteration",
-        "policy_lr",
-        "q_lr",
-        "policy_init_std",
-        "policy_frequency",
-        "target_network_frequency",
-        "alpha",
-        "initial_alpha",
-        "target_entropy",
-        "entropy_anneal_rate",
-        "log_frequency",
-    ):
-        assert getattr(config, field_name) == getattr(
-            sac_location_finding.Args, field_name
-        )
+    for key, value in sac_overrides.items():
+        cfg.sac[key] = value
+    return cfg
 
 
-def test_rlboed_requires_box_design_space():
+def _build_trainer(cfg, *, manager=None):
+    task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
+    design_space = build_design_space(cfg, task)
+    validate_config(task, cfg, design_space)
+    _set_seed(cfg.seed, cfg.torch_deterministic)
+    nets = make_networks(task, design_space, cfg, task.device)
+    env = build_env(cfg, task, design_space)
+    replay_buffer = build_replay_buffer(cfg, task)
+    designer = PolicyDesigner(task, cfg.horizon, nets.actor, deterministic=False)
+    return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
+
+
+def _episodic_returns(trainer):
+    trainer.train()
+    return [m["episodic_return"] for m in trainer.metrics if "episodic_return" in m]
+
+
+def test_trainer_requires_policy_designer():
+    cfg = _tiny_cfg()
+    task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
+    design_space = build_design_space(cfg, task)
+    _set_seed(cfg.seed, cfg.torch_deterministic)
+    nets = make_networks(task, design_space, cfg, task.device)
+    env = build_env(cfg, task, design_space)
+    replay_buffer = build_replay_buffer(cfg, task)
+
+    with pytest.raises(AssertionError):
+        Trainer(task, object(), env, replay_buffer, nets, cfg)
+
+
+def test_validate_config_requires_box_design_space():
+    cfg = _tiny_cfg()
     task = LocationFinding(n_sources=1, dim_theta=2)
-    config = RLBOEDConfig(outcome_low=-3.0, outcome_high=10.0)
 
     with pytest.raises(TypeError, match="BoxDesignSpace"):
-        fit_rlboed(task, 2, object(), config)
+        validate_config(task, cfg, object())
 
 
-def test_deployable_policy_maps_raw_history_to_physical_designs():
-    design_space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
-    policy = TanhGaussianPolicyNet(
-        design_space,
-        actor=actor,
-        normalize_design_history=True,
-        design_history_bounds=(0.0, 1.0),
-        outcome_bounds=(-3.0, 10.0),
-    )
-    raw_y = torch.tensor([[[3.5]]])
-    raw_designs = torch.tensor([[[-4.0, 4.0]]])
-
-    mean, _ = actor(
-        torch.tensor([[[0.5]]]),
-        torch.tensor([[[0.0, 1.0]]]),
-    )
-    expected = torch.tanh(mean) * 4.0
-    actual = policy(raw_y, raw_designs)
-
-    torch.testing.assert_close(actual, expected)
-    assert torch.all(actual >= -4.0)
-    assert torch.all(actual <= 4.0)
-
-
-def test_rlboed_fit_returns_deployable_designer(tmp_path):
+def test_validate_config_rejects_inverted_outcome_bounds():
+    cfg = _tiny_cfg()
+    cfg.reward.outcome_low = 10.0
+    cfg.reward.outcome_high = -3.0
     task = LocationFinding(n_sources=1, dim_theta=2)
-    design_space = BoxDesignSpace(-2.0, 3.0, event_shape=(2,))
-    config = RLBOEDConfig(
-        outcome_low=-3.0,
-        outcome_high=10.0,
-        n_contrastive=2,
-        num_training_iterations=3,
-        num_envs=2,
-        buffer_size=20,
-        batch_size=2,
-        learning_starts=1,
-        gradient_steps_per_iteration=1,
-        log_frequency=1,
-        verbose=False,
+    design_space = build_design_space(cfg, task)
+
+    with pytest.raises(ValueError, match="outcome_low"):
+        validate_config(task, cfg, design_space)
+
+
+def test_train_step_returns_episodic_return():
+    trainer = _build_trainer(_tiny_cfg())
+    metrics = trainer.train_step()
+    assert "episodic_return" in metrics
+    assert isinstance(metrics["episodic_return"], float)
+
+
+def test_train_step_updates_actor_parameters():
+    trainer = _build_trainer(_tiny_cfg())
+    before = [p.clone() for p in trainer.nets.actor.parameters()]
+
+    trainer.train_step()
+
+    assert any(
+        not torch.equal(b, a) for b, a in zip(before, trainer.nets.actor.parameters())
     )
 
-    result = fit_rlboed(task, 2, design_space, config)
 
-    assert isinstance(result, FitResult)
-    assert isinstance(result.designer, PolicyDesigner)
-    assert isinstance(result.designer.policy_net, TanhGaussianPolicyNet)
-    assert not result.designer.deterministic
-    assert result.designer.policy_net.design_history_bounds == (0.0, 1.0)
-    assert result.checkpoint["config"]["gamma"] == config.gamma
-    assert result.checkpoint["alpha"].item() > 0
-    assert "log_alpha" in result.checkpoint
-    assert result.checkpoint["alpha_optimizer"] is not None
-    assert result.checkpoint["optimization_step"] == 3
-    assert result.checkpoint["env_steps"] == 12
-    assert result.checkpoint["training_iterations"] == config.num_training_iterations
-    assert result.checkpoint["global_step"] == config.num_training_iterations
-    torch.testing.assert_close(
-        result.checkpoint["design_low"],
-        torch.full((2,), -2.0),
-    )
-    torch.testing.assert_close(
-        result.checkpoint["design_high"],
-        torch.full((2,), 3.0),
-    )
+def test_train_is_reproducible_with_fixed_seed():
+    returns_a = _episodic_returns(_build_trainer(_tiny_cfg()))
+    returns_b = _episodic_returns(_build_trainer(_tiny_cfg()))
 
-    theta = task.sample_prior(2)
-    y_history, design_history = result.designer.rollout(theta)
+    assert len(returns_a) == 3
+    assert returns_a == returns_b
+
+
+def test_train_without_manager_populates_metrics():
+    trainer = _build_trainer(_tiny_cfg())
+    trainer.train()
+
+    assert any("episodic_return" in m for m in trainer.metrics)
+    assert any("qf_loss" in m for m in trainer.metrics)
+
+
+def test_train_writes_checkpoints_and_metrics(tmp_path):
+    cfg = _tiny_cfg()
+    manager = Manager(
+        cfg, root=str(tmp_path), name="run", timestamp=False, console=False
+    )
+    trainer = _build_trainer(cfg, manager=manager)
+
+    trainer.train()
+
+    run_dir = tmp_path / "run"
+    final = torch.load(run_dir / "final_step.pt", weights_only=True)
+    assert final["step"] == cfg.sac.num_training_iterations - 1
+    assert "designer" in final
+    assert (run_dir / "best.pt").exists()
+
+    records = [
+        json.loads(line)
+        for line in (run_dir / "metrics.jsonl").read_text().splitlines()
+    ]
+    assert any("episodic_return" in record for record in records)
+    assert any("qf_loss" in record for record in records)
+
+
+def test_trainer_produces_deployable_designer(tmp_path):
+    cfg = _tiny_cfg()
+    trainer = _build_trainer(cfg)
+
+    trainer.train()
+
+    assert isinstance(trainer.designer, PolicyDesigner)
+    assert isinstance(trainer.designer.policy_net, TanhGaussianPolicyNet)
+    assert not trainer.designer.deterministic
+    assert trainer.designer.policy_net.design_history_bounds == (0.0, 1.0)
+
+    checkpoint = trainer.build_checkpoint(step=cfg.sac.num_training_iterations - 1)
+    assert checkpoint["config"]["sac"]["gamma"] == cfg.sac.gamma
+    assert checkpoint["alpha"].item() > 0
+    assert "log_alpha" in checkpoint
+    assert checkpoint["alpha_optimizer"] is not None
+    assert checkpoint["optimization_step"] == 3
+    assert checkpoint["env_steps"] == 12
+    assert checkpoint["training_iterations"] == cfg.sac.num_training_iterations
+    assert checkpoint["global_step"] == cfg.sac.num_training_iterations
+    torch.testing.assert_close(checkpoint["design_low"], torch.full((2,), -2.0))
+    torch.testing.assert_close(checkpoint["design_high"], torch.full((2,), 3.0))
+
+    theta = trainer.task.sample_prior(2)
+    y_history, design_history = trainer.designer.rollout(theta)
     assert y_history.shape == (2, 2, 1)
     assert design_history.shape == (2, 2, 2)
     assert torch.all(design_history >= -2.0)
     assert torch.all(design_history <= 3.0)
 
     checkpoint_path = tmp_path / "rlboed.pt"
-    result.save(checkpoint_path)
-    checkpoint = torch.load(checkpoint_path, weights_only=True)
-    assert "designer" in checkpoint
-    assert "actor_optimizer" in checkpoint
+    torch.save(trainer.build_checkpoint(), checkpoint_path)
+    reloaded = torch.load(checkpoint_path, weights_only=True)
+    assert "designer" in reloaded
+    assert "actor_optimizer" in reloaded
 
 
 @pytest.mark.parametrize("alpha", [0.0, 0.2])
 def test_rlboed_fixed_alpha_disables_temperature_optimizer(alpha):
-    task = LocationFinding(n_sources=1, dim_theta=2)
-    design_space = BoxDesignSpace(-2.0, 3.0, event_shape=(2,))
-    config = RLBOEDConfig(
-        outcome_low=-3.0,
-        outcome_high=10.0,
-        n_contrastive=1,
-        num_training_iterations=1,
-        num_envs=2,
-        buffer_size=10,
-        batch_size=2,
-        learning_starts=1,
-        gradient_steps_per_iteration=1,
-        alpha=alpha,
-        verbose=False,
-    )
+    cfg = _tiny_cfg(num_training_iterations=1, buffer_size=10, alpha=alpha)
+    cfg.reward.n_contrastive = 1
+    trainer = _build_trainer(cfg)
 
-    result = fit_rlboed(task, 2, design_space, config)
+    trainer.train()
 
-    assert result.checkpoint["alpha"].item() == pytest.approx(alpha)
-    assert result.checkpoint["alpha_optimizer"] is None
+    checkpoint = trainer.build_checkpoint()
+    assert checkpoint["alpha"].item() == pytest.approx(alpha)
+    assert checkpoint["alpha_optimizer"] is None
+
+
+# ============================================================================
+# Recipe
+# ============================================================================
+
+
+def test_recipe_reproduces_reference_experiment():
+    """The shipped recipe encodes the reference location-finding experiment."""
+    cfg = OmegaConf.load(RECIPE_PATH)
+
+    assert cfg.task._target_ == "testbed.tasks.LocationFinding"
+    assert cfg.task.n_sources == 2
+    assert cfg.task.dim_theta == 2
+    assert cfg.horizon == 30
+    assert cfg.design_space.low == -4.0
+    assert cfg.design_space.high == 4.0
+    assert cfg.reward.outcome_low == -3.0
+    assert cfg.reward.outcome_high == 10.0
+    assert cfg.reward.n_contrastive == 100_000
+    assert cfg.seed == 373693
+    assert cfg.sac.num_training_iterations == 2_001
+    assert cfg.sac.policy_init_std == pytest.approx(3**-0.5)
+    assert cfg.sac.entropy_anneal_rate == pytest.approx(1 / 1.4e4)
+    assert cfg.eval_n_contrastive == 1_000_000

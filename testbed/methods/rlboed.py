@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import copy
+import os
 import random
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from math import ceil, log
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from hydra.utils import instantiate
+from omegaconf import OmegaConf
 
+from testbed.core.manager import Manager
 from testbed.design_nets import (
     DeepSetGaussianActor,
     RLBOEDQNetwork,
@@ -27,8 +31,6 @@ from testbed.envs.design_spaces import DesignSpace
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
 from testbed.tasks.base_task import Task
-
-from .base import FitResult
 
 
 @dataclass
@@ -263,71 +265,35 @@ class _CompactEpisodeReplayBuffer:
         }
 
 
-@dataclass
-class RLBOEDConfig:
-    """RL-BOED and SAC hyperparameters."""
-
-    outcome_low: float
-    outcome_high: float
-    seed: int = 373693
-    torch_deterministic: bool = True
-
-    n_contrastive: int = 100_000
-
-    num_training_iterations: int = 2_001
-    num_envs: int = 100
-    buffer_size: int = 10_000_000
-    buffer_device: str = "cpu"
-    gamma: float = 0.9
-    tau: float = 1e-3
-    batch_size: int = 4096
-    learning_starts: int = 100_000
-    gradient_steps_per_iteration: int = 64
-    policy_lr: float = 1e-4
-    q_lr: float = 3e-4
-    policy_init_std: float = 3**-0.5
-    policy_frequency: int = 1
-    target_network_frequency: int = 1
-    alpha: float | None = None
-    initial_alpha: float = 1.0
-    target_entropy: float | None = None
-    entropy_anneal_rate: float = 1 / 1.4e4
-    log_frequency: int = 100
-    verbose: bool = True
-
-
-def _resolve_buffer_device(config: RLBOEDConfig) -> torch.device:
+def _resolve_buffer_device(buffer_device: str) -> torch.device:
     """Returns the replay storage device requested by the config."""
-    requested = config.buffer_device.strip().lower()
+    requested = buffer_device.strip().lower()
     try:
-        buffer_device = torch.device(requested)
+        resolved = torch.device(requested)
     except RuntimeError as error:
         raise ValueError(
             "buffer_device must be 'cpu', 'cuda', or 'cuda:<index>'."
         ) from error
 
-    if buffer_device.type not in {"cpu", "cuda"}:
+    if resolved.type not in {"cpu", "cuda"}:
         raise ValueError("buffer_device must be 'cpu', 'cuda', or 'cuda:<index>'.")
-    if buffer_device.type == "cuda":
+    if resolved.type == "cuda":
         if not torch.cuda.is_available():
             raise ValueError("buffer_device='cuda' requires CUDA to be available.")
-        if (
-            buffer_device.index is not None
-            and buffer_device.index >= torch.cuda.device_count()
-        ):
+        if resolved.index is not None and resolved.index >= torch.cuda.device_count():
             raise ValueError(
-                f"buffer_device='{buffer_device}' is outside the available "
+                f"buffer_device='{resolved}' is outside the available "
                 f"CUDA device count ({torch.cuda.device_count()})."
             )
-    return buffer_device
+    return resolved
 
 
-def _set_seed(config: RLBOEDConfig) -> None:
+def _set_seed(seed: int, torch_deterministic: bool) -> None:
     """Sets random seeds to match the reference script."""
-    random.seed(config.seed)
-    np.random.seed(config.seed)
-    torch.manual_seed(config.seed)
-    torch.backends.cudnn.deterministic = config.torch_deterministic
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.backends.cudnn.deterministic = torch_deterministic
 
 
 def _soft_update(source: torch.nn.Module, target: torch.nn.Module, tau: float) -> None:
@@ -336,43 +302,39 @@ def _soft_update(source: torch.nn.Module, target: torch.nn.Module, tau: float) -
         target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
 
 
-def validate_config(
-    task: Task,
-    horizon: int,
-    design_space: DesignSpace,
-    config: RLBOEDConfig,
-) -> None:
+def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
     """Rejects unsupported tasks and invalid settings."""
+    sac = cfg.sac
     positive_ints = {
-        "num_training_iterations": config.num_training_iterations,
-        "num_envs": config.num_envs,
-        "buffer_size": config.buffer_size,
-        "batch_size": config.batch_size,
-        "gradient_steps_per_iteration": config.gradient_steps_per_iteration,
-        "horizon": horizon,
-        "log_frequency": config.log_frequency,
-        "policy_frequency": config.policy_frequency,
-        "target_network_frequency": config.target_network_frequency,
+        "sac.num_training_iterations": sac.num_training_iterations,
+        "sac.num_envs": sac.num_envs,
+        "sac.buffer_size": sac.buffer_size,
+        "sac.batch_size": sac.batch_size,
+        "sac.gradient_steps_per_iteration": sac.gradient_steps_per_iteration,
+        "horizon": cfg.horizon,
+        "sac.log_frequency": sac.log_frequency,
+        "sac.policy_frequency": sac.policy_frequency,
+        "sac.target_network_frequency": sac.target_network_frequency,
     }
     for name, value in positive_ints.items():
         if value <= 0:
             raise ValueError(f"{name} must be positive.")
-    if config.n_contrastive < 0:
-        raise ValueError("n_contrastive must be non-negative.")
-    if config.buffer_size < config.learning_starts:
-        raise ValueError("buffer_size must be at least learning_starts.")
-    if config.outcome_low >= config.outcome_high:
-        raise ValueError("outcome_low must be less than outcome_high.")
-    if config.alpha is not None and config.alpha < 0:
-        raise ValueError("alpha must be non-negative when fixed.")
-    if config.initial_alpha <= 0:
-        raise ValueError("initial_alpha must be positive.")
-    if config.learning_starts < 0:
-        raise ValueError("learning_starts must be non-negative.")
-    if config.entropy_anneal_rate < 0:
-        raise ValueError("entropy_anneal_rate must be non-negative.")
-    if config.policy_init_std <= 0:
-        raise ValueError("policy_init_std must be positive.")
+    if cfg.reward.n_contrastive < 0:
+        raise ValueError("reward.n_contrastive must be non-negative.")
+    if sac.buffer_size < sac.learning_starts:
+        raise ValueError("sac.buffer_size must be at least sac.learning_starts.")
+    if cfg.reward.outcome_low >= cfg.reward.outcome_high:
+        raise ValueError("reward.outcome_low must be less than reward.outcome_high.")
+    if sac.alpha is not None and sac.alpha < 0:
+        raise ValueError("sac.alpha must be non-negative when fixed.")
+    if sac.initial_alpha <= 0:
+        raise ValueError("sac.initial_alpha must be positive.")
+    if sac.learning_starts < 0:
+        raise ValueError("sac.learning_starts must be non-negative.")
+    if sac.entropy_anneal_rate < 0:
+        raise ValueError("sac.entropy_anneal_rate must be non-negative.")
+    if sac.policy_init_std <= 0:
+        raise ValueError("sac.policy_init_std must be positive.")
     if task.likelihood_type != "explicit":
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
     if not isinstance(design_space, BoxDesignSpace):
@@ -395,10 +357,11 @@ class _SACNetworks:
 def make_networks(
     task: Task,
     design_space: DesignSpace,
-    config: RLBOEDConfig,
+    cfg,
     device: torch.device,
 ) -> _SACNetworks:
     """Builds the SAC actor, twin critics, target networks, optimizers, and alpha."""
+    sac = cfg.sac
     design_low = design_space.low.to(device)
     design_high = design_space.high.to(device)
     dim_y = task.event_shape_y.numel()
@@ -407,14 +370,14 @@ def make_networks(
     actor_module = DeepSetGaussianActor(
         dim_y=dim_y,
         dim_design=dim_design,
-        init_std=config.policy_init_std,
+        init_std=sac.policy_init_std,
     )
     actor = TanhGaussianPolicyNet(
         design_space,
         actor=actor_module,
         normalize_design_history=True,
         design_history_bounds=(0.0, 1.0),
-        outcome_bounds=(config.outcome_low, config.outcome_high),
+        outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
     ).to(device)
 
     critic_kwargs = {
@@ -422,8 +385,8 @@ def make_networks(
         "dim_design": dim_design,
         "design_low": design_low,
         "design_high": design_high,
-        "outcome_low": config.outcome_low,
-        "outcome_high": config.outcome_high,
+        "outcome_low": cfg.reward.outcome_low,
+        "outcome_high": cfg.reward.outcome_high,
     }
     qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
     qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
@@ -432,21 +395,19 @@ def make_networks(
 
     q_optimizer = optim.Adam(
         list(qf1.parameters()) + list(qf2.parameters()),
-        lr=config.q_lr,
+        lr=sac.q_lr,
     )
-    actor_optimizer = optim.Adam(actor.parameters(), lr=config.policy_lr)
+    actor_optimizer = optim.Adam(actor.parameters(), lr=sac.policy_lr)
 
-    if config.alpha is None:
+    if sac.alpha is None:
         log_alpha = torch.tensor(
-            log(config.initial_alpha),
+            log(sac.initial_alpha),
             device=device,
             requires_grad=True,
         )
-        alpha_optimizer: optim.Adam | None = optim.Adam(
-            [log_alpha], lr=config.policy_lr
-        )
+        alpha_optimizer: optim.Adam | None = optim.Adam([log_alpha], lr=sac.policy_lr)
     else:
-        fixed_log_alpha = float("-inf") if config.alpha == 0 else log(config.alpha)
+        fixed_log_alpha = float("-inf") if sac.alpha == 0 else log(sac.alpha)
         log_alpha = torch.tensor(fixed_log_alpha, device=device)
         alpha_optimizer = None
 
@@ -477,7 +438,7 @@ def collect_episode_batch(
     env: BEDEnv,
     actor: TanhGaussianPolicyNet,
     task: Task,
-    config: RLBOEDConfig,
+    cfg,
     *,
     seed: int | None = None,
 ) -> _EpisodeBatch:
@@ -487,7 +448,7 @@ def collect_episode_batch(
 
     obs, _ = env.reset(seed=seed)
 
-    episodic_returns = torch.zeros(config.num_envs, device=device)
+    episodic_returns = torch.zeros(cfg.sac.num_envs, device=device)
     episode_policy_designs = []
     episode_rewards = []
     episode_dones = []
@@ -529,7 +490,7 @@ def sac_update(
     target_entropy: float,
     device: torch.device,
     horizon: int,
-    config: RLBOEDConfig,
+    cfg,
     optimization_step: int,
 ) -> _SACLosses:
     """Performs one SAC gradient step and returns the losses."""
@@ -562,7 +523,7 @@ def sac_update(
         )
         next_q_value = data_rewards + (
             1.0 - data_dones.float()
-        ) * config.gamma * min_qf_next_target.view(-1)
+        ) * cfg.sac.gamma * min_qf_next_target.view(-1)
 
     qf1_a_values = nets.qf1(data_obs, data_designs).view(-1)
     qf2_a_values = nets.qf2(data_obs, data_designs).view(-1)
@@ -577,7 +538,7 @@ def sac_update(
     actor_loss = None
     alpha_loss = None
 
-    if optimization_step % config.policy_frequency == 0:
+    if optimization_step % cfg.sac.policy_frequency == 0:
         policy_sample = nets.actor.sample_from_observation(data_obs)
         pi = policy_sample.design
         log_pi = policy_sample.log_prob.unsqueeze(-1)
@@ -596,9 +557,9 @@ def sac_update(
             alpha_loss.backward()
             nets.alpha_optimizer.step()
 
-    if optimization_step % config.target_network_frequency == 0:
-        _soft_update(nets.qf1, nets.qf1_target, config.tau)
-        _soft_update(nets.qf2, nets.qf2_target, config.tau)
+    if optimization_step % cfg.sac.target_network_frequency == 0:
+        _soft_update(nets.qf1, nets.qf1_target, cfg.sac.tau)
+        _soft_update(nets.qf2, nets.qf2_target, cfg.sac.tau)
 
     return _SACLosses(
         qf_loss=qf_loss,
@@ -608,170 +569,368 @@ def sac_update(
     )
 
 
-def fit_rlboed(
-    task: Task,
-    horizon: int,
-    design_space: DesignSpace,
-    config: RLBOEDConfig,
-) -> FitResult:
-    """Trains and returns a deployable policy designer using RL-BOED with SAC."""
-    validate_config(task, horizon, design_space, config)
-    _set_seed(config)
+# ============================================================================
+# Training class
+# ============================================================================
 
-    device = task.device
-    buffer_device = _resolve_buffer_device(config)
-    nets = make_networks(task, design_space, config, device)
 
-    env = BEDEnv(
-        task,
-        horizon=horizon,
-        design_space=design_space,
-        reward_fn=RLBOEDDenseReward(config.n_contrastive),
-        batch_shape=(config.num_envs,),
-    )
+class Trainer:
+    """Training class for RL-BOED (SAC) training."""
 
-    target_entropy = (
-        -float(task.event_shape_design.numel())
-        if config.target_entropy is None
-        else float(config.target_entropy)
-    )
+    def __init__(self, task, designer, env, replay_buffer, nets, cfg, manager=None):
+        """Initializes the trainer."""
+        assert isinstance(designer, PolicyDesigner), (
+            "This Trainer assumes your designer is a PolicyDesigner object."
+        )
 
-    replay_buffer = _CompactEpisodeReplayBuffer(
-        buffer_size=config.buffer_size,
-        batch_size=config.batch_size,
-        horizon=horizon,
-        event_shape_design=task.event_shape_design,
-        event_shape_y=task.event_shape_y,
-        device=buffer_device,
-        pin_memory=device.type == "cuda" and buffer_device.type == "cpu",
-    )
+        self.task = task
+        self.designer = designer
+        self.env = env
+        self.replay_buffer = replay_buffer
+        self.nets = nets
+        self.cfg = cfg
+        self.manager = manager
 
-    metrics: list[dict[str, float]] = []
-    start_time = time.time()
-    completed_episodes = 0
-    env_steps = 0
-    optimization_step = 0
-    qf_loss = torch.tensor(float("nan"))
-    actor_loss = torch.tensor(float("nan"))
-    alpha_loss = torch.tensor(float("nan"))
+        self.device = task.device
+        self.target_entropy = (
+            -float(task.event_shape_design.numel())
+            if cfg.sac.target_entropy is None
+            else float(cfg.sac.target_entropy)
+        )
 
-    transitions_per_episode_batch = config.num_envs * horizon
-    for training_iteration in range(config.num_training_iterations):
+        # logging / checkpointing
+        self.metrics: list[dict[str, float]] = []
+        self.best_metric = -torch.inf
+
+        # training counters
+        self.optimization_step = 0
+        self.env_steps = 0
+        self.completed_episodes = 0
+        self._first_collect = True
+        self._start_time = time.time()
+
+        # most recent losses, surfaced in the periodic log
+        self._qf_loss = torch.tensor(float("nan"))
+        self._actor_loss = torch.tensor(float("nan"))
+        self._alpha_loss = torch.tensor(float("nan"))
+
+    def train(self):
+        """Full training loop."""
+        self.designer.policy_net.train()
+        self._start_time = time.time()
+
+        for step in range(self.cfg.sac.num_training_iterations):
+            metrics = self.train_step()
+            metrics["step"] = step
+            self.metrics.append(metrics)
+
+            if self.manager and self.manager.metric_logger:
+                self.manager.metric_logger.log(metrics)
+
+            # evaluation
+            if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
+                eval_metrics = self.evaluate()
+                eval_metrics["step"] = step
+                self.metrics.append(eval_metrics)
+
+                if self.manager:
+                    self.manager.event_logger.info(
+                        f"[Eval @ step {step}/{self.cfg.sac.num_training_iterations}]: "
+                        f"spce={eval_metrics['eval/spce']:.4f} "
+                        f"± {eval_metrics['eval/spce_se']:.4f}"
+                    )
+                    if self.manager.metric_logger is not None:
+                        self.manager.metric_logger.log(eval_metrics)
+
+            # periodic loss logging
+            if step % self.cfg.sac.log_frequency == 0:
+                step_metrics = self._loss_metrics(step)
+                self.metrics.append(step_metrics)
+
+                if self.manager and self.manager.metric_logger:
+                    self.manager.metric_logger.log(step_metrics)
+                if self.manager:
+                    self.manager.event_logger.info(
+                        f"iteration={step}, env_steps={self.env_steps}, "
+                        f"return={metrics['episodic_return']:.4f}, "
+                        f"qf_loss={step_metrics['qf_loss']:.4f}, "
+                        f"actor_loss={step_metrics['actor_loss']:.4f}, "
+                        f"alpha={step_metrics['alpha']:.4f}"
+                    )
+
+            self._maybe_save_best(step, metrics)
+
+        if self.manager is not None:
+            save_path = self.manager.path("final_step.pt")
+            torch.save(self.build_checkpoint(step=step), save_path)
+            if self.manager.metric_logger is not None:
+                self.manager.metric_logger.close()
+
+    def train_step(self):
+        """Takes a single training iteration (collect + gradient steps)."""
+        cfg = self.cfg
+        sac = cfg.sac
+        horizon = self.env.horizon
+        transitions_per_episode_batch = sac.num_envs * horizon
+
+        # During warm-up, collect enough episode batches to reach learning_starts.
         episode_batches = 1
-        if len(replay_buffer) < config.learning_starts:
+        if len(self.replay_buffer) < sac.learning_starts:
             episode_batches = ceil(
-                (config.learning_starts - len(replay_buffer))
+                (sac.learning_starts - len(self.replay_buffer))
                 / transitions_per_episode_batch
             )
 
         iteration_returns = []
-        for episode_batch in range(episode_batches):
-            seed = (
-                config.seed if training_iteration == 0 and episode_batch == 0 else None
+        for _ in range(episode_batches):
+            seed = cfg.seed if self._first_collect else None
+            self._first_collect = False
+            batch = collect_episode_batch(
+                self.env, self.nets.actor, self.task, cfg, seed=seed
             )
-            batch = collect_episode_batch(env, nets.actor, task, config, seed=seed)
-            replay_buffer.extend_episode_batch(
+            self.replay_buffer.extend_episode_batch(
                 designs=batch.designs,
                 outcomes=batch.outcomes,
                 policy_designs=batch.policy_designs,
                 rewards=batch.rewards,
                 dones=batch.dones,
             )
-            completed_episodes += config.num_envs
-            env_steps += config.num_envs * horizon
+            self.completed_episodes += sac.num_envs
+            self.env_steps += sac.num_envs * horizon
             iteration_returns.append(batch.episodic_return)
 
-        episode_metrics = {
-            "step": float(training_iteration),
-            "env_steps": float(env_steps),
-            "episodes": float(completed_episodes),
+        if (
+            len(self.replay_buffer) >= sac.learning_starts
+            and len(self.replay_buffer) >= sac.batch_size
+        ):
+            for _ in range(sac.gradient_steps_per_iteration):
+                losses = sac_update(
+                    self.replay_buffer,
+                    self.nets,
+                    self.target_entropy,
+                    self.device,
+                    horizon,
+                    cfg,
+                    self.optimization_step,
+                )
+                self._qf_loss = losses.qf_loss
+                if losses.actor_loss is not None:
+                    self._actor_loss = losses.actor_loss
+                if losses.alpha_loss is not None:
+                    self._alpha_loss = losses.alpha_loss
+                self.optimization_step = losses.optimization_step
+
+        if sac.alpha is None:
+            self.target_entropy -= sac.entropy_anneal_rate
+
+        return {
+            "env_steps": float(self.env_steps),
+            "episodes": float(self.completed_episodes),
             "episodic_return": torch.stack(iteration_returns).mean().item(),
         }
-        metrics.append(episode_metrics)
 
-        if (
-            len(replay_buffer) >= config.learning_starts
-            and len(replay_buffer) >= config.batch_size
-        ):
-            for _ in range(config.gradient_steps_per_iteration):
-                losses = sac_update(
-                    replay_buffer,
-                    nets,
-                    target_entropy,
-                    device,
-                    horizon,
-                    config,
-                    optimization_step,
-                )
-                qf_loss = losses.qf_loss
-                if losses.actor_loss is not None:
-                    actor_loss = losses.actor_loss
-                if losses.alpha_loss is not None:
-                    alpha_loss = losses.alpha_loss
-                optimization_step = losses.optimization_step
+    @torch.no_grad()
+    def evaluate(self):
+        """Estimates the policy-mean SPCE of the deterministic policy."""
+        self.designer.policy_net.eval()
 
-        if config.alpha is None:
-            target_entropy -= config.entropy_anneal_rate
+        eval_env = BEDEnv(
+            self.task,
+            horizon=self.env.horizon,
+            design_space=self.env.design_space,
+            reward_fn=RLBOEDDenseReward(self.cfg.eval_n_contrastive),
+            batch_shape=(self.cfg.sac.num_envs,),
+        )
+        obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
+        returns = torch.zeros(self.cfg.sac.num_envs, device=self.device)
+        for _ in range(self.env.horizon):
+            designs = self.designer.policy_net.sample_from_observation(
+                obs, deterministic=True
+            ).design
+            obs, rewards, _, _, _ = eval_env.step(designs)
+            returns += rewards
 
-        if training_iteration % config.log_frequency == 0:
-            alpha = nets.log_alpha.exp().item()
-            step_metrics = {
-                "step": float(training_iteration),
-                "env_steps": float(env_steps),
-                "sps": float(int(env_steps / (time.time() - start_time))),
-                "qf_loss": qf_loss.item() / 2.0,
-                "actor_loss": actor_loss.item(),
-                "alpha_loss": alpha_loss.item(),
-                "alpha": alpha,
-                "target_entropy": target_entropy,
-            }
-            metrics.append(step_metrics)
-            if config.verbose:
-                print(
-                    f"iteration={training_iteration}, "
-                    f"env_steps={env_steps}, "
-                    f"return={episode_metrics['episodic_return']:.4f}, "
-                    f"qf_loss={step_metrics['qf_loss']:.4f}, "
-                    f"actor_loss={step_metrics['actor_loss']:.4f}, "
-                    f"alpha={alpha:.4f}"
-                )
+        self.designer.policy_net.train()
 
-    nets.actor.eval()
-    designer = PolicyDesigner(task, horizon, nets.actor, deterministic=False)
-    design_low = design_space.low.to(device)
-    design_high = design_space.high.to(device)
-    actor_state_dict = nets.actor.state_dict()
-    checkpoint = {
-        "config": asdict(config),
-        "horizon": horizon,
-        "design_low": design_low.detach().cpu(),
-        "design_high": design_high.detach().cpu(),
-        "outcome_low": torch.as_tensor(config.outcome_low),
-        "outcome_high": torch.as_tensor(config.outcome_high),
-        # The trained actor is the deployable designer, so its weights are
-        # stored under both keys: "designer" for inference-only loading and
-        # "actor" for resuming SAC training alongside the critic/optimizers.
-        "designer": actor_state_dict,
-        "actor": actor_state_dict,
-        "qf1": nets.qf1.state_dict(),
-        "qf2": nets.qf2.state_dict(),
-        "qf1_target": nets.qf1_target.state_dict(),
-        "qf2_target": nets.qf2_target.state_dict(),
-        "actor_optimizer": nets.actor_optimizer.state_dict(),
-        "q_optimizer": nets.q_optimizer.state_dict(),
-        "alpha": nets.log_alpha.exp().detach().cpu(),
-        "log_alpha": nets.log_alpha.detach().cpu(),
-        "alpha_optimizer": (
-            None if nets.alpha_optimizer is None else nets.alpha_optimizer.state_dict()
-        ),
-        "target_entropy": target_entropy,
-        "optimization_step": optimization_step,
-        "env_steps": env_steps,
-        "training_iterations": config.num_training_iterations,
-        "global_step": config.num_training_iterations,
-    }
-    return FitResult(
+        mean = returns.mean().item()
+        standard_error = (
+            returns.std(unbiased=True).div(self.cfg.sac.num_envs**0.5).item()
+        )
+        return {"eval/spce": mean, "eval/spce_se": standard_error}
+
+    def _loss_metrics(self, step):
+        """Builds the periodic loss metrics dict."""
+        elapsed = max(time.time() - self._start_time, 1e-12)
+        return {
+            "step": step,
+            "env_steps": float(self.env_steps),
+            "sps": float(int(self.env_steps / elapsed)),
+            "qf_loss": self._qf_loss.item() / 2.0,
+            "actor_loss": self._actor_loss.item(),
+            "alpha_loss": self._alpha_loss.item(),
+            "alpha": self.nets.log_alpha.exp().item(),
+            "target_entropy": self.target_entropy,
+        }
+
+    def _maybe_save_best(self, step, metrics, min_step=0):
+        # Saves a checkpoint of the model if it's the highest episodic return seen.
+        # NB: our objective is maximizing the episodic return (an MI bound).
+
+        # min_step controls how long we wait before saving; useful for avoiding a
+        # ton of i/o at the start.
+        if step < min_step:
+            return
+
+        if self.manager is None:
+            return
+
+        metric_val = metrics["episodic_return"]
+        is_better = metric_val > self.best_metric
+
+        if is_better:
+            self.best_metric = metric_val
+
+            chkpt_path = self.manager.path("best.pt")
+            torch.save(
+                self.build_checkpoint(step=step, metric=metric_val),
+                chkpt_path,
+            )
+
+            self.manager.event_logger.info(
+                f"Saving new best checkpoint : "
+                f"episodic_return={metric_val} @ step={step}"
+            )
+
+    def build_checkpoint(self, step=None, metric=None):
+        """Builds the checkpoint dict holding weights and training state."""
+        design_space = self.env.design_space
+        # The trained actor is the deployable designer, so its weights are stored
+        # under both keys: "designer" for inference-only loading and "actor" for
+        # resuming SAC training alongside the critic/optimizers.
+        actor_state_dict = self.nets.actor.state_dict()
+        checkpoint = {
+            "config": OmegaConf.to_container(
+                self.cfg, resolve=True, throw_on_missing=False
+            ),
+            "horizon": self.env.horizon,
+            "design_low": design_space.low.detach().cpu(),
+            "design_high": design_space.high.detach().cpu(),
+            "outcome_low": torch.as_tensor(self.cfg.reward.outcome_low),
+            "outcome_high": torch.as_tensor(self.cfg.reward.outcome_high),
+            "designer": actor_state_dict,
+            "actor": actor_state_dict,
+            "qf1": self.nets.qf1.state_dict(),
+            "qf2": self.nets.qf2.state_dict(),
+            "qf1_target": self.nets.qf1_target.state_dict(),
+            "qf2_target": self.nets.qf2_target.state_dict(),
+            "actor_optimizer": self.nets.actor_optimizer.state_dict(),
+            "q_optimizer": self.nets.q_optimizer.state_dict(),
+            "alpha": self.nets.log_alpha.exp().detach().cpu(),
+            "log_alpha": self.nets.log_alpha.detach().cpu(),
+            "alpha_optimizer": (
+                None
+                if self.nets.alpha_optimizer is None
+                else self.nets.alpha_optimizer.state_dict()
+            ),
+            "target_entropy": self.target_entropy,
+            "optimization_step": self.optimization_step,
+            "env_steps": self.env_steps,
+            "training_iterations": self.cfg.sac.num_training_iterations,
+            "global_step": self.cfg.sac.num_training_iterations,
+        }
+        if step is not None:
+            checkpoint["step"] = step
+        if metric is not None:
+            checkpoint["metric"] = metric
+        return checkpoint
+
+
+# ============================================================================
+# Helper + factory functions
+# ============================================================================
+
+
+def build_design_space(cfg, task):
+    """Instantiates the box design space for the task."""
+    return BoxDesignSpace(
+        cfg.design_space.low,
+        cfg.design_space.high,
+        event_shape=task.event_shape_design,
+    )
+
+
+def build_env(cfg, task, design_space):
+    """Instantiates the BED environment with the RL-BOED dense reward."""
+    return BEDEnv(
+        task,
+        horizon=cfg.horizon,
+        design_space=design_space,
+        reward_fn=RLBOEDDenseReward(cfg.reward.n_contrastive),
+        batch_shape=(cfg.sac.num_envs,),
+    )
+
+
+def build_replay_buffer(cfg, task):
+    """Instantiates the compact episode replay buffer."""
+    buffer_device = _resolve_buffer_device(cfg.sac.buffer_device)
+    return _CompactEpisodeReplayBuffer(
+        buffer_size=cfg.sac.buffer_size,
+        batch_size=cfg.sac.batch_size,
+        horizon=cfg.horizon,
+        event_shape_design=task.event_shape_design,
+        event_shape_y=task.event_shape_y,
+        device=buffer_device,
+        pin_memory=task.device.type == "cuda" and buffer_device.type == "cpu",
+    )
+
+
+# ============================================================================
+# Entry point
+# ============================================================================
+
+if __name__ == "__main__":
+    """ Entry point for RL-BOED (SAC) training.
+
+    Usage: python rlboed.py config='./path/to/config.yaml' save_dir='./save_path/'
+    """
+    conf_cli = OmegaConf.from_cli()
+    cfg = OmegaConf.load(conf_cli.config)
+    # sync cli args with config
+    cfg = OmegaConf.merge(cfg, conf_cli)
+
+    # Manager setup
+    run_name = f"{os.environ.get('SLURM_ARRAY_JOB_ID', '0')}_{os.environ.get('SLURM_ARRAY_TASK_ID', '0')}"
+    manager = Manager(cfg, root=cfg.save_dir, name=run_name, timestamp=True)
+
+    task = instantiate(cfg.task)
+    task = task.to(cfg.device)
+
+    design_space = build_design_space(cfg, task)
+    validate_config(task, cfg, design_space)
+
+    # Seed immediately before network construction (mirrors the original
+    # fit_rlboed ordering) so weight initialization is reproducible.
+    _set_seed(cfg.seed, cfg.torch_deterministic)
+    nets = make_networks(task, design_space, cfg, task.device)
+
+    env = build_env(cfg, task, design_space)
+    replay_buffer = build_replay_buffer(cfg, task)
+    designer = PolicyDesigner(task, cfg.horizon, nets.actor, deterministic=False)
+
+    trainer = Trainer(
+        task=task,
         designer=designer,
-        metrics=metrics,
-        checkpoint=checkpoint,
+        env=env,
+        replay_buffer=replay_buffer,
+        nets=nets,
+        cfg=cfg,
+        manager=manager,
+    )
+
+    trainer.train()
+
+    eval_metrics = trainer.evaluate()
+    manager.event_logger.info(
+        f"policy-mean SPCE with {cfg.eval_n_contrastive} contrastive samples: "
+        f"{eval_metrics['eval/spce']:.4f} ± {eval_metrics['eval/spce_se']:.4f}"
     )
