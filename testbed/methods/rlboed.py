@@ -732,7 +732,6 @@ class Trainer:
     @torch.no_grad()
     def evaluate(self):
         """Estimates the policy-mean SPCE of the deterministic policy."""
-
         was_training = self.designer.policy_net.training
         cpu_rng_state = torch.get_rng_state()
         cuda_rng_state = (
