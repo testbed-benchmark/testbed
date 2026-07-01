@@ -412,7 +412,7 @@ def _tiny_cfg(**sac_overrides):
             "seed": 373693,
             "torch_deterministic": True,
             "device": "cpu",
-            "horizon": 2,
+            "T": 2,
             "design_space": {"low": -2.0, "high": 3.0},
             "reward": {"n_contrastive": 2, "outcome_low": -3.0, "outcome_high": 10.0},
             "eval_every": 0,
@@ -453,7 +453,7 @@ def _build_trainer(cfg, *, manager=None):
     nets = make_networks(task, design_space, cfg, task.device)
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = PolicyDesigner(task, cfg.horizon, nets.actor, deterministic=False)
+    designer = PolicyDesigner(task, cfg.T, nets.actor, deterministic=False)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
 
 
@@ -613,7 +613,7 @@ def test_recipe_reproduces_reference_experiment():
     assert cfg.task._target_ == "testbed.tasks.LocationFinding"
     assert cfg.task.n_sources == 2
     assert cfg.task.dim_theta == 2
-    assert cfg.horizon == 30
+    assert cfg.T == 30
     assert cfg.design_space.low == -4.0
     assert cfg.design_space.high == 4.0
     assert cfg.reward.outcome_low == -3.0

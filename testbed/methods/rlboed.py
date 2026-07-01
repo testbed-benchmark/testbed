@@ -311,7 +311,7 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         "sac.buffer_size": sac.buffer_size,
         "sac.batch_size": sac.batch_size,
         "sac.gradient_steps_per_iteration": sac.gradient_steps_per_iteration,
-        "horizon": cfg.horizon,
+        "T": cfg.T,
         "sac.log_frequency": sac.log_frequency,
         "sac.policy_frequency": sac.policy_frequency,
         "sac.target_network_frequency": sac.target_network_frequency,
@@ -732,14 +732,19 @@ class Trainer:
     @torch.no_grad()
     def evaluate(self):
         """Estimates the policy-mean SPCE of the deterministic policy."""
+
+        was_training = self.designer.policy_net.training
+        cpu_rng_state = torch.get_rng_state()
+        cuda_rng_state = (
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        )
         self.designer.policy_net.eval()
 
-        eval_env = BEDEnv(
+        eval_env = build_env(
+            self.cfg,
             self.task,
-            horizon=self.env.horizon,
-            design_space=self.env.design_space,
-            reward_fn=RLBOEDDenseReward(self.cfg.eval_n_contrastive),
-            batch_shape=(self.cfg.sac.num_envs,),
+            self.env.design_space,
+            n_contrastive=self.cfg.eval_n_contrastive,
         )
         obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
         returns = torch.zeros(self.cfg.sac.num_envs, device=self.device)
@@ -750,7 +755,10 @@ class Trainer:
             obs, rewards, _, _, _ = eval_env.step(designs)
             returns += rewards
 
-        self.designer.policy_net.train()
+        self.designer.policy_net.train(was_training)
+        torch.set_rng_state(cpu_rng_state)
+        if cuda_rng_state is not None:
+            torch.cuda.set_rng_state_all(cuda_rng_state)
 
         mean = returns.mean().item()
         standard_error = (
@@ -859,13 +867,20 @@ def build_design_space(cfg, task):
     )
 
 
-def build_env(cfg, task, design_space):
-    """Instantiates the BED environment with the RL-BOED dense reward."""
+def build_env(cfg, task, design_space, *, n_contrastive=None):
+    """Instantiates the BED environment with the RL-BOED dense reward.
+
+    ``n_contrastive`` overrides ``cfg.reward.n_contrastive`` for the reward's
+    contrastive-sample count; evaluation passes ``cfg.eval_n_contrastive`` to
+    score the policy with more contrastive samples than training.
+    """
+    if n_contrastive is None:
+        n_contrastive = cfg.reward.n_contrastive
     return BEDEnv(
         task,
-        horizon=cfg.horizon,
+        horizon=cfg.T,
         design_space=design_space,
-        reward_fn=RLBOEDDenseReward(cfg.reward.n_contrastive),
+        reward_fn=RLBOEDDenseReward(n_contrastive),
         batch_shape=(cfg.sac.num_envs,),
     )
 
@@ -876,7 +891,7 @@ def build_replay_buffer(cfg, task):
     return _CompactEpisodeReplayBuffer(
         buffer_size=cfg.sac.buffer_size,
         batch_size=cfg.sac.batch_size,
-        horizon=cfg.horizon,
+        horizon=cfg.T,
         event_shape_design=task.event_shape_design,
         event_shape_y=task.event_shape_y,
         device=buffer_device,
@@ -915,7 +930,7 @@ if __name__ == "__main__":
 
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = PolicyDesigner(task, cfg.horizon, nets.actor, deterministic=False)
+    designer = PolicyDesigner(task, cfg.T, nets.actor, deterministic=False)
 
     trainer = Trainer(
         task=task,

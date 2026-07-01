@@ -9,7 +9,7 @@ task:
   _target_: testbed.tasks.LocationFinding
   n_sources: 2
   dim_theta: 2
-horizon: 30
+T: 30
 
 # design space
 design_space:
