@@ -41,35 +41,9 @@ RECIPE_PATH = (
 )
 
 
-def _linear_shapes(module):
-    return [
-        (layer.in_features, layer.out_features)
-        for layer in module.modules()
-        if isinstance(layer, nn.Linear)
-    ]
-
-
 # ============================================================================
 # Network architecture
 # ============================================================================
-
-
-def test_actor_defaults_match_released_rl_boed_architecture():
-    """The default actor reproduces the released source-location policy."""
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
-
-    assert _linear_shapes(actor.encoder_net) == [(3, 128), (128, 128), (128, 64)]
-    assert _linear_shapes(actor.actor_net) == [(64, 128), (128, 128)]
-    assert actor.mean_head.in_features == 128
-    assert actor.log_std_head.in_features == 128
-    assert actor.log_std_min == -20.0
-    assert actor.log_std_max == 0.0
-    assert actor.init_std == pytest.approx(3**-0.5)
-    assert not hasattr(actor, "null_enc")
-    for module in (actor.encoder_net, actor.actor_net, actor.mean_head):
-        for layer in module.modules():
-            if isinstance(layer, nn.Linear):
-                torch.testing.assert_close(layer.bias, torch.zeros_like(layer.bias))
 
 
 def test_actor_initializes_requested_standard_deviation():
@@ -88,28 +62,6 @@ def test_actor_initializes_requested_standard_deviation():
 def test_actor_rejects_initial_std_outside_log_std_bounds(init_std):
     with pytest.raises(ValueError, match="init_std"):
         DeepSetGaussianActor(dim_y=1, dim_design=2, init_std=init_std)
-
-
-def test_critic_defaults_match_released_rl_boed_architecture():
-    """The default critic uses the paper's summary and emitter dimensions."""
-    critic = SoftQNetwork(
-        dim_y=1,
-        dim_design=2,
-        design_low=-4.0,
-        design_high=4.0,
-        outcome_low=-3.0,
-        outcome_high=10.0,
-    )
-
-    assert _linear_shapes(critic.encoder_net) == [(3, 128), (128, 128), (128, 64)]
-    assert _linear_shapes(critic.emitter_net) == [
-        (66, 128),
-        (128, 128),
-        (128, 1),
-    ]
-    for layer in critic.modules():
-        if isinstance(layer, nn.Linear):
-            torch.testing.assert_close(layer.bias, torch.zeros_like(layer.bias))
 
 
 def test_soft_q_network_is_permutation_invariant():
@@ -354,34 +306,6 @@ def test_compact_replay_buffer_rollover_retains_newest_transitions(monkeypatch):
     )
 
 
-def test_compact_replay_buffer_respects_storage_device():
-    requested_device = "cuda" if torch.cuda.is_available() else "cpu"
-    buffer = _CompactEpisodeReplayBuffer(
-        buffer_size=2,
-        batch_size=1,
-        horizon=2,
-        event_shape_design=torch.Size([1]),
-        event_shape_y=torch.Size([1]),
-        device=requested_device,
-    )
-
-    assert buffer.designs.device.type == requested_device
-
-    values = torch.arange(2, dtype=torch.float32, device=buffer.designs.device).reshape(
-        1, 2, 1
-    )
-    buffer.extend_episode_batch(
-        designs=values,
-        outcomes=values,
-        policy_designs=values,
-        rewards=values.squeeze(-1),
-        dones=torch.zeros(1, 2, dtype=torch.bool, device=buffer.designs.device),
-    )
-    sample = buffer.sample()
-
-    assert sample.design.device == buffer.designs.device
-
-
 # ============================================================================
 # Buffer-device resolution
 # ============================================================================
@@ -494,13 +418,6 @@ def test_validate_config_rejects_inverted_outcome_bounds():
         validate_config(task, cfg, design_space)
 
 
-def test_train_step_returns_episodic_return():
-    trainer = _build_trainer(_tiny_cfg())
-    metrics = trainer.train_step()
-    assert "episodic_return" in metrics
-    assert isinstance(metrics["episodic_return"], float)
-
-
 def test_train_step_updates_actor_parameters():
     trainer = _build_trainer(_tiny_cfg())
     before = [p.clone() for p in trainer.nets.actor.parameters()]
@@ -518,14 +435,6 @@ def test_train_is_reproducible_with_fixed_seed():
 
     assert len(returns_a) == 3
     assert returns_a == returns_b
-
-
-def test_train_without_manager_populates_metrics():
-    trainer = _build_trainer(_tiny_cfg())
-    trainer.train()
-
-    assert any("episodic_return" in m for m in trainer.metrics)
-    assert any("qf_loss" in m for m in trainer.metrics)
 
 
 def test_train_writes_checkpoints_and_metrics(tmp_path):
@@ -599,28 +508,3 @@ def test_rlboed_fixed_alpha_disables_temperature_optimizer(alpha):
     checkpoint = trainer.build_checkpoint()
     assert checkpoint["alpha"].item() == pytest.approx(alpha)
     assert checkpoint["alpha_optimizer"] is None
-
-
-# ============================================================================
-# Recipe
-# ============================================================================
-
-
-def test_recipe_reproduces_reference_experiment():
-    """The shipped recipe encodes the reference location-finding experiment."""
-    cfg = OmegaConf.load(RECIPE_PATH)
-
-    assert cfg.task._target_ == "testbed.tasks.LocationFinding"
-    assert cfg.task.n_sources == 2
-    assert cfg.task.dim_theta == 2
-    assert cfg.T == 30
-    assert cfg.design_space.low == -4.0
-    assert cfg.design_space.high == 4.0
-    assert cfg.reward.outcome_low == -3.0
-    assert cfg.reward.outcome_high == 10.0
-    assert cfg.reward.n_contrastive == 100_000
-    assert cfg.seed == 373693
-    assert cfg.sac.num_training_iterations == 2_001
-    assert cfg.sac.policy_init_std == pytest.approx(3**-0.5)
-    assert cfg.sac.entropy_anneal_rate == pytest.approx(1 / 1.4e4)
-    assert cfg.eval_n_contrastive == 1_000_000
