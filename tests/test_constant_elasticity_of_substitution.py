@@ -92,6 +92,53 @@ def test_likelihood_normalizes():
     assert torch.allclose(total, torch.tensor(1.0), atol=1e-2)
 
 
+def test_outcome_logp_backward_finite_tiny_sigma():
+    # Small u -> tiny sigma -> the censoring log_ndtr arguments blow up to ~1e8.
+    # torch.where evaluates all branches, so a non-finite gradient in a
+    # censoring branch used to poison interior rows (and saturated boundary
+    # rows) via 0 * inf = NaN.
+    task = make_task()
+    eps = task.epsilon
+    theta = torch.tensor(
+        [
+            [0.9, 1 / 3, 1 / 3, 1 / 3, 1e-7],
+            [0.9, 1 / 3, 1 / 3, 1 / 3, 1e-7],
+            [0.9, 1 / 3, 1 / 3, 1 / 3, 1e-7],
+        ],
+        requires_grad=True,
+    )
+    design = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 100.0, 100.0, 100.0],
+            [100.0, 100.0, 100.0, 0.0, 0.0, 0.0],
+            [10.0, 50.0, 90.0, 90.0, 50.0, 10.0],
+        ],
+        requires_grad=True,
+    )
+    y = torch.tensor([[0.5], [eps], [1.0 - eps]])  # interior + both boundaries
+
+    logp = task.outcome_logp(y, theta, design)
+    assert torch.isfinite(logp).all()
+
+    logp.sum().backward()
+    assert torch.isfinite(theta.grad).all()
+    assert torch.isfinite(design.grad).all()
+
+
+def test_outcome_logp_backward_finite_prior_batch():
+    # Check that the gradients are finite for a random batch.
+    torch.manual_seed(0)
+    task = make_task()
+    theta = task.sample_prior(20_000).requires_grad_(True)
+    design = (torch.rand(20_000, 6) * 100).requires_grad_(True)
+    y = task.sample_outcome(theta.detach(), design.detach())
+
+    logp = task.outcome_logp(y, theta, design)
+    logp.sum().backward()
+    assert torch.isfinite(theta.grad).all()
+    assert torch.isfinite(design.grad).all()
+
+
 def test_sample_outcome_is_reparametrized():
     task = make_task()
     design = (make_design((8,))).requires_grad_(True)

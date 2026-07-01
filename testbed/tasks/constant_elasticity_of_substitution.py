@@ -201,12 +201,18 @@ class CES(Task):
         logit_y = log_y - log1m_y
         log_cont = normal_log_prob(logit_y, mu, sigma) - log_y - log1m_y
 
-        # We need to account for the fact that the distribution of y is censored.
+        # A small sigma (small u) drives z = (logit - mu) / sigma to ~1e8, so we floor it.
+        z_min = -1e3
+
         # Lower censoring mass: P(sigmoid(eta) <= eps) = Phi((logit(eps) - mu) / sigma).
-        log_lower = torch.special.log_ndtr((self.logit_lower - mu) / sigma)
+        log_lower = torch.special.log_ndtr(
+            ((self.logit_lower - mu) / sigma).clamp(min=z_min)
+        )
 
         # Upper censoring mass: P(sigmoid(eta) >= 1 - eps) = Phi((mu - logit(1 - eps)) / sigma).
-        log_upper = torch.special.log_ndtr((mu - self.logit_upper) / sigma)
+        log_upper = torch.special.log_ndtr(
+            ((mu - self.logit_upper) / sigma).clamp(min=z_min)
+        )
 
         lower_mask = y <= self.epsilon
         upper_mask = y >= 1.0 - self.epsilon
