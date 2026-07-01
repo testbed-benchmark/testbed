@@ -105,7 +105,8 @@ class Trainer:
         """Evalutes training with a fresh batch of rollouts."""
         cfg = self.cfg
 
-        was_training = self.designer.policy_net.training
+        policy_was_training = self.designer.policy_net.training
+        action_was_training = self.action_net.training
         self.designer.policy_net.eval()
         self.action_net.eval()
 
@@ -115,8 +116,8 @@ class Trainer:
             action = self.action_net(y_obs, design_obs)
             loss = self.loss_fn(action, theta)
 
-        self.designer.policy_net.train(was_training)
-        self.action_net.train(was_training)
+        self.designer.policy_net.train(policy_was_training)
+        self.action_net.train(action_was_training)
 
         return {
             "eval/loss": loss.item(),
