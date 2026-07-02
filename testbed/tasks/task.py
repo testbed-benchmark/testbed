@@ -199,7 +199,7 @@ class Task(ABC, nn.Module):
                 Designs of shape ``[*batch_shape_design, T, *event_shape_design]``
             theta (Tensor):
                 Parameters of shape ``[*batch_shape_theta, T, *event_shape_theta]``
-                
+
         Returns:
             Tensor:
                 Log probabilities, shape ``[*broadcast_batch_shape]``.
