@@ -8,6 +8,7 @@ References:
 import math
 
 import torch
+from torch import Tensor
 from torch.distributions import Beta, Dirichlet, LogNormal
 
 from ..core.distributions import Distribution
@@ -16,14 +17,28 @@ from .task import Task
 
 
 class CESPrior(Distribution):
-    """Prior over the CES latent variables (rho, alpha, u).
+    r"""Prior over the CES latent variables :math:`(\rho, \alpha, u)`.
 
     The default prior is:
-        rho   ~ Beta(1, 1)
-        alpha ~ Dirichlet([1, 1, 1])
-        log u ~ N(1, 3).
 
-    Convention: theta = (rho, alpha_1, alpha_2, alpha_3, u).
+    .. math::
+        \begin{aligned}
+        \rho &\sim \mathrm{Beta}(1, 1) \\
+        \alpha &\sim \mathrm{Dirichlet}([1, 1, 1]) \\
+        \log u &\sim \mathcal{N}(1, 3^2)
+        \end{aligned}
+
+    where :math:`\alpha = (\alpha_1, \alpha_2, \alpha_3)`. Convention: :math:`\theta = (\rho, \alpha_1, \alpha_2, \alpha_3, u)`.
+
+    Args:
+        rho_concentration (tuple, optional):
+            Concentration parameters for the prior over :math:`\rho` (default: (1.0, 1.0)).
+        alpha_concentration (tuple, optional):
+            Concentration parameters for the prior over :math:`\alpha` (default: (1.0, 1.0, 1.0)).
+        u_loc (float, optional):
+            Mean for the prior over :math:`u` (default: 1.0).
+        u_scale (float, optional):
+            Standard deviation for the prior over :math:`u` (default: 3.0).
     """
 
     def __init__(
@@ -32,8 +47,8 @@ class CESPrior(Distribution):
         alpha_concentration=(1.0, 1.0, 1.0),
         u_loc=1.0,
         u_scale=3.0,
-    ):
-        """Initializes prior parameters."""
+    ) -> None:
+        """Initializes CES prior parameters."""
         super().__init__()
 
         self.register_buffer("rho_c1", torch.tensor(rho_concentration[0]))
@@ -43,42 +58,46 @@ class CESPrior(Distribution):
         self.register_buffer("u_scale", torch.tensor(u_scale))
 
     @property
-    def rho_beta(self):
+    def rho_beta(self) -> torch.distributions.Distribution:
         """Distribution for the elasticity rho."""
         return Beta(self.rho_c1, self.rho_c0)
 
     @property
-    def alpha_dirichlet(self):
+    def alpha_dirichlet(self) -> torch.distributions.Distribution:
         """Distribution for the weights alpha."""
         return Dirichlet(self.alpha_concentration)
 
     @property
-    def u_lognormal(self):
+    def u_lognormal(self) -> torch.distributions.Distribution:
         """Distribution for the scale u."""
         return LogNormal(self.u_loc, self.u_scale)
 
-    def sample(self, n_samples: int = 1):
-        """Returns samples from the prior distribution.
+    def sample(self, n_samples: int = 1) -> Tensor:
+        """Draws samples from the prior distribution.
 
         Args:
-            n_samples: The number of samples to draw from the prior.
+            n_samples (int):
+                The number of samples to draw from the prior.
 
         Returns:
-            A tensor of shape `[n_samples, 5]`.
+            Tensor:
+                A tensor of shape ``[n_samples, 5]``.
         """
         rho = self.rho_beta.sample((n_samples, 1))
         alpha = self.alpha_dirichlet.sample((n_samples,))
         u = self.u_lognormal.sample((n_samples, 1))
         return torch.cat([rho, alpha, u], dim=-1)
 
-    def log_prob(self, theta):
+    def log_prob(self, theta: Tensor) -> Tensor:
         """Evaluates prior log probabilities.
 
         Args:
-            theta: A sample from the prior distribution (can have leading batch dimensions).
+            theta (Tensor):
+                A sample from the prior distribution of shape ``[..., 5]``.
 
         Returns:
-            The log probability of `theta` under the prior distribution.
+            Tensor:
+                Log probabilities, shape ``[..., ]``.
         """
         rho = theta[..., 0]
         alpha = theta[..., 1:4]
@@ -91,7 +110,7 @@ class CESPrior(Distribution):
 
 
 class CES(Task):
-    """Implements the constant elasticity of substitution (CES) model.
+    """Constant elasticity of substitution (CES) task.
 
     A participant compares two baskets of goods x, x' in [0, 100]^3 and rates
     the subjective difference in utility on a sliding scale from 0 to 1. The
@@ -99,6 +118,14 @@ class CES(Task):
     maps to the boundary of the observation space.
 
     Convention: design = (x, x') flattened to 6 dims; theta = (rho, alpha, u).
+
+    Args:
+        tau (float, optional):
+            Observation noise scale hyperparameter (default: 0.005).
+        epsilon (float, optional):
+            Censoring bound on the sigmoid output (default: 2**-22).
+        prior (Distribution, optional):
+            Prior distribution of the parameters.
     """
 
     def __init__(
@@ -106,14 +133,8 @@ class CES(Task):
         tau: float = 0.005,
         epsilon: float = 2**-22,
         prior=None,
-    ):
-        """Initializes the task.
-
-        Args:
-            tau: Observation-noise scale hyperparameter.
-            epsilon: Censoring bound on the sigmoid output.
-            prior: The prior distribution of the parameters.
-        """
+    ) -> None:
+        """Initializes the CES task."""
         if prior is None:
             prior = CESPrior()
 
@@ -134,22 +155,27 @@ class CES(Task):
         # Numerical clamping (to avoid infinite gradients of x^rho at x=0)
         self.clamp_val = 1e-6
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Returns a compact representation."""
         return f"CES(tau={self.tau}, epsilon={self.epsilon})"
 
-    def make_eta_params(self, theta, design):
-        """Computes the mean and scale of the latent Gaussian eta.
+    def make_eta_params(self, theta: Tensor, design: Tensor) -> Tensor:
+        r"""Computes the mean and scale of the latent Gaussian eta.
 
         Args:
-            theta: Parameter tensor of shape `[..., 5]`, where the columns are
-                `(rho, alpha_1, alpha_2, alpha_3, u)`.
-            design: Design tensor of shape `[..., 6]`, representing two baskets
-                of goods `(x, x')` each in `[0, 100]^3`, flattened.
+            theta (Tensor):
+                Parameter tensor of shape ``[..., 5]``, where the columns are
+                ``(rho, alpha_1, alpha_2, alpha_3, u)``.
+            design (Tensor):
+                Design tensor of shape ``[..., 6]``, representing two baskets
+                of goods ``(x, x')`` each in ``[0, 100]^3``, flattened.
 
         Returns:
-            A tuple `(mu, sigma)`, each of shape `[..., 1]`, giving the mean and
-            standard deviation of the latent Gaussian `eta`.
+            Tensor:
+                Mean :math:`\mu` of the latent Gaussian ``eta``, shape ``[..., 1]``.
+            Tensor:
+                Standard deviation :math:`\sigma` of the latent Gaussian ``eta``,
+                shape ``[..., 1]``.
         """
         rho = theta[..., 0:1]
         alpha = theta[..., 1:4]
@@ -171,17 +197,20 @@ class CES(Task):
         sigma = (1.0 + diff_norm) * self.tau * u
         return mu, sigma
 
-    def _outcome_logp(self, y, theta, design):
+    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
         """Evaluates the log probability of an observation under the CES model.
 
         Args:
-            y: Observation tensor of shape `[b, 1]`, values in
-                `[epsilon, 1 - epsilon]`.
-            theta: Parameter tensor of shape `[b, 5]`.
-            design: Design tensor of shape `[b, 6]`.
+            y (Tensor):
+                Observations of shape ``[b, 1]``, values in ``[epsilon, 1 - epsilon]``.
+            theta (Tensor):
+                Parameter tensor of shape ``[b, 5]``.
+            design (Tensor):
+                Design tensor of shape ``[b, 6]``.
 
         Returns:
-            Log probability tensor of shape `[b]`.
+            Tensor:
+                Log probability per batch element, shape ``[b]``.
         """
         mu, sigma = self.make_eta_params(theta, design)  # [b, 1] each
 
@@ -217,16 +246,18 @@ class CES(Task):
         )
         return logp.squeeze(-1)
 
-    def _sample_outcome(self, theta, design):
+    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
         """Samples an outcome from the CES model.
 
         Args:
-            theta: Parameter tensor of shape `[b, 5]`.
-            design: Design tensor of shape `[b, 6]`.
+            theta (Tensor):
+                Parameter tensor of shape ``[b, 5]``.
+            design (Tensor):
+                Design tensor of shape ``[b, 6]``.
 
         Returns:
-            Observation tensor of shape `[b, 1]`, values in
-            `[epsilon, 1 - epsilon]`.
+            Tensor:
+                Sampled outcomes of shape ``[b, 1]``, values in ``[epsilon, 1 - epsilon]``.
         """
         mu, sigma = self.make_eta_params(theta, design)
         eta = mu + sigma * torch.randn_like(mu)  # reparameterized

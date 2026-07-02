@@ -75,7 +75,7 @@ class Task(ABC, nn.Module):
         implicit_likelihood: bool = False,
         design_space=None,
     ):
-        """Initialize a Task."""
+        """Initializes the task."""
         nn.Module.__init__(self)
 
         self.event_shape_y = torch.Size(event_shape_y)
@@ -164,11 +164,11 @@ class Task(ABC, nn.Module):
 
         Args:
             y (Tensor):
-                Observations of shape ``[*batch_shape_y, *event_shape_y]``
+                Observations of shape ``[*batch_shape_y, *event_shape_y]``.
             theta (Tensor):
-                Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``
+                Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
             design (Tensor):
-                Designs of shape ``[*batch_shape_design, *event_shape_design]``
+                Designs of shape ``[*batch_shape_design, *event_shape_design]``.
 
         Returns:
             Tensor:
@@ -194,11 +194,11 @@ class Task(ABC, nn.Module):
 
         Args:
             y_history (Tensor):
-                Observations of shape ``[*batch_shape_y, T, *event_shape_y]``
+                Observations of shape ``[*batch_shape_y, T, *event_shape_y]``.
             design_history (Tensor):
-                Designs of shape ``[*batch_shape_design, T, *event_shape_design]``
+                Designs of shape ``[*batch_shape_design, T, *event_shape_design]``.
             theta (Tensor):
-                Parameters of shape ``[*batch_shape_theta, T, *event_shape_theta]``
+                Parameters of shape ``[*batch_shape_theta, T, *event_shape_theta]``.
 
         Returns:
             Tensor:
@@ -221,9 +221,9 @@ class Task(ABC, nn.Module):
 
         Args:
             theta (Tensor):
-                Parameters of shape ``[*batch_shape_theta, *event_shape_y]``
+                Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
             design (Tensor):
-                Designs of shape ``[*batch_shape_design, *event_shape_design]``
+                Designs of shape ``[*batch_shape_design, *event_shape_design]``.
             n_samples (int):
                 How many observation samples to draw for each (theta, design) pair (default: 1).
 
@@ -319,11 +319,9 @@ class Task(ABC, nn.Module):
     def sample_prior(self, n_samples=1):
         r"""Samples from original, non-updated prior.
 
-        Uses the current (possibly updated) prior.
-
         Args:
             n_samples (int):
-                Number of samples to draw for each design (default: 1).
+                Number of samples to draw (default: 1).
 
         Returns:
             Tensor:
@@ -342,11 +340,11 @@ class Task(ABC, nn.Module):
 
         Args:
             n_samples (int):
-                Number of samples to draw for each design (default: 1).
+                Number of samples to draw (default: 1).
 
         Returns:
             Tensor:
-                Sampled parameters. If ``n_samples==1`,` shape ``[*event_shape_theta]``.
+                Sampled parameters. If ``n_samples==1``, shape ``[*event_shape_theta]``.
                 Otherwise, shape ``[n_samples, *event_shape_theta]``.
         """
         samples = self.current_prior.sample(

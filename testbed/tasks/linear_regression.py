@@ -11,18 +11,32 @@ from .task import Task
 
 
 class LinearRegressionPrior(Distribution):
-    """Gaussian prior for weights in linear regression."""
+    r"""Gaussian prior for weights in linear regression.
+
+    The default prior is:
+
+    .. math::
+        p(\theta) = \mathcal{N}\left(0, \mathrm{diag}(1, 0.25, \dots, 0.25) \right)
+
+    Args:
+        dim_theta (int):
+            Dimensionality of the parameters theta, including bias.
+        theta_loc (Tensor, optional):
+            Prior mean (default: None). Shape ``[dim_theta]``.
+        theta_covmat (Tensor, optional):
+            Prior covariance (default: None). Shape ``[dim_theta, dim_theta]``.
+    """
 
     def __init__(
         self,
-        dim_theta,
-        theta_loc=None,
-        theta_covmat=None,
+        dim_theta: int,
+        theta_loc: Tensor = None,
+        theta_covmat: Tensor = None,
     ):
-        """Initialises prior for weights in linear regression."""
+        """Initializes prior for weights in linear regression."""
         super().__init__()
 
-        self.dim_theta = dim_theta  # Dimensionality of theta, including bias; e.g., dim_theta=1 is theta0 + theta1 x
+        self.dim_theta = dim_theta  # Dimensionality of theta, including bias; e.g., dim_theta=2 is theta0 + theta1 x
 
         # Default prior is Normal with mean zero and covariance diag([1.0, 0.25, ..., 0.25])
         if theta_loc is None:
@@ -42,14 +56,31 @@ class LinearRegressionPrior(Distribution):
         self.register_buffer("chol", chol)
         self.register_buffer("logdet", logdet)
 
-    def sample(self, n_samples):
-        """Draws samples of parameters from the prior."""
-        # [n_samples, dim_theta]
+    def sample(self, n_samples: int):
+        """Draws samples of parameters from the prior.
+
+        Args:
+            n_samples (int):
+                How many samples to draw.
+
+        Returns:
+            Tensor:
+                Samples, shape ``[n_samples, dim_theta]``
+        """
         eps = torch.randn(n_samples, *self.loc.shape, device=self.loc.device)
         return self.loc + eps @ self.chol.T
 
-    def log_prob(self, theta):
-        """Evaluates prior log probabilities."""
+    def log_prob(self, theta: Tensor):
+        """Evaluates prior log probabilities.
+
+        Args:
+            theta (Tensor):
+                Points at which to evaluate the log-probability. Shape ``[b, dim_theta]``.
+
+        Returns:
+            Tensor:
+                Log probs, shape ``[b,]``
+        """
         # theta: [*batch_shape, dim_theta]
 
         diff = theta - self.loc
@@ -79,11 +110,11 @@ class LinearRegression(Task):
     Args:
         dim (int):
             Dimensionality of the design space. theta includes a bias term, so dim_theta = dim + 1.
-        dim_y (int):
+        dim_y (int, optional):
             Number of independent observations per design (default: 1).
-        noise_scale (float):
+        noise_scale (float, optional):
             Standard deviation of observation noise (default: 0.5).
-        quad (float):
+        quad (float, optional):
             Strength of quadratic misspecification term (default: 0.0).
             Setting this to zero gives the standard linear model.
         prior (Distribution, optional):
@@ -123,23 +154,19 @@ class LinearRegression(Task):
             f"noise_scale={self.noise_scale})"
         )
 
-    def make_mean(self, theta, design):
-        """Computes the conditional mean E[y | theta, design].
+    def make_mean(self, theta: Tensor, design: Tensor) -> Tensor:
+        """Computes the conditional mean given theta, design.
 
         Args:
             theta (Tensor):
-                Parameter tensor of shape [b, dim_theta].
+                Parameter tensor of shape ``[b, dim_theta]``.
             design (Tensor):
-                Design tensor of shape [b, dim_design].
+                Design tensor of shape ``[b, dim_design]``.
 
         Returns:
             Tensor:
-                Mean of shape [b, 1].
+                Mean of shape ``[b, 1]``.
         """
-        # theta:  [b, dim_theta]
-        # design: [b, dim_design]
-        # returns: [b, 1]
-
         b = theta.shape[0]
         # prepend ones to design for bias terms
         design_left_ones = torch.hstack(
@@ -155,41 +182,41 @@ class LinearRegression(Task):
 
         return mean_y.unsqueeze(-1)
 
-    def _outcome_logp(self, y, theta, design):
+    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
         """Computes log probability of observations under the model.
 
         If dim_y > 1, observations are assumed to be conditionally independent given (theta, design).
 
         Args:
             y (Tensor):
-                Observations of shape [b, dim_y].
+                Observations of shape ``[b, dim_y]``.
             theta (Tensor):
-                Parameter tensor of shape [b, dim_theta].
+                Parameter tensor of shape ``[b, dim_theta]``.
             design (Tensor):
-                Design tensor of shape [b, dim_design].
+                Design tensor of shape ``[b, dim_design]``.
 
         Returns:
             Tensor:
-                Log probability per batch element, shape [b].
+                Log probability per batch element, shape ``[b]``.
         """
         loc = self.make_mean(theta, design)
         logp = normal_log_prob(y, loc, self.noise_scale)
         return logp.sum(dim=-1)
 
     def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
-        """Samples from the likelihood p(y | theta, design) using reparametrization.
+        """Samples from the likelihood using reparametrization.
 
         If dim_y > 1, observations are assumed to be conditionally independent given (theta, design).
 
         Args:
             theta (Tensor):
-                Parameter tensor of shape [b, dim_theta].
+                Parameter tensor of shape ``[b, dim_theta]``.
             design (Tensor):
-                Design tensor of shape [b, dim_design].
+                Design tensor of shape ``[b, dim_design]``.
 
         Returns:
             Tensor:
-                Sampled outcomes of shape [b, dim_y].
+                Sampled outcomes of shape ``[b, dim_y]``.
         """
         loc = self.make_mean(theta, design)  # [b, 1]
         loc = loc.expand(-1, self.event_shape_y[0])  # [b, dim_y]
