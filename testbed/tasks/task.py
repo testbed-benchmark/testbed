@@ -198,7 +198,7 @@ class Task(ABC, nn.Module):
             design_history (Tensor):
                 Designs of shape ``[*batch_shape_design, T, *event_shape_design]``.
             theta (Tensor):
-                Parameters of shape ``[*batch_shape_theta, T, *event_shape_theta]``.
+                Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
 
         Returns:
             Tensor:

@@ -41,7 +41,7 @@ autoapi_options = ["show-module-summary", "members", "private-members"]
 autodoc_typehints = "description"
 
 templates_path = ["_templates"]
-exclude_patterns = ["docs/_build", ".DS_Store"]
+exclude_patterns = ["_build", ".DS_Store"]
 
 source_suffix = {
     ".rst": "restructuredtext",
