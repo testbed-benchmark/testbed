@@ -26,9 +26,9 @@ class SNMC(Objective):
     def estimate_gain(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
         """Estimates gain from batched histories.
 
-        y_history:      [b, T, *event_shape_y]
-        design_history: [b, T, *event_shape_design]
-        theta_0:        [b, *event_shape_theta]
+        y_history: ``[b, T, *event_shape_y]``
+        design_history: ``[b, T, *event_shape_design]``
+        theta_0: ``[b, *event_shape_theta]``
         returns:        scalar EIG estimate.
         """
         task = self.task
@@ -89,7 +89,7 @@ class NMC(Objective):
     def estimate_gain(self, design: Tensor):
         """Estimates gain for one fixed design.
 
-        design: [*event_shape_design]  (leading size-1 batch dims are tolerated and stripped)
+        design: ``[*event_shape_design]``. Leading size-1 batch dims are tolerated and stripped.
         returns: scalar NMC estimate.
         """
         n_event_dims = len(self.task.event_shape_design)

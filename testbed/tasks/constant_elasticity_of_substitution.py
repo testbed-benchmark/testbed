@@ -171,11 +171,9 @@ class CES(Task):
                 of goods ``(x, x')`` each in ``[0, 100]^3``, flattened.
 
         Returns:
-            Tensor:
-                Mean :math:`\mu` of the latent Gaussian ``eta``, shape ``[..., 1]``.
-            Tensor:
-                Standard deviation :math:`\sigma` of the latent Gaussian ``eta``,
-                shape ``[..., 1]``.
+            tuple[Tensor, Tensor]:
+                Mean :math:`\mu` and standard deviation :math:`\sigma` of the
+                latent Gaussian ``eta``, each with shape ``[..., 1]``.
         """
         rho = theta[..., 0:1]
         alpha = theta[..., 1:4]

@@ -7,7 +7,7 @@ from testbed.designers.amortized import Designer
 
 
 class StaticDesigner(Designer, nn.Module):
-    """A designer with a single learnable design sequence [T, *event_shape_design]."""
+    """A designer with a single learnable design sequence ``[T, *event_shape_design]``."""
 
     def __init__(self, task, T):
         """Initializes learnable static designs."""

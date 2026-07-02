@@ -22,10 +22,10 @@ def run_importance_sampling(
     Args:
         task: Task
             Any Task subclass. Works for both continuous and discrete theta.
-        y_history: Tensor, shape [T, *event_shape_y]
+        y_history: Tensor, shape ``[T, *event_shape_y]``
             Stack T observations along dim 0. Leading size-1 batch dims are
             squeezed automatically; non-unit leading dims raise ValueError.
-        design_history: Tensor, shape [T, *event_shape_design]
+        design_history: Tensor, shape ``[T, *event_shape_design]``
             Matching designs. Same squeeze behaviour as y_history.
         n_proposal: int
             Number of proposal samples. Larger values give a better IS estimate
@@ -38,8 +38,8 @@ def run_importance_sampling(
 
     Returns:
         EmpiricalDistribution
-            locs: [n_proposal, *event_shape_theta] — the proposal samples
-            weights: [n_proposal] — normalized importance weights (sum to 1)
+            locs: ``[n_proposal, *event_shape_theta]``; the proposal samples.
+            weights: ``[n_proposal]``; normalized importance weights (sum to 1).
 
     Notes:
         Draw posterior samples via posterior.sample(k). ESS can be computed as
