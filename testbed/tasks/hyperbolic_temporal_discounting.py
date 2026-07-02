@@ -7,7 +7,7 @@ from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoul
 
 from ..core.distributions import Distribution
 from ..core.util import normal_cdf
-from .base_task import Task
+from .task import Task
 
 
 class HTDPrior(Distribution):
@@ -74,6 +74,14 @@ class HyperbolicTemporalDiscounting(Task):
         if prior is None:
             prior = HTDPrior()
 
+        super().__init__(
+            event_shape_y=[1],
+            event_shape_theta=[2],
+            event_shape_design=[2],
+            prior=prior,
+            discrete_y=True,
+        )
+
         # Acts as a bias towards y=1
         self.epsilon = epsilon
 
@@ -87,17 +95,6 @@ class HyperbolicTemporalDiscounting(Task):
 
         # Numerical clamping
         self.clamp_val = 1e-6
-
-        self.event_shape_theta = torch.Size([2])
-        self.event_shape_design = torch.Size([2])
-        self.event_shape_y = torch.Size([1])
-
-        super().__init__(
-            prior,
-            discrete_y=True,
-            discrete_theta=False,
-            discrete_design=False,
-        )
 
     def __repr__(self):
         """Returns a compact representation."""

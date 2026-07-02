@@ -4,7 +4,7 @@ import torch
 
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
-from .base_task import Task
+from .task import Task
 
 
 class MichaelisMentenPrior(Distribution):
@@ -56,9 +56,12 @@ class MichaelisMenten(Task):
         if prior is None:
             prior = MichaelisMentenPrior()
 
-        self.event_shape_theta = torch.Size([2])
-        self.event_shape_design = torch.Size([1])
-        self.event_shape_y = torch.Size([1])
+        super().__init__(
+            event_shape_y=[1],
+            event_shape_theta=[2],
+            event_shape_design=[1],
+            prior=prior,
+        )
 
         # Standard deviation of observation noise (assumed Gaussian)
         self.noise_scale = noise_scale
@@ -66,13 +69,6 @@ class MichaelisMenten(Task):
         # Aka "s" -- s=1 is the standard Michaelis-Menten model
         # Other values give rise to the so-called Hill model
         self.exponent = exponent
-
-        super().__init__(
-            prior,
-            discrete_y=False,
-            discrete_theta=False,
-            discrete_design=False,
-        )
 
     def __repr__(self):
         """Returns a compact representation."""

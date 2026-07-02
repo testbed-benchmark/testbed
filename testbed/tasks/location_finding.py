@@ -5,7 +5,7 @@ from torch import Tensor
 
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
-from .base_task import Task
+from .task import Task
 
 
 class LocationFindingPrior(Distribution):
@@ -81,9 +81,12 @@ class LocationFinding(Task):
         if prior is None:
             prior = LocationFindingPrior(dim_theta=dim_theta, n_sources=n_sources)
 
-        self.event_shape_theta = torch.Size([n_sources, dim_theta])
-        self.event_shape_design = torch.Size([dim_theta])
-        self.event_shape_y = torch.Size([dim_y])
+        super().__init__(
+            event_shape_y=[dim_y],
+            event_shape_theta=[n_sources, dim_theta],
+            event_shape_design=[dim_theta],
+            prior=prior,
+        )
 
         self.base_signal = base_signal
         self.max_signal = max_signal
@@ -91,13 +94,6 @@ class LocationFinding(Task):
 
         # Exponent in signal decay; 2 is the standard LF model
         self.exponent = exponent
-
-        super().__init__(
-            prior,
-            discrete_y=False,
-            discrete_theta=False,
-            discrete_design=False,
-        )
 
     def __repr__(self) -> str:
         """Returns a compact representation."""

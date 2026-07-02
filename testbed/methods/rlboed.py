@@ -30,7 +30,7 @@ from testbed.envs import (
 from testbed.envs.design_spaces import DesignSpace
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
-from testbed.tasks.base_task import Task
+from testbed.tasks.task import Task
 
 
 @dataclass
@@ -335,7 +335,7 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.entropy_anneal_rate must be non-negative.")
     if sac.policy_init_std <= 0:
         raise ValueError("sac.policy_init_std must be positive.")
-    if task.likelihood_type != "explicit":
+    if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
     if not isinstance(design_space, BoxDesignSpace):
         raise TypeError("This RLBOED SAC implementation requires a BoxDesignSpace.")

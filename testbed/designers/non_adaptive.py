@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 
-from testbed.designers import Designer
+from testbed.designers.amortized import Designer
 
 
 class StaticDesigner(Designer, nn.Module):

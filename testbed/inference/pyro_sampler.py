@@ -15,7 +15,7 @@ from pyro.infer.autoguide.initialization import init_to_sample
 
 from ..core.distributions import EmpiricalDistribution
 from ..core.util import squeeze_history
-from ..tasks.base_task import Task
+from ..tasks.task import Task
 
 
 class TaskPriorDist(TorchDistributionMixin, td.Distribution):

@@ -7,7 +7,7 @@ from torch import Tensor
 
 from ..core.distributions import Distribution, EmpiricalDistribution
 from ..core.util import squeeze_history
-from ..tasks.base_task import Task
+from ..tasks.task import Task
 
 
 def run_importance_sampling(

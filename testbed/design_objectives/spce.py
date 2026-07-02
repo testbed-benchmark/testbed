@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..tasks.base_task import Task
+from ..tasks.task import Task
 from .base_objective import Objective
 
 

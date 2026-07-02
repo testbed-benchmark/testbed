@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..tasks.base_task import Task
-from .base_objective import Objective
+from testbed.design_objectives.base_objective import Objective
+from testbed.tasks.task import Task
 
 
 class SNMC(Objective):
