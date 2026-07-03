@@ -22,9 +22,10 @@ from testbed.design_objectives import SNMC, SPCE, Reinforce
 from testbed.designers import PolicyDesigner, RandomDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
 
-# Reference sPCE for HTD at T=20 (from the literature). None skips the check.
-EXPECTED_SPCE = None  # TODO: fill in reference value + source
-SPCE_TOL = 0.1
+# Reference sPCE for HTD at T=20: 5.021 +- 0.013, DAD paper (Foster et al. 2021).
+# Note the paper trains for 100k steps; the short run here may fall slightly short.
+EXPECTED_SPCE = 5.021
+SPCE_TOL = 0.15
 
 # Training (short GPU run; see recipes/temporal_discounting/dad.yaml for the full recipe)
 T = 20
