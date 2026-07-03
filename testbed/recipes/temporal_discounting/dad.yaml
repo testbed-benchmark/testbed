@@ -1,0 +1,49 @@
+# DAD on hyperbolic temporal discounting, trained with the REINFORCE gradient
+# estimator (DAD paper Eq. 16). Architecture and hyperparameters follow the
+# DAD paper HTD experiment (Foster et al. 2021, Appendix D.2).
+
+# system
+device: 'cuda'
+seed: 0
+save_dir: ???
+
+# task
+task:
+  _target_: testbed.tasks.HyperbolicTemporalDiscounting
+  epsilon: 0.01
+  exponent: 1.0
+  temperature: 0.0          # true discrete sampling; REINFORCE handles the gradient
+  unconstrained_design: true    # policy outputs raw (xi_d, xi_r); task maps to (D_1, R_0)
+T: 20
+
+# objective
+objective:
+  name: reinforce
+  n_inner: 1_023            # contrastive samples for the sPCE reward
+  baseline: null            # or leave_one_out for variance reduction
+  differentiable_reward: true   # sPCE reward is differentiable -> full DAD Eq. 16
+
+# training
+n_train_iter: 100_000
+n_outer: 1_024
+
+# optimizer
+lr: 5e-5
+grad_clip: 1.0
+
+# eval
+eval_every: 0               # eval is expensive here; off for this recipe
+n_outer_eval: 1_024
+n_inner_eval: 100_000
+
+# design policy network
+# DeepSets net from the DAD paper: encoder [3 -> 256 -> 256 -> 16] + sum pooling,
+# learnable null encoding. Emitter differs slightly from the paper's [16 -> 128 -> 16 -> 2]
+# (second hidden width 128 vs 16, GELU vs ReLU).
+design_net:
+  _target_: testbed.design_nets.DeepSetPolicyNet
+  encoder_dim_h: 256
+  encoder_layers: 2
+  dim_emb: 16
+  decoder_layers: 2
+  decoder_dim_h: 128

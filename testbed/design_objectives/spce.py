@@ -40,6 +40,15 @@ class SPCE(Objective):
         theta_0:        [b, *event_shape_theta]  -- true theta used to generate the history
         returns: scalar SPCE estimate.
         """
+        return self.per_sample_gain(y_history, design_history, theta_0).mean()
+
+    def per_sample_gain(
+        self, y_history: Tensor, design_history: Tensor, theta_0: Tensor
+    ):
+        """Estimates per-sample gains from batched histories.
+
+        Shapes as in estimate_gain; returns: [b] per-sample SPCE estimates.
+        """
         task = self.task
         n_contrastive = self.n_contrastive
         b = theta_0.shape[0]
@@ -73,7 +82,7 @@ class SPCE(Objective):
         logp_joint = logp_all[:, 0]
         logp_marginal = torch.logsumexp(logp_all, dim=1) - np.log(L)
 
-        return torch.mean(logp_joint - logp_marginal)
+        return logp_joint - logp_marginal
 
 
 class PCE(Objective):

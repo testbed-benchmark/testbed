@@ -7,7 +7,7 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from testbed.core.manager import Manager
-from testbed.design_objectives import SNMC, SPCE
+from testbed.design_objectives import SNMC, SPCE, Reinforce
 from testbed.designers import PolicyDesigner
 
 # ============================================================================
@@ -156,6 +156,14 @@ def build_objective(cfg, task):
     objectives = {
         "snmc": lambda: SNMC(task, n_contrastive=cfg.objective.n_inner),
         "spce": lambda: SPCE(task, n_contrastive=cfg.objective.n_inner),
+        "reinforce": lambda: Reinforce(
+            task,
+            reward_fn=SPCE(task, n_contrastive=cfg.objective.n_inner).per_sample_gain,
+            baseline=getattr(cfg.objective, "baseline", None),
+            # The SPCE reward is differentiable through the designs; including its
+            # design pathwise gradient recovers Eq. 16 of the DAD paper.
+            differentiable_reward=getattr(cfg.objective, "differentiable_reward", True),
+        ),
     }
     name = cfg.objective.name
     return objectives[name]()
