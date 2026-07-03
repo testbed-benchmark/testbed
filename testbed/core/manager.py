@@ -5,7 +5,13 @@ import time
 
 import yaml
 
-from testbed.core.logging import EventLogger, JSONLLogger
+from testbed.core.logging import (
+    EventLogger,
+    JSONLLogger,
+    MultiLogger,
+    WandbLogger,
+    config_to_dict,
+)
 
 
 class Manager:
@@ -34,18 +40,43 @@ class Manager:
         self.config_path = os.path.join(self.dir, "config.yaml")
         self._save_config()
 
-        # logging
-        if logger is None:
-            metrics_path = os.path.join(self.dir, "metrics.jsonl")
-            self.metric_logger = JSONLLogger(metrics_path)
-        else:
-            self.metric_logger = logger
-
+        # event logging (create first so metric-logger setup can report issues)
         events_path = os.path.join(self.dir, "events.log")
         self.event_logger = EventLogger(events_path, console=console)
 
         self.event_logger.info("Spawning Manager...")
         self.event_logger.info(f"Run directory: {self.dir}")
+
+        # metric logging
+        if logger is not None:
+            self.metric_logger = logger
+        else:
+            metrics_path = os.path.join(self.dir, "metrics.jsonl")
+            jsonl_logger = JSONLLogger(metrics_path)
+            self.metric_logger = jsonl_logger
+
+            wandb_cfg = self._wandb_cfg()
+            if wandb_cfg.get("enabled", False):
+                # Never let a wandb backend failure (missing dependency, auth,
+                # network, quota) take down the training run: warn and fall back
+                # to the JSONL logger that's already in place.
+                try:
+                    wandb_logger = WandbLogger(
+                        cfg,
+                        run_name=self.run_name,
+                        project=wandb_cfg.get("project", "testbed"),
+                        entity=wandb_cfg.get("entity"),
+                        tags=wandb_cfg.get("tags"),
+                        mode=wandb_cfg.get("mode", "online"),
+                        group=wandb_cfg.get("group"),
+                    )
+                except Exception as e:
+                    self.event_logger.warning(
+                        f"wandb logging is enabled but failed to initialize "
+                        f"({e!r}); continuing with JSONL logging only."
+                    )
+                else:
+                    self.metric_logger = MultiLogger([jsonl_logger, wandb_logger])
 
     def _save_config(self):
         """Saves the experiment configuration.
@@ -53,35 +84,20 @@ class Manager:
         Config types supported: DataClass, OmegaConf, Dict, etc.
         """
         with open(self.config_path, "w") as f:
-            cfg = self.cfg
+            yaml.dump(config_to_dict(self.cfg), f)
 
-            # --- dataclass ---
-            try:
-                from dataclasses import asdict, is_dataclass
+    def _wandb_cfg(self) -> dict:
+        """Reads the optional ``wandb`` config block as a plain dict.
 
-                if is_dataclass(cfg):
-                    yaml.dump(asdict(cfg), f)
-                    return
-            except (ImportError, TypeError, ValueError):
-                pass
-
-            # --- OmegaConf ---
-            try:
-                from omegaconf import OmegaConf
-
-                if OmegaConf.is_config(cfg):
-                    yaml.dump(OmegaConf.to_container(cfg, resolve=True), f)
-                    return
-            except (ImportError, TypeError, ValueError):
-                pass
-
-            # --- dict fallback ---
-            if isinstance(cfg, dict):
-                yaml.dump(cfg, f)
-                return
-
-            # --- generic fallback (best effort) ---
-            yaml.dump(vars(cfg), f)
+        Returns an empty dict when the config has no ``wandb`` section, so wandb
+        stays off by default. Runs the block through the same conversion path as
+        the rest of the config, so an object-style block (namespace/dataclass) is
+        handled rather than assumed to already be a mapping.
+        """
+        block = config_to_dict(self.cfg).get("wandb")
+        if block is None:
+            return {}
+        return config_to_dict(block)
 
     def path(self, *parts):
         """Builds paths inside the run directory."""

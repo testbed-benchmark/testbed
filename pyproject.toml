@@ -29,7 +29,9 @@ full = [
     'notebook',
     'omegaconf',
     'pyro-ppl',
+    'wandb',
 ]
+wandb = ['wandb']
 dev = ["pytest", "pre-commit", "ruff", 'rich']
 docs = ["sphinx"]
 

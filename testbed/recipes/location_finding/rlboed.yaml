@@ -47,3 +47,12 @@ sac:
   target_entropy: null
   entropy_anneal_rate: 7.142857142857143e-05   # 1 / 1.4e4
   log_frequency: 100
+
+# experiment tracking
+wandb:
+  enabled: false            # opt-in; flip to true or override on the CLI
+  project: testbed
+  entity: null              # your wandb team/user; null uses the default
+  mode: online              # online | offline | disabled
+  tags: []
+  group: null
