@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 from torch import Tensor
 
-from ..tasks.task import Task
+from ..tasks.base import Task
 
 
 class Objective(ABC):

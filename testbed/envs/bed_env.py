@@ -8,7 +8,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from ..tasks.task import Task
+from ..tasks.base import Task
 from .design_spaces import DesignSpace
 from .history import History
 from .rewards import RewardFunction, ZeroReward

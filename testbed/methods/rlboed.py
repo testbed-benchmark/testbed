@@ -30,7 +30,7 @@ from testbed.envs import (
 from testbed.envs.design_spaces import DesignSpace
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
-from testbed.tasks.task import Task
+from testbed.tasks.base import Task
 
 
 @dataclass

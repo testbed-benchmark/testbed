@@ -5,7 +5,7 @@ import torch
 from torch import Tensor
 
 from testbed.design_objectives.base_objective import Objective
-from testbed.tasks.task import Task
+from testbed.tasks.base import Task
 
 
 class SNMC(Objective):

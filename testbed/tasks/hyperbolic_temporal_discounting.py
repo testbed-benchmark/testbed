@@ -12,7 +12,7 @@ from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoul
 
 from ..core.distributions import Distribution
 from ..core.util import normal_cdf
-from .task import Task
+from .base import Task
 
 
 class HTDPrior(Distribution):

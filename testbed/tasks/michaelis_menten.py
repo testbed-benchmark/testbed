@@ -9,7 +9,7 @@ from torch import Tensor
 
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
-from .task import Task
+from .base import Task
 
 
 class MichaelisMentenPrior(Distribution):
