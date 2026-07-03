@@ -61,6 +61,11 @@ class HyperbolicTemporalDiscounting(Task):
     """Implements the Hyperbolic Temporal Discounting model.
 
     Convention: design = (D_1, R_0); theta = (k, alpha).
+
+    With unconstrained_design=True, the design is instead an unconstrained
+    (xi_d, xi_r) mapped to D_1 = exp(xi_d - log E[k]) and R_0 = 100 * sigmoid(xi_r).
+    Without it, near-zero policy outputs saturate the choice probability and all
+    design gradients vanish.
     """
 
     def __init__(
@@ -68,6 +73,7 @@ class HyperbolicTemporalDiscounting(Task):
         epsilon: float = 0.01,
         exponent: float = 1.0,
         temperature: float = 0.0,
+        unconstrained_design: bool = False,
         prior=None,
     ):
         """Initializes the task."""
@@ -84,6 +90,11 @@ class HyperbolicTemporalDiscounting(Task):
         # If temperature=0, we do not have reparametrised sampling
         # Otherwise, uses a relaex categorical at sampling time
         self.temperature = temperature
+
+        # Shift so k * D_1 is O(1) for xi_d near 0 (cf. Step-DAD): log E[k] under the prior
+        self.unconstrained_design = unconstrained_design
+        if unconstrained_design:
+            self.log_k_mean = float(prior.k_loc + 0.5 * prior.k_scale**2)
 
         # Numerical clamping
         self.clamp_val = 1e-6
@@ -110,14 +121,23 @@ class HyperbolicTemporalDiscounting(Task):
         # computes P(y=1 | theta, design)
 
         k = theta[:, 0].unsqueeze(-1)
-        alpha = theta[:, 1].unsqueeze(-1)
+        # Floor alpha: prior samples can round to exactly zero, making the
+        # division below produce nan gradients.
+        alpha = theta[:, 1].unsqueeze(-1).clamp(min=self.clamp_val)
 
         D1 = design[:, 0].unsqueeze(-1)
         R0 = design[:, 1].unsqueeze(-1)
 
+        if self.unconstrained_design:
+            D1 = torch.exp(D1 - self.log_k_mean)
+            R0 = 100 * torch.sigmoid(R0)
+
         V1 = 100 / (1 + (k * D1).pow(self.exponent))
 
-        cdf_in = (V1 - R0) / alpha
+        # Clamp for numerical stability: normal_cdf is saturated beyond +-15
+        # (phi(15) ~ 5e-50), but the unclamped backward can produce inf/nan
+        # gradients via 1/alpha when alpha is tiny.
+        cdf_in = ((V1 - R0) / alpha).clamp(-15.0, 15.0)
         p_y1 = self.epsilon + (1.0 - 2 * self.epsilon) * normal_cdf(cdf_in)
         return p_y1.clamp(self.clamp_val, 1.0 - self.clamp_val)
 
@@ -127,7 +147,7 @@ class HyperbolicTemporalDiscounting(Task):
         # design: [b, 1]
         # returns: [b, ]
 
-        p_y1 = self.make_prob(theta, design)
+        p_y1 = self.make_prob(theta, design).squeeze(-1)  # [b]
         log_p_y1 = torch.log(p_y1)
         log_p_y0 = torch.log1p(-p_y1)
 
