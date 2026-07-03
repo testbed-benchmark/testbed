@@ -54,7 +54,8 @@ class SortedMSELoss(_Loss):
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         """Runs the forward pass.
 
-        Assumes input, target are both of shape [batch, num_objects, *event_shape_object].
+        Assumes input and target both have shape
+        ``[batch, num_objects, *event_shape_object]``.
         Each object is sorted according to its norm prior to computing the MSE.
         """
         sorted_input = sort_by_norm(input)
@@ -86,7 +87,8 @@ class SortedLogMSELoss(_Loss):
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         """Runs the forward pass.
 
-        Assumes input, target are both of shape [batch, num_objects, *event_shape_object].
+        Assumes input and target both have shape
+        ``[batch, num_objects, *event_shape_object]``.
         Each object is sorted according to its norm prior to computing the MSE.
         """
         sorted_input = sort_by_norm(input)

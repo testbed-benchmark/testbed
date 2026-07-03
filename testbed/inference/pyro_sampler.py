@@ -15,15 +15,15 @@ from pyro.infer.autoguide.initialization import init_to_sample
 
 from ..core.distributions import EmpiricalDistribution
 from ..core.util import squeeze_history
-from ..tasks.base_task import Task
+from ..tasks.base import Task
 
 
 class TaskPriorDist(TorchDistributionMixin, td.Distribution):
     """Wraps task.prior as a Pyro-compatible distribution for use with MCMC.
 
-    batch_shape = []
-    event_shape = task.event_shape_theta
-    support     = independent(real, len(event_shape_theta))  — identity transform
+    ``batch_shape = []``
+    ``event_shape = task.event_shape_theta``
+    ``support = independent(real, len(event_shape_theta))``; identity transform.
     """
 
     arg_constraints: dict = {}
@@ -104,8 +104,8 @@ def run_mcmc(
     ----------
     task : Task
         Any Task subclass with continuous theta (discrete_theta must be False).
-    y_history : Tensor, shape [T, *event_shape_y]
-    design_history : Tensor, shape [T, *event_shape_design]
+    y_history : Tensor, shape ``[T, *event_shape_y]``
+    design_history : Tensor, shape ``[T, *event_shape_design]``
     n_samples : int
         Posterior samples to collect after warmup.
     n_warmup : int
@@ -120,7 +120,7 @@ def run_mcmc(
 
     Returns:
         EmpiricalDistribution
-            locs has shape [n_samples * num_chains, *event_shape_theta].
+            locs has shape ``[n_samples * num_chains, *event_shape_theta]``.
     """
     if task.discrete_theta:
         raise ValueError(

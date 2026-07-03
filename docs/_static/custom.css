@@ -1,0 +1,23 @@
+/* --- Fix MathJax scroll containers --- */
+mjx-container {
+    overflow: visible !important;
+}
+
+div.math {
+    overflow: visible !important;
+}
+
+/* --- Improve spacing for display math --- */
+div.math {
+    margin: 1em 0;
+}
+
+/* --- Make AutoAPI pages less cramped --- */
+dl.py.class, dl.py.function {
+    margin-bottom: 1.5em;
+}
+
+/* --- Improve readability of signatures --- */
+.sig {
+    font-size: 0.95em;
+}

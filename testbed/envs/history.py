@@ -13,10 +13,10 @@ class History:
     Attributes:
         max_episode_length: Maximum number of timesteps in the history.
         designs: Padded designs with shape
-            [*batch_shape, max_episode_length, *event_shape_design].
+            ``[*batch_shape, max_episode_length, *event_shape_design]``.
         outcomes: Padded outcomes with shape
-            [*batch_shape, max_episode_length, *event_shape_y].
-        mask: Boolean mask with shape [*batch_shape, max_episode_length].
+            ``[*batch_shape, max_episode_length, *event_shape_y]``.
+        mask: Boolean mask with shape ``[*batch_shape, max_episode_length]``.
     """
 
     max_episode_length: int
