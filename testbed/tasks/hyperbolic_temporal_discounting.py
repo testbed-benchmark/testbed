@@ -1,7 +1,5 @@
 """Hyperbolic temporal-discounting task."""
 
-import math
-
 import torch
 from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoulli
 
@@ -17,8 +15,12 @@ class HTDPrior(Distribution):
     https://arxiv.org/pdf/2103.02438.
     """
 
-    def __init__(self, k_loc=-4.25, k_scale=math.sqrt(1.5), alpha_scale=math.sqrt(2)):
-        """Initializes prior parameters."""
+    def __init__(self, k_loc=-4.25, k_scale=1.5, alpha_scale=2.0):
+        """Initializes prior parameters.
+
+        The scales are standard deviations, matching the official DAD code
+        (log_k ~ Normal(-4.25, 1.5), alpha ~ HalfNormal(2)).
+        """
         super().__init__()
 
         self.register_buffer("k_loc", torch.tensor(k_loc))

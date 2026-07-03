@@ -67,7 +67,9 @@ def test_outcome_logp_matches_bernoulli():
         y = torch.full((theta.shape[0], 1), y_val)
         logp = task._outcome_logp(y, theta, design)
         expected = Bernoulli(p).log_prob(torch.full_like(p, y_val))
-        assert torch.allclose(logp, expected)
+        # Loose tolerance: Bernoulli.log_prob goes via logits, which loses
+        # precision at the clamped extremes of p.
+        assert torch.allclose(logp, expected, rtol=1e-4, atol=1e-6)
 
 
 def test_outcome_logp_normalized():
