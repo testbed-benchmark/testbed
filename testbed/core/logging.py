@@ -162,7 +162,7 @@ class WandbLogger(BaseLogger):
         except ImportError as e:  # pragma: no cover - exercised only without extra
             raise ImportError(
                 "wandb is required for WandbLogger; install the extra with "
-                "`uv sync --extra wandb` (or add it via `uv sync --all-extras`)."
+                '`pip install -e ".[wandb]"`.'
             ) from e
 
         self.run = wandb.init(
