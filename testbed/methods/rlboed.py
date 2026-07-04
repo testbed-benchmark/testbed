@@ -660,7 +660,12 @@ class Trainer:
                         f"alpha={step_metrics['alpha']:.4f}"
                     )
 
-            self._maybe_save_best(step, metrics)
+            # Select the deployable policy on the deterministic-eval sPCE
+            # (best_eval.pt) when evaluation is on. The training-return "best"
+            # is a noisy proxy that hits new maxima very often, so it is only
+            # used as a fallback when there is no periodic eval to select on.
+            if self.cfg.eval_every <= 0:
+                self._maybe_save_best(step, metrics)
 
         if self.manager is not None:
             save_path = self.manager.path("final_step.pt")
