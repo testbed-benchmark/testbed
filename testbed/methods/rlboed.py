@@ -601,6 +601,7 @@ class Trainer:
         # logging / checkpointing
         self.metrics: list[dict[str, float]] = []
         self.best_metric = -torch.inf
+        self.best_eval_metric = -torch.inf
 
         # training counters
         self.optimization_step = 0
@@ -632,6 +633,7 @@ class Trainer:
                 eval_metrics = self.evaluate()
                 eval_metrics["step"] = step
                 self.metrics.append(eval_metrics)
+                self._maybe_save_best_eval(step, eval_metrics)
 
                 if self.manager:
                     self.manager.event_logger.info(
@@ -807,6 +809,30 @@ class Trainer:
                 f"Saving new best checkpoint : "
                 f"episodic_return={metric_val} @ step={step}"
             )
+
+    def _maybe_save_best_eval(self, step, eval_metrics):
+        # Saves a checkpoint whenever the deterministic-eval sPCE improves. This
+        # tracks the best *deterministic* policy, whereas _maybe_save_best keys on
+        # the stochastic training return (which need not select the same weights).
+        if self.manager is None:
+            return
+
+        metric_val = eval_metrics["eval/spce"]
+        if metric_val <= self.best_eval_metric:
+            return
+
+        self.best_eval_metric = metric_val
+
+        chkpt_path = self.manager.path("best_eval.pt")
+        torch.save(
+            self.build_checkpoint(step=step, metric=metric_val),
+            chkpt_path,
+        )
+
+        self.manager.event_logger.info(
+            f"Saving new best-eval checkpoint : "
+            f"eval/spce={metric_val} @ step={step}"
+        )
 
     def build_checkpoint(self, step=None, metric=None):
         """Builds the checkpoint dict holding weights and training state."""
