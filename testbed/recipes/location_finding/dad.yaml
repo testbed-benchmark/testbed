@@ -36,3 +36,12 @@ design_net:
   num_heads: 4
   num_blocks: 3
   decoder_layers: 1
+
+# experiment tracking
+wandb:
+  enabled: false            # opt-in; flip to true or override on the CLI
+  project: testbed
+  entity: null              # your wandb team/user; null uses the default
+  mode: online              # online | offline | disabled
+  tags: []
+  group: null
