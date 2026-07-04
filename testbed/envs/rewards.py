@@ -25,10 +25,10 @@ def batched_logp_against_theta_all(
 ):
     """Evaluates p(outcome | theta_l, design) for all contrastive particles.
 
-    outcome: [*batch_shape, *event_shape_y]
-    design: [*batch_shape, *event_shape_design]
-    theta_all: [*batch_shape, L, *event_shape_theta]
-    returns: [*batch_shape, L]
+    outcome: ``[*batch_shape, *event_shape_y]``
+    design: ``[*batch_shape, *event_shape_design]``
+    theta_all: ``[*batch_shape, L, *event_shape_theta]``
+    returns: ``[*batch_shape, L]``
     """
     outcome = _with_particle_axis(outcome, task.event_shape_y)
     design = _with_particle_axis(design, task.event_shape_design)

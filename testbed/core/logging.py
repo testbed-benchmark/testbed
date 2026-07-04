@@ -85,10 +85,13 @@ class EventLogger:
 class JSONLLogger:
     """Logs structured metric dicts as JSONL; good for plotting/analysis."""
 
-    def __init__(self, path):
+    def __init__(self, path, close_retries: int = 5, close_retry_delay: float = 0.1):
         """Opens the JSONL log file."""
         self.f = open(path, "a")
         self.start_time = time.perf_counter()
+        self.close_retries = close_retries
+        self.close_retry_delay = close_retry_delay
+        self.pending_flush = False
 
     def log(self, metrics: dict):
         """Appends one metrics record."""
@@ -99,11 +102,28 @@ class JSONLLogger:
             **_to_python(metrics),
         }
         self.f.write(json.dumps(record) + "\n")
-        self.f.flush()  # safer for long runs
+        try:
+            self.f.flush()
+            self.pending_flush = False
+        except BlockingIOError:
+            self.pending_flush = True
 
     def close(self):
         """Closes the log file."""
+        self._flush_before_close()
         self.f.close()
+
+    def _flush_before_close(self):
+        """Flushes pending metrics before closing."""
+        for attempt in range(self.close_retries + 1):
+            try:
+                self.f.flush()
+                self.pending_flush = False
+                return
+            except BlockingIOError:
+                if attempt == self.close_retries:
+                    raise
+                time.sleep(self.close_retry_delay * 2**attempt)
 
 
 class WandbLogger(BaseLogger):

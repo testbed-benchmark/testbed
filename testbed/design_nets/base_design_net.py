@@ -23,8 +23,7 @@ class DesignNet(torch.nn.Module, ABC):
         """Maps past (design, outcome) pairs to the next design x_t.
 
         Returns:
-        Tensor
-            The next design x_t with shape [*batch_shape, *event_shape_design].
-
+            Tensor: The next design x_t with shape
+            ``[*batch_shape, *event_shape_design]``.
         """
         ...

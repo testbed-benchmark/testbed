@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..tasks.base_task import Task
+from ..tasks.base import Task
 from .base_objective import Objective
 
 
@@ -35,9 +35,9 @@ class SPCE(Objective):
     def estimate_gain(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
         """Estimates gain from batched histories.
 
-        y_history:      [b, T, *event_shape_y]
-        design_history: [b, T, *event_shape_design]
-        theta_0:        [b, *event_shape_theta]  -- true theta used to generate the history
+        y_history: ``[b, T, *event_shape_y]``
+        design_history: ``[b, T, *event_shape_design]``
+        theta_0: ``[b, *event_shape_theta]``; true theta used to generate the history.
         returns: scalar SPCE estimate.
         """
         task = self.task
@@ -97,7 +97,7 @@ class PCE(Objective):
     def estimate_gain(self, design: Tensor):
         """Estimates gain for one fixed design.
 
-        design: [*event_shape_design]  (leading size-1 batch dims are tolerated and stripped)
+        design: ``[*event_shape_design]``. Leading size-1 batch dims are tolerated and stripped.
         returns: scalar PCE estimate.
         """
         n_event_dims = len(self.task.event_shape_design)

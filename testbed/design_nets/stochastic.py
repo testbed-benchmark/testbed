@@ -19,12 +19,12 @@ class PolicySample:
 
     Attributes:
         design: Sampled bounded design with shape
-            [*batch_shape, *event_shape_design].
-        log_prob: Summed design log probability with shape [*batch_shape].
+            ``[*batch_shape, *event_shape_design]``.
+        log_prob: Summed design log probability with shape ``[*batch_shape]``.
         deterministic_design: Bounded deterministic design, typically the squashed
-            policy mean, with shape [*batch_shape, *event_shape_design].
+            policy mean, with shape ``[*batch_shape, *event_shape_design]``.
         raw_design: Optional unsquashed Gaussian design with shape
-            [*batch_shape, *event_shape_design].
+            ``[*batch_shape, *event_shape_design]``.
     """
 
     design: Tensor
@@ -48,11 +48,11 @@ class StochasticDesignNet(DesignNet):
 
         Args:
             y_history: Outcome history with shape
-                [*batch_shape, T, *event_shape_y].
+                ``[*batch_shape, T, *event_shape_y]``.
             design_history: Design history with shape
-                [*batch_shape, T, *event_shape_design].
+                ``[*batch_shape, T, *event_shape_design]``.
             mask: Optional boolean mask for padded histories with shape
-                [*batch_shape, T].
+                ``[*batch_shape, T]``.
             deterministic: If True, return the deterministic design instead
                 of a random sample.
 
@@ -90,13 +90,13 @@ class GaussianPolicyActor(nn.Module):
         """Computes Gaussian mean and log standard deviation.
 
         Args:
-            y_history: Outcome history with shape [batch, T, dim_y].
-            design_history: Design history with shape [batch, T, dim_design].
-            mask: Optional boolean or float mask with shape [batch, T].
+            y_history: Outcome history with shape ``[batch, T, dim_y]``.
+            design_history: Design history with shape ``[batch, T, dim_design]``.
+            mask: Optional boolean or float mask with shape ``[batch, T]``.
 
         Returns:
             Gaussian mean and log standard deviation, both with shape
-            [batch, dim_design].
+            ``[batch, dim_design]``.
         """
         raise NotImplementedError
 
@@ -261,13 +261,13 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
 
         Args:
             y_history: Outcome history with shape
-                [*batch_shape, T, *event_shape_y].
+                ``[*batch_shape, T, *event_shape_y]``.
             design_history: Design history with shape
-                [*batch_shape, T, *event_shape_design].
+                ``[*batch_shape, T, *event_shape_design]``.
 
         Returns:
             Deterministic bounded design with shape
-            [*batch_shape, *event_shape_design].
+            ``[*batch_shape, *event_shape_design]``.
         """
         return self.sample(y_history, design_history, deterministic=True).design
 
@@ -283,11 +283,11 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
 
         Args:
             y_history: Outcome history with shape
-                [*batch_shape, T, *event_shape_y].
+                ``[*batch_shape, T, *event_shape_y]``.
             design_history: Design history with shape
-                [*batch_shape, T, *event_shape_design].
+                ``[*batch_shape, T, *event_shape_design]``.
             mask: Optional boolean tensor for padded histories with shape
-                [*batch_shape, T].
+                ``[*batch_shape, T]``.
             deterministic: If True, use the Gaussian mean instead of drawing a
                 reparameterized sample.
 
@@ -376,11 +376,11 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
 
         Args:
             y_history: Outcome history with shape
-                [*batch_shape, T, *event_shape_y].
+                ``[*batch_shape, T, *event_shape_y]``.
             design_history: Design history with shape
-                [*batch_shape, T, *event_shape_design].
+                ``[*batch_shape, T, *event_shape_design]``.
             mask: Optional boolean tensor for padded histories with shape
-                [*batch_shape, T].
+                ``[*batch_shape, T]``.
 
         Returns:
             The original batch shape, flattened outcome history, flattened design

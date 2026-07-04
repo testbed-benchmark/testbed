@@ -1,22 +1,46 @@
-"""Michaelis-Menten task."""
+"""Michaelis-Menten task.
+
+References:
+    1. https://openreview.net/forum?id=uyNJLdCvFG
+"""
 
 import torch
+from torch import Tensor
 
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
-from .base_task import Task
+from .base import Task
 
 
 class MichaelisMentenPrior(Distribution):
-    """Uniform prior over Michaelis-Menten parameters.
+    r"""Uniform prior over Michaelis-Menten parameters.
 
-    The default prior is: V_max, V_half ~ Unif(20, 200)
-    Convention is: theta = (V_max, V_half) in that order
-    TODO: taken from Alex's paper, is this the "usual" setup?
+    The default prior is:
+
+    .. math::
+        V_{\max}, V_{\mathrm{half}} \sim \mathrm{Unif}(20, 200)
+
+    Convention: :math:`\theta = (V_{\max}, V_{\mathrm{half}})`.
+
+    Args:
+        vmax_lb (float, optional):
+            Lower bound of the uniform prior over :math:`V_{\max}` (default: 20).
+        vmax_ub (float, optional):
+            Upper bound of the uniform prior over :math:`V_{\max}` (default: 200).
+        vhalf_lb (float, optional):
+            Lower bound of the uniform prior over :math:`V_{\mathrm{half}}` (default: 20).
+        vhalf_ub (float, optional):
+            Upper bound of the uniform prior over :math:`V_{\mathrm{half}}` (default: 200).
     """
 
-    def __init__(self, vmax_lb=20, vmax_ub=200, vhalf_lb=20, vhalf_ub=200):
-        """Initializes prior bounds."""
+    def __init__(
+        self,
+        vmax_lb: float = 20,
+        vmax_ub: float = 200,
+        vhalf_lb: float = 20,
+        vhalf_ub: float = 200,
+    ):
+        """Initializes Michaelis-Menten prior bounds."""
         super().__init__()
 
         # lower/upper bounds
@@ -26,16 +50,32 @@ class MichaelisMentenPrior(Distribution):
         # log normalizing constant
         self.register_buffer("log_z", -torch.log(self.ubs - self.lbs).sum())
 
-    def sample(self, n_samples: int = 1):
-        """Draws parameter samples."""
-        # [n_samples, 2]
+    def sample(self, n_samples: int = 1) -> Tensor:
+        """Draws samples of parameters from the prior.
+
+        Args:
+            n_samples (int):
+                How many samples to draw.
+
+        Returns:
+            Tensor:
+                Samples, shape ``[n_samples, 2]``.
+        """
         noise = torch.rand(n_samples, 2, device=self.lbs.device)
         samples = (self.ubs - self.lbs) * noise + self.lbs
         return samples
 
-    def log_prob(self, theta):
-        """Evaluates prior log probabilities."""
-        # theta: [..., 2]
+    def log_prob(self, theta: Tensor) -> Tensor:
+        """Evaluates prior log probabilities.
+
+        Args:
+            theta (Tensor):
+                Points at which to evaluate the log-probability. Shape ``[..., 2]``.
+
+        Returns:
+            Tensor:
+                Log probabilities, shape ``[...,]``.
+        """
         in_support = ((theta >= self.lbs) & (theta <= self.ubs)).all(dim=-1)
         logp = torch.where(
             in_support, self.log_z, torch.tensor(-torch.inf, device=theta.device)
@@ -45,20 +85,45 @@ class MichaelisMentenPrior(Distribution):
 
 
 class MichaelisMenten(Task):
-    """Implements the Michaelis Menten chemical kinetics model.
+    r"""Michaelis-Menten chemical kinetics task.
 
-    Convention: theta = (V_max, V_half).
+    Likelihood:
+
+    .. math::
+        \mu(\theta, x) = \frac{V_{\max} x^s}{V_{\mathrm{half}}^s + x^s}
+
+    .. math::
+        p(y \mid \theta, x) = \mathcal{N}(\mu(\theta, x), \sigma^2)
+
+    Convention: :math:`\theta = (V_{\max}, V_{\mathrm{half}})`.
+
+    Args:
+        noise_scale (float, optional):
+            Standard deviation of observation noise (:math:`\sigma`) (default: 2.5).
+        exponent (float, optional):
+            Hill exponent :math:`s`; ``s=1`` gives the standard Michaelis-Menten
+            model, other values give the Hill model (default: 1.0).
+        prior (Distribution, optional):
+            Prior over parameters. If None, the default MichaelisMentenPrior is used.
     """
 
-    def __init__(self, noise_scale: float = 2.5, exponent: float = 1.0, prior=None):
-        """Initializes the task."""
+    def __init__(
+        self,
+        noise_scale: float = 2.5,
+        exponent: float = 1.0,
+        prior=None,
+    ) -> None:
+        """Initializes the Michaelis-Menten task."""
         # Default prior
         if prior is None:
             prior = MichaelisMentenPrior()
 
-        self.event_shape_theta = torch.Size([2])
-        self.event_shape_design = torch.Size([1])
-        self.event_shape_y = torch.Size([1])
+        super().__init__(
+            event_shape_y=[1],
+            event_shape_theta=[2],
+            event_shape_design=[1],
+            prior=prior,
+        )
 
         # Standard deviation of observation noise (assumed Gaussian)
         self.noise_scale = noise_scale
@@ -67,24 +132,26 @@ class MichaelisMenten(Task):
         # Other values give rise to the so-called Hill model
         self.exponent = exponent
 
-        super().__init__(
-            prior,
-            discrete_y=False,
-            discrete_theta=False,
-            discrete_design=False,
-        )
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Returns a compact representation."""
         return (
             f"MichaelisMenten(noise_scale={self.noise_scale}, exponent={self.exponent})"
         )
 
-    def make_mean(self, theta, design):
-        """Computes the likelihood mean."""
-        # theta:  [b, 2]
-        # design: [b, 1]
+    def make_mean(self, theta: Tensor, design: Tensor) -> Tensor:
+        """Computes the conditional mean E[y | theta, design].
 
+        Args:
+            theta (Tensor):
+                Parameter tensor of shape ``[b, 2]``, with columns
+                ``(V_max, V_half)``.
+            design (Tensor):
+                Design tensor of shape ``[b, 1]``.
+
+        Returns:
+            Tensor:
+                Mean of shape ``[b, 1]``.
+        """
         vmax = theta[:, 0].unsqueeze(-1)
         vhalf = theta[:, 1].unsqueeze(-1)
 
@@ -92,18 +159,37 @@ class MichaelisMenten(Task):
         denom = vhalf.pow(self.exponent) + design.pow(self.exponent)
         return num / denom
 
-    def _outcome_logp(self, y, theta, design):
-        # y: [b, 1]
-        # theta: [b, 2]
-        # design: [b, 1]
-        # returns: [b, ]
+    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
+        """Computes log probability of observations under the model.
+
+        Args:
+            y (Tensor):
+                Observations of shape ``[b, 1]``.
+            theta (Tensor):
+                Parameter tensor of shape ``[b, 2]``.
+            design (Tensor):
+                Design tensor of shape ``[b, 1]``.
+
+        Returns:
+            Tensor:
+                Log probability per batch element, shape ``[b]``.
+        """
         loc = self.make_mean(theta, design)
-        logp = normal_log_prob(y, loc, self.noise_scale)  # [b, 1]
+        logp = normal_log_prob(y, loc, self.noise_scale)
         return logp.sum(dim=-1)
 
-    def _sample_outcome(self, theta, design):
-        # theta:   [b, 2]
-        # design:  [b, 1]
-        # returns: [b, 1]
+    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
+        """Samples from the likelihood p(y | theta, design) using reparametrization.
+
+        Args:
+            theta (Tensor):
+                Parameter tensor of shape ``[b, 2]``.
+            design (Tensor):
+                Design tensor of shape ``[b, 1]``.
+
+        Returns:
+            Tensor:
+                Sampled outcomes of shape ``[b, 1]``.
+        """
         loc = self.make_mean(theta, design)  # [b, 1]
         return torch.randn_like(loc) * self.noise_scale + loc
