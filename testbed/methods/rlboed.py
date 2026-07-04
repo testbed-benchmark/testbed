@@ -302,6 +302,28 @@ def _soft_update(source: torch.nn.Module, target: torch.nn.Module, tau: float) -
         target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
 
 
+def _clip_and_step(optimizer, parameters, grad_clip: float | None) -> bool:
+    """Clips the gradient norm and steps the optimizer.
+
+    Returns ``True`` if the step was *skipped* because the gradient was
+    non-finite. ``clip_grad_norm_`` cannot rescue an inf/nan gradient -- a zero
+    clip coefficient times ``inf`` is ``nan`` -- so when the SAC critic
+    momentarily diverges we drop the update rather than let the NaN poison the
+    weights and Adam's moment estimates (which otherwise resurface later as a
+    NaN policy mean and crash the run).
+
+    When ``grad_clip`` is ``None`` no clipping or skipping is applied.
+    """
+    if grad_clip is None:
+        optimizer.step()
+        return False
+    total_norm = torch.nn.utils.clip_grad_norm_(parameters, grad_clip)
+    if torch.isfinite(total_norm):
+        optimizer.step()
+        return False
+    return True
+
+
 def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
     """Rejects unsupported tasks and invalid settings."""
     sac = cfg.sac
@@ -335,6 +357,9 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.entropy_anneal_rate must be non-negative.")
     if sac.policy_init_std <= 0:
         raise ValueError("sac.policy_init_std must be positive.")
+    grad_clip = sac.get("grad_clip", None)
+    if grad_clip is not None and grad_clip <= 0:
+        raise ValueError("sac.grad_clip must be positive when set.")
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
     if not isinstance(design_space, BoxDesignSpace):
@@ -482,6 +507,7 @@ class _SACLosses:
     actor_loss: torch.Tensor | None
     alpha_loss: torch.Tensor | None
     optimization_step: int
+    grad_skips: int = 0
 
 
 def sac_update(
@@ -525,6 +551,9 @@ def sac_update(
             1.0 - data_dones.float()
         ) * cfg.sac.gamma * min_qf_next_target.view(-1)
 
+    grad_clip = cfg.sac.get("grad_clip", None)
+    grad_skips = 0
+
     qf1_a_values = nets.qf1(data_obs, data_designs).view(-1)
     qf2_a_values = nets.qf2(data_obs, data_designs).view(-1)
     qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
@@ -533,7 +562,11 @@ def sac_update(
 
     nets.q_optimizer.zero_grad()
     qf_loss.backward()
-    nets.q_optimizer.step()
+    grad_skips += _clip_and_step(
+        nets.q_optimizer,
+        list(nets.qf1.parameters()) + list(nets.qf2.parameters()),
+        grad_clip,
+    )
 
     actor_loss = None
     alpha_loss = None
@@ -547,7 +580,9 @@ def sac_update(
 
         nets.actor_optimizer.zero_grad()
         actor_loss.backward()
-        nets.actor_optimizer.step()
+        grad_skips += _clip_and_step(
+            nets.actor_optimizer, list(nets.actor.parameters()), grad_clip
+        )
 
         if nets.alpha_optimizer is not None:
             alpha_loss = -(
@@ -555,7 +590,9 @@ def sac_update(
             ).mean()
             nets.alpha_optimizer.zero_grad()
             alpha_loss.backward()
-            nets.alpha_optimizer.step()
+            grad_skips += _clip_and_step(
+                nets.alpha_optimizer, [nets.log_alpha], grad_clip
+            )
 
     if optimization_step % cfg.sac.target_network_frequency == 0:
         _soft_update(nets.qf1, nets.qf1_target, cfg.sac.tau)
@@ -566,6 +603,7 @@ def sac_update(
         actor_loss=actor_loss,
         alpha_loss=alpha_loss,
         optimization_step=optimization_step + 1,
+        grad_skips=grad_skips,
     )
 
 
@@ -609,6 +647,10 @@ class Trainer:
         self.completed_episodes = 0
         self._first_collect = True
         self._start_time = time.time()
+        # Number of optimizer steps skipped because their gradient was
+        # non-finite (see _clip_and_step). Stays 0 in a healthy run; a climbing
+        # count signals the SAC updates are diverging.
+        self._grad_skips = 0
 
         # most recent losses, surfaced in the periodic log
         self._qf_loss = torch.tensor(float("nan"))
@@ -657,7 +699,8 @@ class Trainer:
                         f"return={metrics['episodic_return']:.4f}, "
                         f"qf_loss={step_metrics['qf_loss']:.4f}, "
                         f"actor_loss={step_metrics['actor_loss']:.4f}, "
-                        f"alpha={step_metrics['alpha']:.4f}"
+                        f"alpha={step_metrics['alpha']:.4f}, "
+                        f"grad_skips={step_metrics['grad_skips']:.0f}"
                     )
 
             # Select the deployable policy on the deterministic-eval sPCE
@@ -725,6 +768,7 @@ class Trainer:
                     self._actor_loss = losses.actor_loss
                 if losses.alpha_loss is not None:
                     self._alpha_loss = losses.alpha_loss
+                self._grad_skips += losses.grad_skips
                 self.optimization_step = losses.optimization_step
 
         if sac.alpha is None:
@@ -784,6 +828,7 @@ class Trainer:
             "alpha_loss": self._alpha_loss.item(),
             "alpha": self.nets.log_alpha.exp().item(),
             "target_entropy": self.target_entropy,
+            "grad_skips": float(self._grad_skips),
         }
 
     def _maybe_save_best(self, step, metrics, min_step=0):
@@ -835,8 +880,7 @@ class Trainer:
         )
 
         self.manager.event_logger.info(
-            f"Saving new best-eval checkpoint : "
-            f"eval/spce={metric_val} @ step={step}"
+            f"Saving new best-eval checkpoint : eval/spce={metric_val} @ step={step}"
         )
 
     def build_checkpoint(self, step=None, metric=None):

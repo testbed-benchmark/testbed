@@ -40,6 +40,7 @@ sac:
   policy_lr: 0.0001
   q_lr: 0.0003
   policy_init_std: 0.5773502691896258      # 3 ** -0.5
+  grad_clip: null            # global grad-norm clip on critic/actor; null disables
   policy_frequency: 1
   target_network_frequency: 1
   alpha: null
