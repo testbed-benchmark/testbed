@@ -27,7 +27,7 @@ sac:
   num_training_iterations: 20_001
   num_envs: 100
   buffer_size: 1_000_000
-  buffer_device: gpu
+  buffer_device: cuda
   gamma: 0.9
   tau: 0.005
   batch_size: 4096
