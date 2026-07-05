@@ -20,9 +20,12 @@ task:
   _target_: testbed.tasks.CES
 T: 10
 
-# design space: each basket coordinate in [0, 100] (scalar low/high broadcast to 6 dims)
+# design space: each basket coordinate in [0.01, 100] (scalar low/high broadcast to 6 dims).
+# The low bound matches the RL-BOED reference (spaces.Box(low=0.01, high=100)); flooring at
+# 0.01 (not 0.0) keeps the CES utility (Σ αᵢ xᵢ^ρ)^(1/ρ) away from the x→0 regime that
+# produces extreme μ and the spiky rewards that destabilise the SAC critic.
 design_space:
-  low: 0.0
+  low: 0.01
   high: 100.0
 
 # reward / outcome bounds: the rating y is a censored sigmoid living in [0, 1]

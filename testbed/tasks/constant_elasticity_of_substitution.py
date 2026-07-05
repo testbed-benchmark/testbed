@@ -152,9 +152,6 @@ class CES(Task):
         self.logit_lower = math.log(epsilon) - math.log1p(-epsilon)
         self.logit_upper = -self.logit_lower
 
-        # Numerical clamping (to avoid infinite gradients of x^rho at x=0)
-        self.clamp_val = 1e-6
-
     def __repr__(self) -> str:
         """Returns a compact representation."""
         return f"CES(tau={self.tau}, epsilon={self.epsilon})"
@@ -180,8 +177,10 @@ class CES(Task):
         u = theta[..., 4:5]
 
         def utility(basket):
-            base = basket.clamp(min=self.clamp_val)
-            inner = (base.pow(rho) * alpha).sum(dim=-1, keepdim=True)
+            # Baskets are projected into the design box [0.01, 100] before they
+            # reach here, so xᵢ^ρ is finite and has a well-defined gradient (the
+            # x→0 singularity of x^ρ for ρ<1 never occurs); no clamp is needed.
+            inner = (basket.pow(rho) * alpha).sum(dim=-1, keepdim=True)
             return inner.pow(1.0 / rho)
 
         x = design[..., 0:3]
