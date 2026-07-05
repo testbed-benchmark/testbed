@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "TestBED is a library for Bayesian experimental design."
 readme = "README.md"
 license = { text = 'Apache-2.0' }
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"  # hydra-core 1.3.x CLI is incompatible with Python 3.14
 authors = [
     {name = 'Gavin Kerrigan', email = 'kerrigan@stats.ox.ac.uk'},
     {name = 'Marcel Hedman', email = 'marcel.hedman@jesus.ox.ac.uk'},

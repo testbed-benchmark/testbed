@@ -1,0 +1,9 @@
+# @package _global_
+# Shared system settings, factored out of the individual recipes.
+#
+# `save_dir` is the root Hydra writes runs beneath; the `hydra_run` group owns
+# the timestamped subdirectory under it. It defaults to `runs` (matching the
+# Manager default) so a run never *needs* it on the CLI — pass `save_dir=...`
+# to write elsewhere.
+device: cuda
+save_dir: runs

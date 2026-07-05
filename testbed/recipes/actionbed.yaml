@@ -1,0 +1,29 @@
+defaults:
+  - system: default
+  - task: location_finding
+  - net@design_net: attentive_policy
+  - net@action_net: attentive_policy
+  - wandb: default
+  - hydra_run: default
+  - _self_
+
+# system (device/save_dir come from the system group)
+seed: 0
+T: 10
+
+# loss
+loss:
+  _target_: testbed.design_objectives.SortedMSELoss # testbed.design_objectives.MSELoss also works
+  #epsilon: 1e-8  # Only needed for the LogMSE variants
+
+# training
+n_train_iter: 5_000
+n_outer: 2_048
+
+# eval
+eval_every: 100
+n_outer_eval: 2_048
+
+# optimizer
+lr: 1e-4
+grad_clip: 1.0

@@ -1,14 +1,17 @@
-# system
+defaults:
+  - system: default
+  - task: location_finding
+  - wandb: default
+  - hydra_run: default
+  - _self_
+
+# system (device/save_dir come from the system group)
 seed: 373693
 torch_deterministic: true
-device: 'cuda'
-save_dir: ???
 
-# task
+# override the shared task group to the 2-source variant
 task:
-  _target_: testbed.tasks.LocationFinding
   n_sources: 2
-  dim_theta: 2
 T: 30
 
 # design space
@@ -47,12 +50,3 @@ sac:
   target_entropy: null
   entropy_anneal_rate: 7.142857142857143e-05   # 1 / 1.4e4
   log_frequency: 100
-
-# experiment tracking
-wandb:
-  enabled: false            # opt-in; flip to true or override on the CLI
-  project: testbed
-  entity: null              # your wandb team/user; null uses the default
-  mode: online              # online | offline | disabled
-  tags: []
-  group: null

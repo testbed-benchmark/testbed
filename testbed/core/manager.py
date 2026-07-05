@@ -18,22 +18,34 @@ class Manager:
     """Manage run directories, config snapshots, and loggers."""
 
     def __init__(
-        self, cfg, root="runs", name=None, logger=None, console=True, timestamp=True
+        self,
+        cfg,
+        root="runs",
+        name=None,
+        logger=None,
+        console=True,
+        timestamp=True,
+        run_dir=None,
     ):
-        """Creates a run directory and loggers."""
+        """Creates a run directory and loggers.
+
+        Pass ``run_dir`` to adopt an already-resolved run directory (e.g. the one
+        a Hydra entry point built); its basename becomes the run name. Otherwise
+        the directory is ``root/[timestamp_]name``.
+        """
         self.cfg = cfg
 
         # create run directory
-        timestamp_str = time.strftime("%Y-%m-%d_%H-%M-%S")
-        if name is not None:
-            if timestamp:
-                self.run_name = f"{timestamp_str}_{name}"
-            else:
-                self.run_name = name
+        if run_dir is not None:
+            self.dir = run_dir
+            self.run_name = os.path.basename(os.path.normpath(run_dir))
         else:
-            self.run_name = timestamp_str
-
-        self.dir = os.path.join(root, self.run_name)
+            timestamp_str = time.strftime("%Y-%m-%d_%H-%M-%S")
+            if name is not None:
+                self.run_name = f"{timestamp_str}_{name}" if timestamp else name
+            else:
+                self.run_name = timestamp_str
+            self.dir = os.path.join(root, self.run_name)
         os.makedirs(self.dir, exist_ok=True)
 
         # save config

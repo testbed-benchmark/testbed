@@ -1,12 +1,10 @@
 """Training for DAD (Foster et al., 2021)."""
 
-import os
-
+import hydra
 import torch
 from hydra.utils import instantiate
-from omegaconf import OmegaConf
 
-from testbed.core.manager import Manager
+from testbed.core.setup import setup
 from testbed.design_objectives import SNMC, SPCE
 from testbed.designers import PolicyDesigner
 
@@ -165,25 +163,17 @@ def build_objective(cfg, task):
 # Entry point
 # ============================================================================
 
-if __name__ == "__main__":
-    """ Entry point for DAD training.
 
-    Usage: python dad.py config='./path/to/config.yaml' save_dir='./save_path/'
+@hydra.main(version_base="1.3", config_path="../recipes", config_name="dad")
+def main(cfg):
+    """Entry point for DAD training.
+
+    Usage: python testbed/methods/dad.py save_dir='./save_path/' [overrides...]
     """
-    conf_cli = OmegaConf.from_cli()
-    cfg = OmegaConf.load(conf_cli.config)
-    # sync cli args with config
-    cfg = OmegaConf.merge(cfg, conf_cli)
-
-    # Manager setup
-    run_name = f"{os.environ.get('SLURM_ARRAY_JOB_ID', '0')}_{os.environ.get('SLURM_ARRAY_TASK_ID', '0')}"
-    manager = Manager(cfg, root=cfg.save_dir, name=run_name, timestamp=True)
+    manager, task = setup(cfg)
 
     # Set seed
     torch.manual_seed(cfg.seed)
-
-    task = instantiate(cfg.task)
-    task = task.to(cfg.device)
 
     policy_net = build_design_net(cfg, task)
     policy_net = policy_net.to(cfg.device)
@@ -206,3 +196,7 @@ if __name__ == "__main__":
     )
 
     trainer.train()
+
+
+if __name__ == "__main__":
+    main()
