@@ -47,6 +47,9 @@ def _stable_log_ndtr(x: Tensor, thresh: float = -10.0) -> Tensor:
     gradients. Feeding ``log_ndtr`` only clamped (``>= thresh``) arguments and
     using the closed-form asymptotic elsewhere keeps every branch finite.
     """
+    if not x.requires_grad:
+        return torch.special.log_ndtr(x)
+
     tail = x < thresh
     # log_ndtr never sees an argument below thresh, so its backward stays finite.
     x_safe = torch.where(tail, torch.full_like(x, thresh), x)
