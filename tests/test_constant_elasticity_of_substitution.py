@@ -97,6 +97,10 @@ def test_outcome_logp_backward_finite_tiny_sigma():
     # torch.where evaluates all branches, so a non-finite gradient in a
     # censoring branch used to poison interior rows (and saturated boundary
     # rows) via 0 * inf = NaN.
+    #
+    # Baskets use the design-box lower bound 0.01 (not 0): the reference model
+    # evaluates x^rho directly, relying on the [0.01, 100] design box, so x = 0
+    # is out of domain (its x^rho gradient is separately singular).
     task = make_task()
     eps = task.epsilon
     theta = torch.tensor(
@@ -109,8 +113,8 @@ def test_outcome_logp_backward_finite_tiny_sigma():
     )
     design = torch.tensor(
         [
-            [0.0, 0.0, 0.0, 100.0, 100.0, 100.0],
-            [100.0, 100.0, 100.0, 0.0, 0.0, 0.0],
+            [0.01, 0.01, 0.01, 100.0, 100.0, 100.0],
+            [100.0, 100.0, 100.0, 0.01, 0.01, 0.01],
             [10.0, 50.0, 90.0, 90.0, 50.0, 10.0],
         ],
         requires_grad=True,
