@@ -787,11 +787,10 @@ class Trainer:
         }
 
     def _maybe_save_best(self, step, metrics, min_step=0):
-        # Saves a checkpoint of the model if it's the highest episodic return seen.
-        # NB: our objective is maximizing the episodic return (an MI bound).
+        """Saves a checkpoint of the model if it's the highest episodic return seen so far.
 
-        # min_step controls how long we wait before saving; useful for avoiding a
-        # ton of i/o at the start.
+        `min_step` controls how long we wait before saving.
+        """
         if step < min_step:
             return
 
@@ -816,9 +815,7 @@ class Trainer:
             )
 
     def _maybe_save_best_eval(self, step, eval_metrics):
-        # Saves a checkpoint whenever the deterministic-eval sPCE improves. This
-        # tracks the best *deterministic* policy, whereas _maybe_save_best keys on
-        # the stochastic training return (which need not select the same weights).
+        """Saves a checkpoint whenever the mean-policy sPCE improves."""
         if self.manager is None:
             return
 
@@ -835,8 +832,7 @@ class Trainer:
         )
 
         self.manager.event_logger.info(
-            f"Saving new best-eval checkpoint : "
-            f"eval/spce={metric_val} @ step={step}"
+            f"Saving new best-eval checkpoint : eval/spce={metric_val} @ step={step}"
         )
 
     def build_checkpoint(self, step=None, metric=None):
