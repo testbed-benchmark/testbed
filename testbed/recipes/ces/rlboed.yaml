@@ -55,17 +55,6 @@ sac:
   policy_lr: 0.0003          # CES default (source-location used 0.0001)
   q_lr: 0.0003
   policy_init_std: 0.5773502691896258      # 3 ** -0.5
-  # Global grad-norm clip on the critic/actor/alpha updates. CES's large,
-  # occasionally-spiky dense rewards (per-step logp up to ~17 when the true u is
-  # small) push the SAC critic into an overestimation feedback loop; unchecked,
-  # the critic eventually emits an inf, which poisons the actor and makes the
-  # next Normal(mean, std) see NaN means and raise. Setting grad_clip (a) caps
-  # normal updates' spikes -- 1000 sits just above the p99 of healthy critic grad
-  # norms, so it barely touches normal steps -- and (b) enables a non-finite
-  # guard that *skips* any update whose gradient is still inf/nan (clipping alone
-  # cannot rescue those). A climbing `grad_skips` in the logs flags divergence.
-  # Set null to disable both.
-  grad_clip: 1000.0
   policy_frequency: 1
   target_network_frequency: 1
   alpha: null
