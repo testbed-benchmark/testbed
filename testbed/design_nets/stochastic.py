@@ -12,6 +12,27 @@ from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
 from testbed.envs.design_spaces import BoxDesignSpace
 
+# Floor for ``log(1 - tanh(x)^2)`` so the tanh change-of-variables stays bounded
+# (in ``[log(_TANH_LOG_DET_EPS), 0]`` per dimension) even when tanh saturates.
+# Matches the reference RL-BOED (garage ``TanhNormal.log_prob``) exactly.
+_TANH_LOG_DET_EPS = 1e-6
+
+
+def _clip_but_pass_gradient(
+    x: Tensor, lower: float = 0.0, upper: float = 1.0
+) -> Tensor:
+    """Clips ``x`` to ``[lower, upper]`` in value while passing the gradient through.
+
+    Mirrors garage's ``TanhNormal._clip_but_pass_gradient``: the clip offset is
+    detached so the forward value is clamped but the backward pass sees the
+    unclipped gradient. Used to keep ``1 - tanh(x)^2`` in ``[0, 1]`` without
+    killing the restoring gradient for unsaturated designs.
+    """
+    clip_up = (x > upper).to(x.dtype)
+    clip_low = (x < lower).to(x.dtype)
+    clip = ((upper - x) * clip_up + (lower - x) * clip_low).detach()
+    return x + clip
+
 
 @dataclass
 class PolicySample:
@@ -353,17 +374,23 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         return self.design_bias + self.design_scale * torch.tanh(raw_design)
 
     def _squash_log_det(self, raw_design: Tensor) -> Tensor:
-        """Log absolute determinant of the tanh-then-affine squash, per dimension.
+        """Log absolute determinant of the tanh squash, per dimension.
 
-        Computed in the forward direction to stay finite for any finite
-        ``raw_design``; inverting via ``atanh`` would diverge once ``tanh``
-        saturates to +/-1 in floating point.
+        Returns ``log(1 - tanh(raw_design)^2)`` computed on the post-tanh value
+        and floored by ``_TANH_LOG_DET_EPS``, so the term is bounded in
+        ``[log(_TANH_LOG_DET_EPS), 0]`` even when ``tanh`` saturates to +/-1.
+        This matches the reference RL-BOED (garage ``TanhNormal.log_prob``) and
+        keeps the policy log-prob bounded as designs saturate at the box corners
+        (an unbounded log-det would drive ``log_pi`` to +inf and diverge SAC).
+
+        The design-box affine scale is deliberately *not* included: the
+        log-prob is measured in the ``[-1, 1]`` tanh space, matching the
+        reference's ``target_entropy = -dim`` convention (the ``[-1, 1] ->``
+        physical-box rescale is a constant Jacobian applied outside the policy
+        distribution).
         """
-        # log(1 - tanh(x)^2) in a numerically stable form (SpinUp / Denis Yarats).
-        tanh_log_det = 2.0 * (
-            log(2.0) - raw_design - nn.functional.softplus(-2.0 * raw_design)
-        )
-        return torch.log(self.design_scale) + tanh_log_det
+        value = torch.tanh(raw_design)
+        return torch.log(_clip_but_pass_gradient(1.0 - value**2) + _TANH_LOG_DET_EPS)
 
     def _prepare_histories(
         self,
