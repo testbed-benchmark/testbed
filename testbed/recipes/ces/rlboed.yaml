@@ -1,47 +1,25 @@
-# RL-BOED (SAC) recipe for the CES (constant elasticity of substitution) task.
-#
-# Mirrors the RL-BOED reference (Blau et al. 2022) CES run:
-#   Adaptive_CES_SAC.py --n-contr-samples=100000 --n-rl-itr=20001 \
-#     --bound-type=lower --budget=10 --discount=0.9 --buffer-capacity=1000000
-#
-# NB: unlike the source-location command, the reference CES command does NOT
-# override tau / learning rates, so CES keeps the SAC DEFAULTS: tau=5e-3,
-# policy_lr=q_lr=3e-4 (source used 1e-3 / 1e-4).
-# Paper RL target: sPCE = 13.965 at T=10, L=1e7 (Table 2).
-
 # system
 seed: 373693
 torch_deterministic: true
 device: 'cuda'
 save_dir: ???
 
-# task  (CES: 3 goods, two baskets -> 6-d design; theta=(rho, alpha_1..3, u) -> 5-d)
+# task
 task:
   _target_: testbed.tasks.CES
 T: 10
 
-# design space: each basket coordinate in [0.01, 100] (scalar low/high broadcast to 6 dims).
-# The low bound matches the RL-BOED reference (spaces.Box(low=0.01, high=100)); flooring at
-# 0.01 (not 0.0) keeps the CES utility (Σ αᵢ xᵢ^ρ)^(1/ρ) away from the x→0 regime that
-# produces extreme μ and the spiky rewards that destabilise the SAC critic.
 design_space:
   low: 0.01
   high: 100.0
 
-# reward / outcome bounds: the rating y is a censored sigmoid living in [0, 1]
+# reward / outcome bounds
 reward:
   n_contrastive: 100_000
   outcome_low: 0.0
   outcome_high: 1.0
 
-# eval
-#   The RL target (13.965) needs L >= 1e7 to even be representable
-#   (log(1e6)=13.8 < 13.965), but L=1e7 x num_envs=100 is ~20 GB and will OOM.
-#   So the in-training curve uses L=1e6 (caps ~13.8; fine for tracking progress
-#   and selecting best_eval.pt). Score the FINAL policy at L=1e7 offline with
-#   eval_rlboed_spce.py using a small --num-envs (e.g. 10-20) and pool seeds.
-#   If eval OOMs mid-training, drop eval_n_contrastive to 100_000.
-eval_every: 1000
+eval_every: 500
 eval_n_contrastive: 1_000_000
 
 # SAC hyperparameters
@@ -49,21 +27,21 @@ sac:
   num_training_iterations: 20_001
   num_envs: 100
   buffer_size: 1_000_000
-  buffer_device: cpu
+  buffer_device: gpu
   gamma: 0.9
-  tau: 0.005                 # CES default (source-location used 0.001)
+  tau: 0.005
   batch_size: 4096
   learning_starts: 100_000
   gradient_steps_per_iteration: 64
-  policy_lr: 0.0003          # CES default (source-location used 0.0001)
+  policy_lr: 0.0003
   q_lr: 0.0003
-  policy_init_std: 0.5773502691896258      # 3 ** -0.5
+  policy_init_std: 0.5773502691896258  # 3 ** -0.5
   policy_frequency: 1
   target_network_frequency: 1
   alpha: null
   initial_alpha: 1.0
-  target_entropy: null       # -> -numel(design) = -6
-  entropy_anneal_rate: 7.142857142857143e-05   # 1 / 1.4e4
+  target_entropy: null  # -> -numel(design) = -6
+  entropy_anneal_rate: 7.142857142857143e-05  # 1 / 1.4e4
   log_frequency: 100
 
 # experiment tracking

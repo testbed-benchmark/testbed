@@ -23,15 +23,15 @@ reward:
   outcome_high: 10.0
 
 # eval
-eval_every: 0                  # no periodic eval during SAC training
+eval_every: 500
 eval_n_contrastive: 1_000_000
 
 # SAC hyperparameters
 sac:
-  num_training_iterations: 2_001
+  num_training_iterations: 20_001
   num_envs: 100
-  buffer_size: 10_000_000
-  buffer_device: cpu
+  buffer_size: 1_000_000
+  buffer_device: gpu
   gamma: 0.9
   tau: 0.001
   batch_size: 4096
@@ -39,13 +39,13 @@ sac:
   gradient_steps_per_iteration: 64
   policy_lr: 0.0001
   q_lr: 0.0003
-  policy_init_std: 0.5773502691896258      # 3 ** -0.5
+  policy_init_std: 0.5773502691896258  # 3 ** -0.5
   policy_frequency: 1
   target_network_frequency: 1
   alpha: null
   initial_alpha: 1.0
   target_entropy: null
-  entropy_anneal_rate: 7.142857142857143e-05   # 1 / 1.4e4
+  entropy_anneal_rate: 7.142857142857143e-05  # 1 / 1.4e4
   log_frequency: 100
 
 # experiment tracking
