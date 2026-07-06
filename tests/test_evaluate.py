@@ -9,7 +9,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from testbed.methods.evaluate import (
+from testbed.eval.evaluate import (
     _batched_gain,
     evaluate_bounds,
     infer_method,

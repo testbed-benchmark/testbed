@@ -51,7 +51,7 @@ def _fmt_row(payload: dict) -> str:
 def build_table_markdown(payloads: list[dict]) -> str:
     """Renders one markdown table per task."""
     if not payloads:
-        return "_No results yet. Run `python testbed/methods/evaluate.py run_dir=...` to add some._"
+        return "_No results yet. Run `python testbed/eval/evaluate.py run_dir=...` to add some._"
 
     header = (
         "| Method | sPCE (lower) | sNMC (upper) | Proposal time (ms, CPU) "

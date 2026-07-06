@@ -47,7 +47,7 @@ Policies trained with the recipes in `testbed/recipes/` are evaluated with the
 standalone eval script, which writes one JSON per (task, method) into `results/`:
 
 ```
-python testbed/methods/evaluate.py run_dir=<training run dir> [checkpoint=best.pt]
+python testbed/eval/evaluate.py run_dir=<training run dir> [checkpoint=best.pt]
 ```
 
 The table below is generated from `results/` by `python scripts/update_benchmark.py`;
@@ -56,7 +56,7 @@ information gain (mean ± standard error over seeded eval runs); proposal time i
 the median per-design CPU latency.
 
 <!-- benchmark:start -->
-_No results yet. Run `python testbed/methods/evaluate.py run_dir=...` to add some._
+_No results yet. Run `python testbed/eval/evaluate.py run_dir=...` to add some._
 <!-- benchmark:end -->
 
 # Contributing

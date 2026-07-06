@@ -4,7 +4,7 @@ Loads a saved training run (DAD, RL-BOED, or ActionBED), rolls out the policy,
 and reports sPCE/sNMC bounds, deployment speed, and method-specific metrics.
 
 Usage:
-    python testbed/methods/evaluate.py run_dir=<dir> [checkpoint=best.pt]
+    python testbed/eval/evaluate.py run_dir=<dir> [checkpoint=best.pt]
         [n_inner=5000] [n_rollouts=10000] [n_runs=10] [seed=0] [batch_size=100]
 """
 
