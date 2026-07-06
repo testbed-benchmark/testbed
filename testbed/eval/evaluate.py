@@ -36,8 +36,8 @@ DEFAULTS = OmegaConf.create(
         "checkpoint": "best.pt",
         "method": None,  # dad | actionbed | rlboed; None infers from the checkpoint
         "n_inner": 5000,  # contrastive samples L (DAD paper uses 5000)
-        # Rollouts for the outer expectation. The paper pools 10000; 2000 is a
-        # lighter default (SE ~2x larger), override upward for the published table.
+        # Rollouts for the outer expectation. The DAD paper pools 10000; 2000 is a
+        # lighter default (SE ~2x larger), override upward for the final published table.
         "n_rollouts": 2000,
         "seed": 0,
         "batch_size": 100,  # outer mini-batch; bounds memory at batch_size * (L+1)
@@ -180,7 +180,7 @@ def evaluate_bounds(loaded: LoadedRun, cfg) -> dict:
 
 
 def measure_proposal_time(loaded: LoadedRun, cfg) -> float:
-    """Median per-design proposal time in ms on CPU (DAD paper speed test)."""
+    """Median per-design proposal time in ms on CPU (like the DAD paper speed test)."""
     task = instantiate(loaded.cfg.task)  # cpu copy
     policy_net = copy.deepcopy(loaded.designer.policy_net).to("cpu").eval()
     designer = PolicyDesigner(task, loaded.cfg.T, policy_net, deterministic=True)
