@@ -38,12 +38,13 @@ n_inner_eval: 100_000
 
 # design policy network
 # DeepSets net from the DAD paper: encoder [3 -> 256 -> 256 -> 16] + sum pooling,
-# learnable null encoding. Emitter differs slightly from the paper's [16 -> 128 -> 16 -> 2]
-# (second hidden width 128 vs 16, GELU vs ReLU).
+# emitter [16 -> 128 -> 16 -> 2], ReLU throughout. Remaining difference from the
+# paper: learnable null encoding (fixed to zero there).
 design_net:
   _target_: testbed.design_nets.DeepSetPolicyNet
   encoder_dim_h: 256
   encoder_layers: 2
   dim_emb: 16
   decoder_layers: 2
-  decoder_dim_h: 128
+  decoder_dim_h: [128, 16]
+  decoder_activation: relu

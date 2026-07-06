@@ -9,6 +9,17 @@ from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP
 
+_ACTIVATIONS = {"relu": nn.ReLU, "gelu": nn.GELU}
+
+
+def _resolve_activation(activation):
+    """Maps an activation name to its class; passes classes through."""
+    if isinstance(activation, str):
+        if activation not in _ACTIVATIONS:
+            raise ValueError(f"Unknown activation: {activation}")
+        return _ACTIVATIONS[activation]
+    return activation
+
 
 class DeterministicPolicyNet(DesignNet):
     """Arbitrary encoder followed by an MLP readout layer.
@@ -19,11 +30,18 @@ class DeterministicPolicyNet(DesignNet):
     encoder: HistoryEncoder object
     event_shape_out: tuple or torch.Size of shape for outputs of the network
     decoder_layers: number of hidden layers in decoder
-    dim_h: width of hidden layers; defaults to dim_emb from the encoder
+    dim_h: width of hidden layers, or a list of per-layer widths (overrides
+        decoder_layers); defaults to dim_emb from the encoder
+    activation: activation class or name ("relu", "gelu") for the decoder
     """
 
     def __init__(
-        self, encoder: HistoryEncoder, event_shape_out, decoder_layers=1, dim_h=None
+        self,
+        encoder: HistoryEncoder,
+        event_shape_out,
+        decoder_layers=1,
+        dim_h=None,
+        activation=nn.GELU,
     ):
         """Initializes."""
         super().__init__()
@@ -33,11 +51,12 @@ class DeterministicPolicyNet(DesignNet):
         self.event_shape_out = torch.Size(event_shape_out)
 
         dim_h = dim_h or encoder.dim_emb
+        hidden_widths = decoder_layers * [dim_h] if isinstance(dim_h, int) else list(dim_h)
 
         layer_widths = (
-            [encoder.dim_emb] + decoder_layers * [dim_h] + [prod(self.event_shape_out)]
+            [encoder.dim_emb] + hidden_widths + [prod(self.event_shape_out)]
         )
-        self.decoder = MLP(layer_widths, activation=nn.GELU)
+        self.decoder = MLP(layer_widths, activation=_resolve_activation(activation))
 
     def forward(self, y_history, design_history, mask=None):
         """Forward pass of the policy net. Combines the encoder with the decoder, which is assumed to be an MLP."""
@@ -64,6 +83,7 @@ class AttentivePolicyNet(DeterministicPolicyNet):
         num_blocks=3,
         decoder_layers=1,
         decoder_dim_h=None,
+        decoder_activation=nn.GELU,
     ):
         """Initializes."""
         encoder = AttentiveEncoder(
@@ -76,7 +96,11 @@ class AttentivePolicyNet(DeterministicPolicyNet):
         )
 
         super().__init__(
-            encoder, event_shape_out, decoder_layers=decoder_layers, dim_h=decoder_dim_h
+            encoder,
+            event_shape_out,
+            decoder_layers=decoder_layers,
+            dim_h=decoder_dim_h,
+            activation=decoder_activation,
         )
 
 
@@ -97,6 +121,7 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
         dim_emb=64,
         decoder_layers=1,
         decoder_dim_h=None,
+        decoder_activation=nn.GELU,
     ):
         """Initializes."""
         encoder = DeepSetEncoder(
@@ -107,5 +132,9 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
             dim_emb=dim_emb,
         )
         super().__init__(
-            encoder, event_shape_out, decoder_layers=decoder_layers, dim_h=decoder_dim_h
+            encoder,
+            event_shape_out,
+            decoder_layers=decoder_layers,
+            dim_h=decoder_dim_h,
+            activation=decoder_activation,
         )
