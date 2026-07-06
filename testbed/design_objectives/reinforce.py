@@ -53,7 +53,9 @@ class Reinforce(Objective):
         self.stochastic = isinstance(policy_net, StochasticDesignNet)
         self.reparameterize_policy = bool(reparameterize_policy)
         if self.reparameterize_policy and not self.stochastic:
-            raise ValueError("reparameterize_policy only applies to stochastic policies.")
+            raise ValueError(
+                "reparameterize_policy only applies to stochastic policies."
+            )
         if baseline is not None and not self.requires_policy_log_probs:
             raise ValueError(
                 "baseline only applies to the score-function estimator; for pathwise "

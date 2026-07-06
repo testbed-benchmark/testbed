@@ -82,7 +82,9 @@ def test_rejects_unknown_baseline():
     task = _make_task()
     spce = SPCE(task, n_contrastive=4)
     with pytest.raises(ValueError):
-        Reinforce(task, spce.per_sample_gain, _make_stochastic_net(task), baseline="unknown")
+        Reinforce(
+            task, spce.per_sample_gain, _make_stochastic_net(task), baseline="unknown"
+        )
 
 
 def test_baseline_rejected_for_deterministic_policy():
@@ -99,7 +101,10 @@ def test_reparameterize_policy_rejected_for_deterministic_policy():
     spce = SPCE(task, n_contrastive=4)
     with pytest.raises(ValueError):
         Reinforce(
-            task, spce.reinforce_value, _make_design_net(task), reparameterize_policy=True
+            task,
+            spce.reinforce_value,
+            _make_design_net(task),
+            reparameterize_policy=True,
         )
 
 
@@ -239,9 +244,7 @@ def test_stochastic_requires_policy_log_probs():
     torch.manual_seed(0)
     task = _make_task()
     policy_net = _make_stochastic_net(task)
-    y_obs, design_obs, _ = _make_rollout(
-        task, policy_net, return_policy_log_probs=True
-    )
+    y_obs, design_obs, _ = _make_rollout(task, policy_net, return_policy_log_probs=True)
     theta0 = task.sample_prior(y_obs.shape[0])
 
     spce = SPCE(task, n_contrastive=4)
@@ -307,9 +310,7 @@ def test_stochastic_constant_value_loo_baseline_zero_grad():
     def constant_value(y_history, design_history, theta_0):
         return y_history.new_full((y_history.shape[0],), 3.0)
 
-    reinforce = Reinforce(
-        task, constant_value, policy_net, baseline="leave_one_out"
-    )
+    reinforce = Reinforce(task, constant_value, policy_net, baseline="leave_one_out")
     gain = reinforce.estimate_gain(y_obs, design_obs, theta0, policy_log_probs)
     grad = _policy_grad(policy_net, gain)
 
@@ -332,7 +333,9 @@ def test_stochastic_baseline_does_not_change_value():
     for baseline in (None, "leave_one_out"):
         reinforce = Reinforce(task, spce.per_sample_gain, policy_net, baseline=baseline)
         torch.manual_seed(1)
-        gains.append(reinforce.estimate_gain(y_obs, design_obs, theta0, policy_log_probs))
+        gains.append(
+            reinforce.estimate_gain(y_obs, design_obs, theta0, policy_log_probs)
+        )
 
     assert torch.allclose(gains[0], gains[1])
 

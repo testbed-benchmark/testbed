@@ -51,11 +51,11 @@ class DeterministicPolicyNet(DesignNet):
         self.event_shape_out = torch.Size(event_shape_out)
 
         dim_h = dim_h or encoder.dim_emb
-        hidden_widths = decoder_layers * [dim_h] if isinstance(dim_h, int) else list(dim_h)
-
-        layer_widths = (
-            [encoder.dim_emb] + hidden_widths + [prod(self.event_shape_out)]
+        hidden_widths = (
+            decoder_layers * [dim_h] if isinstance(dim_h, int) else list(dim_h)
         )
+
+        layer_widths = [encoder.dim_emb] + hidden_widths + [prod(self.event_shape_out)]
         self.decoder = MLP(layer_widths, activation=_resolve_activation(activation))
 
     def forward(self, y_history, design_history, mask=None):
