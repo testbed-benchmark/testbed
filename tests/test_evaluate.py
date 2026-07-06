@@ -7,9 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from testbed.eval.evaluate import (
+    CONFIG_DIR,
     evaluate,
     evaluate_bounds,
     infer_method,
@@ -31,18 +33,20 @@ def _make_task_instance():
 
 
 def _eval_cfg(run_dir, tmp_path, **overrides):
-    cfg = {
-        "run_dir": str(run_dir),
-        "n_inner": 10,
-        "n_rollouts": 8,
-        "seed": 0,
-        "batch_size": 3,
-        "device": "cpu",
-        "results_dir": str(tmp_path / "results"),
-        "n_speed_rollouts": 2,
-    }
-    cfg.update(overrides)
-    return OmegaConf.create(cfg)
+    # Compose from the same config/default.yaml the CLI uses, then set a small
+    # test protocol on top. This exercises the real config, not a hand-built dict.
+    with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base="1.3"):
+        cfg = compose(config_name="default")
+    cfg.run_dir = str(run_dir)
+    cfg.n_inner = 10
+    cfg.n_rollouts = 8
+    cfg.batch_size = 3
+    cfg.device = "cpu"
+    cfg.results_dir = str(tmp_path / "results")
+    cfg.n_speed_rollouts = 2
+    for key, value in overrides.items():
+        OmegaConf.update(cfg, key, value)
+    return cfg
 
 
 def _make_dad_run(tmp_path):

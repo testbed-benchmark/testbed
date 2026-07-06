@@ -35,14 +35,9 @@ from testbed.methods.actionbed import build_policy_nets
 from testbed.methods.dad import build_design_net
 from testbed.methods.rlboed import build_design_space, make_networks
 
+# The eval protocol lives in config/default.yaml (single source of truth), composed
+# by Hydra on the CLI (see main). Programmatic callers compose from the same dir.
 CONFIG_DIR = Path(__file__).parent / "config"
-
-# The default protocol lives in config/default.yaml (single source of truth);
-# the code loads it rather than duplicating the values. The `hydra` node in that
-# file configures Hydra only, so it is dropped from the programmatic base used by
-# evaluate() when a caller passes a partial config.
-DEFAULTS = OmegaConf.load(CONFIG_DIR / "default.yaml")
-DEFAULTS.pop("hydra", None)
 
 
 # ============================================================================
@@ -342,12 +337,7 @@ def _make_wandb_logger(cfg, payload):
 
 
 def evaluate(cfg):
-    """Evaluates one saved run and writes/prints/logs the results.
-
-    Merges DEFAULTS underneath cfg so partial configs (e.g. from tests) are
-    completed; Hydra-composed configs already carry every field.
-    """
-    cfg = OmegaConf.merge(DEFAULTS, cfg)
+    """Evaluates one saved run and writes/prints/logs the results."""
     if cfg.device is None:
         cfg.device = "cuda" if torch.cuda.is_available() else "cpu"
 
