@@ -43,6 +43,7 @@ class StochasticDesignNet(DesignNet):
         *,
         mask: Tensor | None = None,
         deterministic: bool = False,
+        reparameterize_policy: bool = True,
     ) -> PolicySample:
         """Samples a design and returns its policy log probability.
 
@@ -55,6 +56,8 @@ class StochasticDesignNet(DesignNet):
                 [*batch_shape, T].
             deterministic: If True, return the deterministic design instead
                 of a random sample.
+            reparameterize_policy: If False, draw a non-differentiable sample
+                so the log probability's gradient is the pure score (REINFORCE).
 
         Returns:
             A policy sample containing the design, log probability, deterministic
@@ -278,6 +281,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         *,
         mask: Tensor | None = None,
         deterministic: bool = False,
+        reparameterize_policy: bool = True,
     ) -> PolicySample:
         """Samples a tanh-squashed design and computes its log probability.
 
@@ -290,6 +294,9 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 [*batch_shape, T].
             deterministic: If True, use the Gaussian mean instead of drawing a
                 reparameterized sample.
+            reparameterize_policy: If False, sample without the
+                reparameterization trick so the log probability's gradient is
+                the pure score.
 
         Returns:
             A policy sample containing a bounded design, its corrected log
@@ -307,6 +314,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             design_flat,
             mask_flat,
             deterministic=deterministic,
+            reparameterize_policy=reparameterize_policy,
         )
 
     def _sample_prepared(
@@ -317,6 +325,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         mask_flat: Tensor | None,
         *,
         deterministic: bool,
+        reparameterize_policy: bool = True,
     ) -> PolicySample:
         """Samples from validated histories in actor coordinates."""
         mean, log_std = self.actor(y_flat, design_flat, mask=mask_flat)
@@ -326,8 +335,10 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
 
         if deterministic:
             raw_design = mean
-        else:
+        elif reparameterize_policy:
             raw_design = normal.rsample()
+        else:
+            raw_design = normal.sample()
 
         squashed_flat = self._squash(raw_design)
         deterministic_flat = self._squash(mean)

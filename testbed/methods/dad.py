@@ -1,12 +1,14 @@
 """Training for DAD (Foster et al., 2021)."""
 
 import os
+from functools import partial
 
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from testbed.core.manager import Manager
+from testbed.design_nets.stochastic import StochasticDesignNet
 from testbed.design_objectives import SNMC, SPCE, Reinforce
 from testbed.designers import PolicyDesigner
 
@@ -72,9 +74,19 @@ class Trainer:
         cfg = self.cfg
 
         theta0 = self.task.sample_prior(cfg.n_outer)
-        y_obs, design_obs = self.designer.rollout(theta0)
 
-        gain = self.objective.estimate_gain(y_obs, design_obs, theta0)
+        # Policy log probs are recorded at sample time so the value matches the
+        # exact policy distribution the designs were drawn from.
+        if getattr(self.objective, "requires_policy_log_probs", False):
+            y_obs, design_obs, policy_log_probs = self.designer.rollout(
+                theta0, return_policy_log_probs=True
+            )
+            gain = self.objective.estimate_gain(
+                y_obs, design_obs, theta0, policy_log_probs
+            )
+        else:
+            y_obs, design_obs = self.designer.rollout(theta0)
+            gain = self.objective.estimate_gain(y_obs, design_obs, theta0)
         loss = -gain
 
         self.optimizer.zero_grad()
@@ -148,7 +160,29 @@ def build_design_net(cfg, task):
     )
 
 
-def build_objective(cfg, task):
+def build_spce_reinforce(cfg, task, policy_net):
+    """Instantiates a Reinforce objective with an SPCE value function."""
+    if policy_net is None:
+        raise ValueError("reinforce objective requires policy_net")
+
+    spce = SPCE(task, n_contrastive=cfg.objective.n_inner)
+    baseline = getattr(cfg.objective, "baseline", None)
+    # Whether the policy samples designs with the reparameterization trick
+    # (pathwise gradients); unrelated to the outcome likelihood.
+    reparameterize_policy = getattr(cfg.objective, "reparameterize_policy", False)
+
+    stochastic = isinstance(policy_net, StochasticDesignNet)
+    if stochastic and not reparameterize_policy:
+        # Score-function form: the value is detached, so the plain SPCE gain suffices.
+        return Reinforce(task, spce.per_sample_gain, policy_net, baseline=baseline)
+    # Pathwise form: reinforce_value's backprop supplies the DAD Eq. 16 gradient.
+    value_fn = partial(spce.reinforce_value, baseline=baseline)
+    return Reinforce(
+        task, value_fn, policy_net, reparameterize_policy=reparameterize_policy
+    )
+
+
+def build_objective(cfg, task, policy_net=None):
     """Instantiates the objective for training DAD.
 
     SNMC/SPCE need the task to construct, so it can't be a pure instantiate.
@@ -156,14 +190,7 @@ def build_objective(cfg, task):
     objectives = {
         "snmc": lambda: SNMC(task, n_contrastive=cfg.objective.n_inner),
         "spce": lambda: SPCE(task, n_contrastive=cfg.objective.n_inner),
-        "reinforce": lambda: Reinforce(
-            task,
-            reward_fn=SPCE(task, n_contrastive=cfg.objective.n_inner).per_sample_gain,
-            baseline=getattr(cfg.objective, "baseline", None),
-            # The SPCE reward is differentiable through the designs; including its
-            # design pathwise gradient recovers Eq. 16 of the DAD paper.
-            differentiable_reward=getattr(cfg.objective, "differentiable_reward", True),
-        ),
+        "reinforce": lambda: build_spce_reinforce(cfg, task, policy_net),
     }
     name = cfg.objective.name
     return objectives[name]()
@@ -195,9 +222,14 @@ if __name__ == "__main__":
 
     policy_net = build_design_net(cfg, task)
     policy_net = policy_net.to(cfg.device)
-    designer = PolicyDesigner(task, cfg.T, policy_net)
+    designer = PolicyDesigner(
+        task,
+        cfg.T,
+        policy_net,
+        reparameterize_policy=getattr(cfg.objective, "reparameterize_policy", False),
+    )
 
-    objective = build_objective(cfg, task)
+    objective = build_objective(cfg, task, policy_net)
 
     optimizer = torch.optim.Adam(
         policy_net.parameters(),

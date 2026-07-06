@@ -6,6 +6,7 @@ from torch import Tensor
 
 from ..tasks.base_task import Task
 from .base_objective import Objective
+from .reinforce import leave_one_out_baseline
 
 
 class SPCE(Objective):
@@ -83,6 +84,32 @@ class SPCE(Objective):
         logp_marginal = torch.logsumexp(logp_all, dim=1) - np.log(L)
 
         return logp_joint - logp_marginal
+
+    def reinforce_value(
+        self,
+        y_history: Tensor,
+        design_history: Tensor,
+        theta_0: Tensor,
+        *,
+        baseline: str | None = None,
+    ):
+        """Per-sample SPCE values whose backprop gives the DAD Eq. 16 gradient.
+
+        Value equals per_sample_gain; gradient is the pathwise gain gradient plus
+        (gain - baseline) * d/dphi log p(h_T | theta_0). Intended as the value_fn
+        of a pathwise Reinforce objective. Shapes as in per_sample_gain; returns [b].
+        """
+        if baseline not in (None, "leave_one_out"):
+            raise ValueError(f"Unknown baseline: {baseline}")
+
+        gain = self.per_sample_gain(y_history, design_history, theta_0)  # [b]
+        if baseline == "leave_one_out":
+            baseline_value = leave_one_out_baseline(gain.detach())
+        else:
+            baseline_value = 0.0
+
+        score = self.task.history_logp(y_history, design_history, theta_0)  # [b]
+        return gain + (gain.detach() - baseline_value) * (score - score.detach())
 
 
 class PCE(Objective):
