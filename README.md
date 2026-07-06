@@ -41,6 +41,24 @@ Check out `notebooks/introduction.ipynb` for a quick overview of the package.
 
 You can launch a local version of the documentation with `cd docs && make livehtml`. 
 
+# Benchmarks
+
+Policies trained with the recipes in `testbed/recipes/` are evaluated with the
+standalone eval script, which writes one JSON per (task, method) into `results/`:
+
+```
+python testbed/methods/evaluate.py run_dir=<training run dir> [checkpoint=best.pt]
+```
+
+The table below is generated from `results/` by `python scripts/update_benchmark.py`;
+do not edit it by hand. sPCE/sNMC are lower/upper bounds on the total expected
+information gain (mean ± standard error over seeded eval runs); proposal time is
+the median per-design CPU latency.
+
+<!-- benchmark:start -->
+_No results yet. Run `python testbed/methods/evaluate.py run_dir=...` to add some._
+<!-- benchmark:end -->
+
 # Contributing
 
 Please follow the following guidelines if you would like to contribute to TestBED:
