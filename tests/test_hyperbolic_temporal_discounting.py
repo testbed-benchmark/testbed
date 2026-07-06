@@ -1,11 +1,14 @@
 """Tests for the hyperbolic temporal-discounting task."""
 
+import math
+
 import torch
 from torch.distributions import Bernoulli
 
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.designers import PolicyDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
+from testbed.tasks.hyperbolic_temporal_discounting import HTDPrior
 
 
 def _make_task(**kwargs):
@@ -32,11 +35,31 @@ def test_event_shapes_and_flags():
     assert not task.discrete_design
 
 
+def test_task_uses_default_prior():
+    task = _make_task()
+    assert isinstance(task.prior, HTDPrior)
+    assert torch.allclose(task.prior.k_loc, torch.tensor(-4.25))
+    assert torch.allclose(task.prior.k_scale, torch.tensor(1.5))
+    assert torch.allclose(task.prior.alpha_scale, torch.tensor(2.0))
+
+
 def test_prior_sample_shape_and_support():
     task = _make_task()
     theta = task.sample_prior(128)
     assert theta.shape == (128, 2)
     assert (theta > 0).all()  # k lognormal, alpha half-normal
+
+
+def test_prior_logprob_matches_lognormal_and_halfnormal():
+    prior = HTDPrior()
+    reference_k = torch.distributions.LogNormal(-4.25, 1.5)
+    reference_alpha = torch.distributions.HalfNormal(2.0)
+
+    theta = prior.sample(10)
+    k, alpha = theta[:, 0], theta[:, 1]
+    expected = reference_k.log_prob(k) + reference_alpha.log_prob(alpha)
+
+    assert torch.allclose(prior.log_prob(theta), expected, atol=1e-5)
 
 
 def test_make_prob_is_valid_probability():
@@ -45,6 +68,44 @@ def test_make_prob_is_valid_probability():
     assert p.shape == (theta.shape[0], 1)
     assert (p > 0).all()
     assert (p < 1).all()
+
+
+def test_make_prob_at_indifference_point():
+    # V1 = 100 / (1 + (k * D1)) = 100 / (1 + 1.0) = 50 = R0, so cdf_in = 0
+    # regardless of alpha, giving p(y=1) = epsilon + (1 - 2*epsilon) * 0.5 = 0.5.
+    task = _make_task()
+    theta = torch.tensor([[0.05, 1.0]])  # k, alpha
+    design = torch.tensor([[20.0, 50.0]])  # D1, R0
+
+    p_y1 = task.make_prob(theta, design)
+    assert torch.allclose(p_y1, torch.tensor([[0.5]]), atol=1e-6)
+
+
+def test_make_prob_matches_analytic_formula():
+    epsilon = 0.01
+    task = _make_task(epsilon=epsilon)
+    k, alpha, D1, R0 = 0.02, 2.0, 10.0, 80.0
+    theta = torch.tensor([[k, alpha]])
+    design = torch.tensor([[D1, R0]])
+
+    V1 = 100.0 / (1.0 + k * D1)
+    cdf_in = (V1 - R0) / alpha
+    phi = 0.5 * (1.0 + math.erf(cdf_in / math.sqrt(2)))
+    expected = epsilon + (1.0 - 2 * epsilon) * phi
+
+    p_y1 = task.make_prob(theta, design)
+    assert torch.allclose(p_y1, torch.tensor([[expected]]), atol=1e-6)
+
+
+def test_make_prob_bounded_by_epsilon():
+    torch.manual_seed(0)
+    task = _make_task()
+    theta = task.sample_prior(64)
+    design = torch.randn(64, 2) * 50
+
+    p_y1 = task.make_prob(theta, design)
+    assert (p_y1 >= task.epsilon - 1e-6).all()
+    assert (p_y1 <= 1.0 - task.epsilon + 1e-6).all()
 
 
 def test_make_prob_decreasing_in_delay():
@@ -70,6 +131,34 @@ def test_outcome_logp_matches_bernoulli():
         # Loose tolerance: Bernoulli.log_prob goes via logits, which loses
         # precision at the clamped extremes of p.
         assert torch.allclose(logp, expected, rtol=1e-4, atol=1e-6)
+
+
+def test_outcome_logp_matches_bernoulli_logpmf_for_batch():
+    # Regression test: previously, squeezing y to [b] while p_y1/log_p_y1/log_p_y0
+    # stayed [b, 1] made torch.where broadcast to [b, b] instead of [b].
+    epsilon = 0.01
+    task = _make_task(epsilon=epsilon)
+    theta = torch.tensor([[0.05, 1.0], [0.05, 1.0], [0.02, 2.0], [0.02, 2.0]])
+    design = torch.tensor([[20.0, 50.0], [20.0, 50.0], [10.0, 80.0], [10.0, 80.0]])
+    y = torch.tensor([[1.0], [0.0], [1.0], [0.0]])
+
+    logp = task.outcome_logp(y, theta, design)
+    assert logp.shape == (4,)
+
+    p_indiff = 0.5
+    V1 = 100.0 / (1.0 + 0.02 * 10.0)
+    phi = 0.5 * (1.0 + math.erf(((V1 - 80.0) / 2.0) / math.sqrt(2)))
+    p_asym = epsilon + (1.0 - 2 * epsilon) * phi
+
+    expected = torch.tensor(
+        [
+            math.log(p_indiff),
+            math.log(1.0 - p_indiff),
+            math.log(p_asym),
+            math.log(1.0 - p_asym),
+        ]
+    )
+    assert torch.allclose(logp, expected, atol=1e-5)
 
 
 def test_outcome_logp_normalized():
@@ -118,6 +207,16 @@ def test_sample_outcome_is_binary():
     y = task.sample_outcome(theta, design)
     assert y.shape == (theta.shape[0], 1)
     assert ((y == 0) | (y == 1)).all()
+
+
+def test_sample_outcome_mean_matches_bernoulli_probability():
+    torch.manual_seed(0)
+    task = _make_task()
+    theta = torch.tensor([[0.05, 1.0]])
+    design = torch.tensor([[20.0, 50.0]])  # indifference point, p(y=1) = 0.5
+
+    samples = task.sample_outcome(theta, design, n_samples=20_000)
+    assert torch.allclose(samples.mean(), torch.tensor(0.5), atol=0.02)
 
 
 def test_relaxed_sampling_is_reparameterized():

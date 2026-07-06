@@ -85,29 +85,162 @@ class EventLogger:
 class JSONLLogger:
     """Logs structured metric dicts as JSONL; good for plotting/analysis."""
 
-    def __init__(self, path):
+    def __init__(self, path, close_retries: int = 5, close_retry_delay: float = 0.1):
         """Opens the JSONL log file."""
         self.f = open(path, "a")
         self.start_time = time.perf_counter()
+        self.close_retries = close_retries
+        self.close_retry_delay = close_retry_delay
+        self.pending_flush = False
 
     def log(self, metrics: dict):
         """Appends one metrics record."""
         record = {
-            "time": time.time() - self.start_time,
-            **self._to_python(metrics),
+            # Elapsed seconds since the logger was opened. Must use the same
+            # clock as ``start_time`` (perf_counter), not wall-clock time.time().
+            "time": time.perf_counter() - self.start_time,
+            **_to_python(metrics),
         }
         self.f.write(json.dumps(record) + "\n")
-        self.f.flush()  # safer for long runs
+        try:
+            self.f.flush()
+            self.pending_flush = False
+        except BlockingIOError:
+            self.pending_flush = True
 
     def close(self):
         """Closes the log file."""
+        self._flush_before_close()
         self.f.close()
 
-    def _to_python(self, metrics):
-        out = {}
-        for k, v in metrics.items():
-            if hasattr(v, "item"):  # torch tensor
-                out[k] = v.item()
-            else:
-                out[k] = v
-        return out
+    def _flush_before_close(self):
+        """Flushes pending metrics before closing."""
+        for attempt in range(self.close_retries + 1):
+            try:
+                self.f.flush()
+                self.pending_flush = False
+                return
+            except BlockingIOError:
+                if attempt == self.close_retries:
+                    raise
+                time.sleep(self.close_retry_delay * 2**attempt)
+
+
+class WandbLogger(BaseLogger):
+    """Logs metric dicts to Weights & Biases.
+
+    Implements the same ``log(dict)`` / ``close()`` protocol as
+    :class:`JSONLLogger`, so it can be dropped in as a ``Manager`` metric logger
+    without touching the trainers. ``wandb`` is imported lazily so this module
+    stays importable without the optional dependency installed.
+    """
+
+    def __init__(
+        self,
+        cfg,
+        run_name,
+        project,
+        entity=None,
+        tags=None,
+        mode="online",
+        group=None,
+    ):
+        """Initializes a wandb run.
+
+        Args:
+            cfg: The experiment config (OmegaConf, dataclass, or dict). Snapshotted
+                as the wandb run config.
+            run_name: Display name for the wandb run.
+            project: wandb project to log to.
+            entity: wandb team/user; ``None`` uses the default.
+            tags: Optional list of run tags.
+            mode: One of ``"online"``, ``"offline"``, ``"disabled"``.
+            group: Optional wandb run group.
+        """
+        try:
+            import wandb
+        except ImportError as e:  # pragma: no cover - exercised only without extra
+            raise ImportError(
+                "wandb is required for WandbLogger; install the extra with "
+                '`pip install -e ".[wandb]"`.'
+            ) from e
+
+        self.run = wandb.init(
+            project=project,
+            entity=entity,
+            name=run_name,
+            tags=list(tags) if tags is not None else None,
+            group=group,
+            mode=mode,
+            config=config_to_dict(cfg),
+        )
+
+    def log(self, metrics: dict):
+        """Logs one metrics dict, using its ``step`` for the wandb x-axis."""
+        payload = _to_python(metrics)
+        step = payload.pop("step", None)
+        self.run.log(payload, step=step)
+
+    def close(self):
+        """Finishes the wandb run."""
+        self.run.finish()
+
+
+class MultiLogger(BaseLogger):
+    """Fans a metric dict out to several loggers (e.g. JSONL + wandb)."""
+
+    def __init__(self, loggers: list):
+        """Stores the child loggers."""
+        self.loggers = loggers
+
+    def log(self, metrics: dict):
+        """Forwards a copy of the metrics to each child logger."""
+        for logger in self.loggers:
+            logger.log(dict(metrics))
+
+    def close(self):
+        """Closes every child logger."""
+        for logger in self.loggers:
+            logger.close()
+
+
+def _to_python(metrics: dict) -> dict:
+    """Coerces torch tensors in a metrics dict to Python scalars."""
+    out = {}
+    for k, v in metrics.items():
+        if hasattr(v, "item"):  # torch tensor
+            out[k] = v.item()
+        else:
+            out[k] = v
+    return out
+
+
+def config_to_dict(cfg):
+    """Best-effort conversion of a config object to a plain dict.
+
+    Handles OmegaConf configs, dataclasses, and plain dicts. Used both for
+    snapshotting the config to disk and for the wandb run config.
+    """
+    try:
+        from omegaconf import OmegaConf
+
+        is_config = OmegaConf.is_config(cfg)
+    except ImportError:
+        is_config = False
+
+    if is_config:
+        try:
+            return OmegaConf.to_container(cfg, resolve=True)
+        except Exception:
+            # e.g. an unresolvable interpolation. Fall back to the raw
+            # (unresolved) container rather than leaking OmegaConf internals
+            # via vars(cfg).
+            return OmegaConf.to_container(cfg, resolve=False)
+
+    from dataclasses import asdict, is_dataclass
+
+    if is_dataclass(cfg):
+        return asdict(cfg)
+    if isinstance(cfg, dict):
+        return cfg
+    return vars(cfg)

@@ -10,14 +10,15 @@ from testbed.design_nets.modules import MLP, TransformerEncoderBlock
 
 
 class HistoryEncoder(nn.Module, ABC):
-    """Encodes an experiment history {(x_i, y_i)} into a fixed-size vector.
+    """Encodes an experiment history ``{(x_i, y_i)}`` into a fixed-size vector.
 
-        y_history       [b, T, *event_shape_y]
-        design_history  [b, T, *event_shape_design]
-        mask            [b, T] or None
-      -> encoding       [b, dim_emb]
+    Shape:
+        ``y_history``: ``[b, T, *event_shape_y]``
+        ``design_history``: ``[b, T, *event_shape_design]``
+        ``mask``: ``[b, T]`` or None
+        ``encoding``: ``[b, dim_emb]``
 
-    Subclasses implement `encode_tokens'.
+    Subclasses implement ``encode_tokens``.
     T=0 is passed through so each architecture supplies its
     own "null history" representation.
 

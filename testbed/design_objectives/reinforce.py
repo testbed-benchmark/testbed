@@ -4,7 +4,7 @@ import torch
 from torch import Tensor
 
 from ..design_nets.stochastic import StochasticDesignNet
-from ..tasks.base_task import Task
+from ..tasks.base import Task
 from .base_objective import Objective
 
 

@@ -5,7 +5,7 @@ from torch import Tensor
 
 
 def squeeze_history(tensor: Tensor, event_shape: torch.Size) -> Tensor:
-    """Ensures tensor has shape [T, *event_shape] by squeezing any leading size-1 dims.
+    """Ensures tensor has shape ``[T, *event_shape]`` by squeezing leading size-1 dims.
 
     Raises ValueError if extra leading dims exist but are not all size 1 (batched
     multi-run data that can't be unambiguously reduced to a single sequence).
@@ -37,7 +37,8 @@ def broadcast_and_flatten(*tensors_with_event_shapes):
     computation genuinely requires it (i.e. a 0-stride expanded dim must be
     reshaped into a different total shape).
 
-    Returns: (list of [b_flat, *event_shape_i] tensors, broadcast batch_shape)
+    Returns:
+        Pair of ``[b_flat, *event_shape_i]`` tensors and broadcast batch shape.
     """
     batch_shapes = []
     for t, e in tensors_with_event_shapes:

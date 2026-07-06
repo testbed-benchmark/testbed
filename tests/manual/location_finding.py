@@ -1,3 +1,11 @@
+"""Manual sanity-check / benchmarking scripts for LocationFinding.
+
+Not part of the pytest suite (pytest only collects test_*.py under tests/,
+and this file's functions require `rich` plus the external `stepdad`
+package as a reference implementation). Run directly, e.g.
+`python tests/manual/location_finding.py`.
+"""
+
 import time
 
 import torch
@@ -24,7 +32,8 @@ def test_random_eig():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    task = LocationFinding(n_sources, dim_theta, device=device)
+    task = LocationFinding(n_sources, dim_theta)
+    task = task.to(device)
     design_prior = TorchDistribution(
         torch.distributions.MultivariateNormal(
             torch.zeros(dim_theta, device=device),
@@ -101,7 +110,8 @@ def test_logp():
     n_samples = 10_000
     device = "cpu"
 
-    task = LocationFinding(n_sources, dim_theta, device=device)
+    task = LocationFinding(n_sources, dim_theta)
+    task = task.to(device)
     prior_stepdad = LocationFindingPrior(K=n_sources, p=dim_theta)
     task_stepdad = LocationFindingModel(prior_stepdad, design_net=None)
 

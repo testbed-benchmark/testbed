@@ -21,7 +21,7 @@ class DesignSpace(ABC):
 
     @abstractmethod
     def sample(self, batch_shape=(), *, device=None) -> Tensor:
-        """Samples random designs with shape [*batch_shape, *event_shape]."""
+        """Samples random designs with shape ``[*batch_shape, *event_shape]``."""
         ...
 
     @abstractmethod
