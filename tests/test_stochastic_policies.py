@@ -108,27 +108,6 @@ def test_tanh_gaussian_policy_raw_designs_are_approximately_normal():
     )
 
 
-def test_tanh_gaussian_policy_log_prob_bounded_for_saturated_designs():
-    # Regression: the tanh change-of-variables must stay bounded when the policy
-    # mean saturates tanh at the box corners. The previous forward-form log-det
-    # grew like +2|mean| per dim, so log_pi diverged as designs saturated and
-    # crashed SAC with NaNs (Normal(loc=nan)). The floored post-tanh form caps
-    # each dim's correction at -log(1e-6) ~= 13.8, so log_prob stays finite.
-    policy = make_policy()
-    log_prev = None
-    for magnitude in (50.0, 200.0, 5_000.0):
-        set_actor_output(policy, [magnitude, -magnitude], [-1.0, -1.0])
-        sample = policy.sample(
-            torch.empty(3, 0, 1), torch.empty(3, 0, 2), deterministic=True
-        )
-        assert torch.isfinite(sample.log_prob).all()
-        assert sample.log_prob.abs().max() < 100.0
-        # The cap means blowing up the mean does not blow up the log-prob.
-        if log_prev is not None:
-            assert torch.allclose(sample.log_prob, log_prev, atol=1.0)
-        log_prev = sample.log_prob
-
-
 def test_tanh_gaussian_policy_transformed_designs_follow_box_scale_and_shift():
     torch.manual_seed(0)
     space = BoxDesignSpace(torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]))

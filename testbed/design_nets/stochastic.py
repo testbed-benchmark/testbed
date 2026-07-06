@@ -358,8 +358,10 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         Computed in the forward direction to stay finite for any finite
         ``raw_design``; inverting via ``atanh`` would diverge once ``tanh``
         saturates to +/-1 in floating point.
+
+        Reference:
+            https://github.com/openai/spinningup/blob/038665d62d569055401d91856abb287263096178/spinup/algos/pytorch/sac/core.py#L60
         """
-        # log(1 - tanh(x)^2) in a numerically stable form (SpinUp / Denis Yarats).
         tanh_log_det = 2.0 * (
             log(2.0) - raw_design - nn.functional.softplus(-2.0 * raw_design)
         )
