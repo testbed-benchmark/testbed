@@ -21,13 +21,6 @@ from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
 from .base import Task
 
-_LOG_SQRT_2PI = 0.5 * math.log(2 * math.pi)
-
-# The reference draws rho as ``0.01 + 0.99 * Beta(...)``, bounding the CES
-# elasticity to [0.01, 1] (rho -> 0 would blow up the aggregator's 1/rho power).
-_RHO_MIN = 0.01
-_RHO_SCALE = 0.99
-
 
 def _stable_log_ndtr(x: Tensor, thresh: float = -10.0) -> Tensor:
     r"""Log standard-normal CDF :math:`\log \Phi(x)`, stable and gradient-safe.
@@ -35,29 +28,19 @@ def _stable_log_ndtr(x: Tensor, thresh: float = -10.0) -> Tensor:
     Matches :func:`torch.special.log_ndtr` for ``x >= thresh``. Below ``thresh``
     it swaps in the first-order Gaussian-tail asymptotic
     :math:`\log \Phi(x) \approx \log f(x) - \log(-x)` (with :math:`f` the standard
-    normal pdf), the tail approximation recommended by Blau et al. (2022) for the
-    CES boundary masses and the same one the RL-BOED reference falls back to.
-
-    The asymptotic serves two purposes. Deep in the tail ``torch.special.log_ndtr``
-    is still finite in the forward pass, but its backward evaluates
-    ``exp(log f(x) - log Phi(x))``; for ``|x| >~ 4e4`` both terms are ~``-1e9`` and
-    lose all float32 precision, so their difference can round to a large positive
-    and overflow to ``inf``. Any ``torch.where`` that leaves this branch
-    unselected then hits ``0 * inf = NaN`` and poisons the shared ``mu``/``sigma``
-    gradients. Feeding ``log_ndtr`` only clamped (``>= thresh``) arguments and
-    using the closed-form asymptotic elsewhere keeps every branch finite.
+    normal pdf).
     """
     if not x.requires_grad:
         return torch.special.log_ndtr(x)
 
-    tail = x < thresh
-    # log_ndtr never sees an argument below thresh, so its backward stays finite.
-    x_safe = torch.where(tail, torch.full_like(x, thresh), x)
+    x_safe = torch.clamp(x, min=thresh)
     exact = torch.special.log_ndtr(x_safe)
-    # x_tail <= thresh < 0 keeps -x_tail > 0 for the log, and the clamp zeroes the
-    # asymptotic's gradient on the (unselected) non-tail rows.
-    x_tail = x.clamp(max=thresh)
-    asymptotic = -0.5 * x_tail * x_tail - torch.log(-x_tail) - _LOG_SQRT_2PI
+
+    x_tail = torch.clamp(x, max=thresh)
+    log_sqrt_2pi = 0.5 * math.log(2 * math.pi)
+    asymptotic = -0.5 * x_tail * x_tail - torch.log(-x_tail) - log_sqrt_2pi
+
+    tail = x < thresh
     return torch.where(tail, asymptotic, exact)
 
 
@@ -110,7 +93,7 @@ class CESPrior(Distribution):
         """Distribution for the elasticity rho: an affine-shifted Beta on [0.01, 1]."""
         return TransformedDistribution(
             Beta(self.rho_c1, self.rho_c0),
-            AffineTransform(loc=_RHO_MIN, scale=_RHO_SCALE),
+            AffineTransform(loc=0.01, scale=0.99),
         )
 
     @property
@@ -228,9 +211,6 @@ class CES(Task):
         u = theta[..., 4:5]
 
         def utility(basket):
-            # Baskets are projected into the design box [0.01, 100] before they
-            # reach here, so xᵢ^ρ is finite and has a well-defined gradient (the
-            # x→0 singularity of x^ρ for ρ<1 never occurs); no clamp is needed.
             inner = (basket.pow(rho) * alpha).sum(dim=-1, keepdim=True)
             return inner.pow(1.0 / rho)
 
@@ -264,27 +244,13 @@ class CES(Task):
 
         # Continuous part: y = sigmoid(eta), eta = logit(y).
         # p(y) = N(logit(y); mu, sigma^2) / (y (1 - y)).
-        # Clamp y into [eps, 1 - eps] before taking logs. Boundary observations
-        # select the censoring branches below, but feeding log(0) into the
-        # unused continuous branch would otherwise poison the backward pass with
-        # NaNs (0 * -inf) in theta.grad / design.grad.
+        # Clamp y into [eps, 1 - eps] before taking logs.
         y_safe = y.clamp(self.epsilon, 1.0 - self.epsilon)
         log_y = torch.log(y_safe)
         log1m_y = torch.log1p(-y_safe)
         logit_y = log_y - log1m_y
         log_cont = normal_log_prob(logit_y, mu, sigma) - log_y - log1m_y
 
-        # Boundary atoms, matching csiro-mlai/RL-BOED's CensoredSigmoidNormal
-        # (pyro/distributions/censored_sigmoid_normal.py). An outcome lands on a
-        # boundary atom exactly when the latent eta = logit(y) falls in the
-        # matching Gaussian tail, so each atom's log-mass is a Gaussian log-CDF:
-        #   lower atom (y = eps):     log P(eta <= logit(eps))     = log Phi(z_lo)
-        #   upper atom (y = 1 - eps): log P(eta >= logit(1 - eps)) = log Phi(z_up)
-        # with z_lo = (logit(eps) - mu) / sigma and z_up = (mu - logit(1 - eps)) / sigma.
-        # `_stable_log_ndtr` is that log-CDF; in the deep tail it uses the
-        # first-order asymptotic log f(x) - log|x| (Blau et al., 2022) that the
-        # reference also falls back to, giving the true tail value with a finite
-        # gradient -- no clamp on z is needed.
         log_lower = _stable_log_ndtr((self.logit_lower - mu) / sigma)
         log_upper = _stable_log_ndtr((mu - self.logit_upper) / sigma)
 
