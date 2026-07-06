@@ -10,7 +10,6 @@ import torch
 from omegaconf import OmegaConf
 
 from testbed.eval.evaluate import (
-    _batched_gain,
     evaluate_bounds,
     infer_method,
     load_run,
@@ -25,12 +24,17 @@ DESIGN_NET_CFG = {
 }
 
 
+def _make_task_instance():
+    from hydra.utils import instantiate
+
+    return instantiate(OmegaConf.create(TASK_CFG))
+
+
 def _eval_cfg(run_dir, tmp_path, **overrides):
     cfg = {
         "run_dir": str(run_dir),
         "n_inner": 10,
         "n_rollouts": 8,
-        "n_runs": 2,
         "seed": 0,
         "batch_size": 3,
         "device": "cpu",
@@ -164,7 +168,8 @@ def test_main_end_to_end(tmp_path, make_run, method):
 
     assert payload["method"] == method
     assert payload["task"] == "location_finding"
-    assert payload["eval"]["seeds"] == [0, 1]
+    assert payload["eval"]["seed"] == 0
+    assert payload["eval"]["n_rollouts"] == 8
     for stats in (payload["metrics"]["spce"], payload["metrics"]["snmc"]):
         assert math.isfinite(stats["mean"]) and math.isfinite(stats["se"])
     assert math.isfinite(payload["metrics"]["proposal_time_ms"]["median"])
@@ -176,30 +181,33 @@ def test_main_end_to_end(tmp_path, make_run, method):
     assert written["metrics"] == payload["metrics"]
 
 
-def test_batched_gain_matches_unbatched():
-    # A deterministic objective isolates the weighted-mean batching math from
-    # the RNG consumed by contrastive draws.
-    class MeanTheta:
-        def estimate_gain(self, y_obs, design_obs, theta0):
-            return theta0.mean()
+def test_per_sample_gain_matches_estimate_gain():
+    # The refactor must leave the scalar estimate unchanged: mean of the
+    # per-sample gains equals estimate_gain under the same contrastive draws.
+    from testbed.design_objectives import SNMC, SPCE
 
-    theta0 = torch.arange(7, dtype=torch.float32).unsqueeze(-1)
-    y_obs = torch.zeros(7, 2, 1)
-    design_obs = torch.zeros(7, 2, 1)
+    task = _make_task_instance()
+    theta0 = task.sample_prior(6)
+    y_obs = torch.zeros(6, 2, 1)
+    design_obs = torch.zeros(6, 2, 2)
 
-    full = _batched_gain(MeanTheta(), y_obs, design_obs, theta0, batch_size=100)
-    batched = _batched_gain(MeanTheta(), y_obs, design_obs, theta0, batch_size=3)
-    assert full == pytest.approx(theta0.mean().item())
-    assert batched == pytest.approx(full)
+    for objective in (SPCE(task, n_contrastive=8), SNMC(task, n_contrastive=8)):
+        torch.manual_seed(0)
+        per_sample = objective.per_sample_gain(y_obs, design_obs, theta0)
+        torch.manual_seed(0)
+        scalar = objective.estimate_gain(y_obs, design_obs, theta0)
+        assert per_sample.shape == (6,)
+        assert torch.allclose(per_sample.mean(), scalar)
 
 
-def test_evaluate_bounds_records(tmp_path):
+def test_evaluate_bounds_pools_all_rollouts(tmp_path):
     run_dir, _ = _make_dad_run(tmp_path)
     loaded = load_run(run_dir, device="cpu")
-    records = evaluate_bounds(loaded, _eval_cfg(run_dir, tmp_path, n_inner=32))
+    samples = evaluate_bounds(loaded, _eval_cfg(run_dir, tmp_path, n_inner=32))
 
-    assert len(records) == 2
-    for record in records:
+    # one pooled value per rollout, so mean/SE follow the paper's definition
+    assert len(samples["spce"]) == 8
+    assert len(samples["snmc"]) == 8
+    for spce_value in samples["spce"]:
         # per-sample sPCE is deterministically capped at log(L + 1)
-        assert record["spce"] <= math.log(32 + 1) + 1e-5
-        assert math.isfinite(record["snmc"])
+        assert spce_value <= math.log(32 + 1) + 1e-5

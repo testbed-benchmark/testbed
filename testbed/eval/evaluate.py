@@ -1,11 +1,11 @@
 """Standalone checkpoint evaluation.
 
-Loads a saved training run (DAD, RL-BOED, or ActionBED), rolls out the policy,
+Loads a saved policy, rolls out the policy,
 and reports sPCE/sNMC bounds, deployment speed, and method-specific metrics.
 
 Usage:
     python testbed/eval/evaluate.py run_dir=<dir> [checkpoint=best.pt]
-        [n_inner=5000] [n_rollouts=10000] [n_runs=10] [seed=0] [batch_size=100]
+        [n_inner=5000] [n_rollouts=2000] [seed=0] [batch_size=100]
 """
 
 import copy
@@ -35,9 +35,10 @@ DEFAULTS = OmegaConf.create(
         "run_dir": "???",
         "checkpoint": "best.pt",
         "method": None,  # dad | actionbed | rlboed; None infers from the checkpoint
-        "n_inner": 5000,  # contrastive samples L (DAD paper eval protocol)
-        "n_rollouts": 10000,  # total rollouts, split over n_runs seeded runs
-        "n_runs": 10,
+        "n_inner": 5000,  # contrastive samples L (DAD paper uses 5000)
+        # Rollouts for the outer expectation. The paper pools 10000; 2000 is a
+        # lighter default (SE ~2x larger), override upward for the published table.
+        "n_rollouts": 2000,
         "seed": 0,
         "batch_size": 100,  # outer mini-batch; bounds memory at batch_size * (L+1)
         "device": None,  # None -> cuda if available else cpu
@@ -139,48 +140,43 @@ def load_run(run_dir, checkpoint_name="best.pt", method=None, device="cpu"):
 # ============================================================================
 
 
-def _batched_gain(objective, y_obs, design_obs, theta0, batch_size):
-    """Mean estimate_gain over outer mini-batches, weighted by batch size."""
-    n_outer = theta0.shape[0]
-    total = 0.0
-    for start in range(0, n_outer, batch_size):
-        stop = min(start + batch_size, n_outer)
-        gain = objective.estimate_gain(
-            y_obs[start:stop], design_obs[start:stop], theta0[start:stop]
-        )
-        total += gain.item() * (stop - start)
-    return total / n_outer
+def evaluate_bounds(loaded: LoadedRun, cfg) -> dict:
+    """Rolls out the policy and pools per-rollout sPCE/sNMC (and decision loss).
 
-
-def evaluate_bounds(loaded: LoadedRun, cfg) -> list[dict]:
-    """Runs seeded eval rollouts and computes per-run sPCE/sNMC (and loss)."""
+    Runs n_rollouts outer rollouts in mini-batches of batch_size (bounding memory
+    at batch_size * (L+1) histories) under a single seed, and returns the pooled
+    per-rollout values so the mean and standard error follow the DAD paper's
+    definition (SE over the full set of rollouts). Decision loss is pooled per
+    mini-batch, since the configured loss reduces over its batch.
+    """
     task, designer = loaded.task, loaded.designer
-    n_outer = cfg.n_rollouts // cfg.n_runs
-    if n_outer < 1:
-        raise ValueError("n_rollouts must be at least n_runs")
+    if cfg.n_rollouts < 1:
+        raise ValueError("n_rollouts must be at least 1")
 
     spce = SPCE(task, n_contrastive=cfg.n_inner)
     snmc = SNMC(task, n_contrastive=cfg.n_inner)
 
-    records = []
-    for run_idx in range(cfg.n_runs):
-        torch.manual_seed(cfg.seed + run_idx)
-        with torch.no_grad():
-            theta0 = task.sample_prior(n_outer)
+    samples = {"spce": [], "snmc": []}
+    decision_losses = []
+    torch.manual_seed(cfg.seed)
+    with torch.no_grad():
+        for start in range(0, cfg.n_rollouts, cfg.batch_size):
+            batch = min(cfg.batch_size, cfg.n_rollouts - start)
+            theta0 = task.sample_prior(batch)
             y_obs, design_obs = designer.rollout(theta0)
-            record = {
-                "run": run_idx,
-                "seed": cfg.seed + run_idx,
-                "spce": _batched_gain(spce, y_obs, design_obs, theta0, cfg.batch_size),
-                "snmc": _batched_gain(snmc, y_obs, design_obs, theta0, cfg.batch_size),
-            }
+            samples["spce"].extend(
+                spce.per_sample_gain(y_obs, design_obs, theta0).tolist()
+            )
+            samples["snmc"].extend(
+                snmc.per_sample_gain(y_obs, design_obs, theta0).tolist()
+            )
             if "action_net" in loaded.extras:
                 action = loaded.extras["action_net"](y_obs, design_obs)
-                record["decision_loss"] = loaded.extras["loss_fn"](
-                    action, theta0
-                ).item()
-        records.append(record)
-    return records
+                decision_losses.append(loaded.extras["loss_fn"](action, theta0).item())
+
+    if decision_losses:
+        samples["decision_loss"] = decision_losses
+    return samples
 
 
 def measure_proposal_time(loaded: LoadedRun, cfg) -> float:
@@ -247,17 +243,15 @@ def _git_commit() -> str | None:
         return None
 
 
-def build_payload(loaded: LoadedRun, records: list[dict], speed_ms: float, cfg):
+def build_payload(loaded: LoadedRun, samples: dict, speed_ms: float, cfg):
     """Assembles the results JSON payload."""
     metrics = {
-        "spce": _mean_se([record["spce"] for record in records]),
-        "snmc": _mean_se([record["snmc"] for record in records]),
+        "spce": _mean_se(samples["spce"]),
+        "snmc": _mean_se(samples["snmc"]),
         "proposal_time_ms": {"median": speed_ms},
     }
-    if "decision_loss" in records[0]:
-        metrics["decision_loss"] = _mean_se(
-            [record["decision_loss"] for record in records]
-        )
+    if "decision_loss" in samples:
+        metrics["decision_loss"] = _mean_se(samples["decision_loss"])
 
     return {
         "task": _task_slug(loaded.cfg),
@@ -268,8 +262,7 @@ def build_payload(loaded: LoadedRun, records: list[dict], speed_ms: float, cfg):
         "eval": {
             "n_inner": int(cfg.n_inner),
             "n_rollouts": int(cfg.n_rollouts),
-            "n_runs": int(cfg.n_runs),
-            "seeds": [record["seed"] for record in records],
+            "seed": int(cfg.seed),
             "batch_size": int(cfg.batch_size),
             "deterministic": True,
             "device": str(cfg.device),
@@ -283,42 +276,41 @@ def build_payload(loaded: LoadedRun, records: list[dict], speed_ms: float, cfg):
     }
 
 
-def _print_report(records: list[dict], payload: dict):
-    """Prints per-run values and the summary, with rich if available."""
+def _print_report(payload: dict):
+    """Prints the metric summary, with rich if available."""
     metrics = payload["metrics"]
     rows = [
         (
-            str(record["run"]),
-            f"{record['spce']:.4f}",
-            f"{record['snmc']:.4f}",
-            f"{record['snmc'] - record['spce']:.4f}",
-            f"{record['decision_loss']:.4f}" if "decision_loss" in record else "-",
-        )
-        for record in records
+            "sPCE (lower)",
+            f"{metrics['spce']['mean']:.4f} ± {metrics['spce']['se']:.4f}",
+        ),
+        (
+            "sNMC (upper)",
+            f"{metrics['snmc']['mean']:.4f} ± {metrics['snmc']['se']:.4f}",
+        ),
+        ("proposal (ms)", f"{metrics['proposal_time_ms']['median']:.2f}"),
     ]
-    summary = (
-        f"sPCE {metrics['spce']['mean']:.4f} ± {metrics['spce']['se']:.4f} | "
-        f"sNMC {metrics['snmc']['mean']:.4f} ± {metrics['snmc']['se']:.4f} | "
-        f"proposal {metrics['proposal_time_ms']['median']:.2f} ms"
-    )
+    if "decision_loss" in metrics:
+        loss = metrics["decision_loss"]
+        rows.append(("decision loss", f"{loss['mean']:.4f} ± {loss['se']:.4f}"))
 
+    title = (
+        f"{payload['method']} on {payload['task']} (n={payload['eval']['n_rollouts']})"
+    )
     try:
         from rich.console import Console
         from rich.table import Table
 
-        table = Table(title=f"{payload['method']} on {payload['task']}")
-        for column in ("Run", "sPCE", "sNMC", "Width", "Loss"):
-            table.add_column(column, justify="right")
-        for row in rows:
-            table.add_row(*row)
-        console = Console()
-        console.print(table)
-        console.print(summary)
+        table = Table(title=title)
+        table.add_column("Metric")
+        table.add_column("Value", justify="right")
+        for name, value in rows:
+            table.add_row(name, value)
+        Console().print(table)
     except ImportError:
-        print(f"{payload['method']} on {payload['task']}")
-        for row in rows:
-            print("  run " + " | ".join(row))
-        print(summary)
+        print(title)
+        for name, value in rows:
+            print(f"  {name}: {value}")
 
 
 def _write_results(payload: dict, cfg):
@@ -372,17 +364,15 @@ def main(cfg):
         method=cfg.method,
         device=cfg.device,
     )
-    records = evaluate_bounds(loaded, cfg)
+    samples = evaluate_bounds(loaded, cfg)
     speed_ms = measure_proposal_time(loaded, cfg)
-    payload = build_payload(loaded, records, speed_ms, cfg)
+    payload = build_payload(loaded, samples, speed_ms, cfg)
 
-    _print_report(records, payload)
+    _print_report(payload)
     _write_results(payload, cfg)
 
     logger = _make_wandb_logger(cfg, payload)
     if logger is not None:
-        for record in records:
-            logger.log({**record, "step": record["run"]})
         summary = {
             f"{name}_{key}": value
             for name, stats in payload["metrics"].items()
