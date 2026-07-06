@@ -1,0 +1,7 @@
+# DAD paper evaluation protocol: 10000 rollouts for the published benchmark table.
+# Inherits default.yaml, so only the delta is needed.
+defaults:
+  - default
+  - _self_
+
+n_rollouts: 10000

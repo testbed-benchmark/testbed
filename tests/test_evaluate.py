@@ -10,10 +10,10 @@ import torch
 from omegaconf import OmegaConf
 
 from testbed.eval.evaluate import (
+    evaluate,
     evaluate_bounds,
     infer_method,
     load_run,
-    main,
 )
 
 TASK_CFG = {"_target_": "testbed.tasks.LocationFinding", "n_sources": 1, "dim_theta": 2}
@@ -161,10 +161,10 @@ def test_load_run_dad_round_trip(tmp_path):
         (_make_rlboed_run, "rlboed"),
     ],
 )
-def test_main_end_to_end(tmp_path, make_run, method):
+def test_evaluate_end_to_end(tmp_path, make_run, method):
     made = make_run(tmp_path)
     run_dir = made[0] if isinstance(made, tuple) else made
-    payload = main(_eval_cfg(run_dir, tmp_path))
+    payload = evaluate(_eval_cfg(run_dir, tmp_path))
 
     assert payload["method"] == method
     assert payload["task"] == "location_finding"

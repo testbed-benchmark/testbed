@@ -3,9 +3,13 @@
 Loads a saved policy, rolls out the policy,
 and reports sPCE/sNMC bounds, deployment speed, and method-specific metrics.
 
+The eval protocol is configured from config/ (default.yaml); select an alternative
+with --config-name and override individual fields with key=value.
+
 Usage:
-    python testbed/eval/evaluate.py run_dir=<dir> [checkpoint=best.pt]
-        [n_inner=5000] [n_rollouts=2000] [seed=0] [batch_size=100]
+    python testbed/eval/evaluate.py run_dir=<dir>                 # default protocol
+    python testbed/eval/evaluate.py --config-name paper run_dir=<dir>
+    python testbed/eval/evaluate.py run_dir=<dir> n_rollouts=500 checkpoint=final_step.pt
 """
 
 import copy
@@ -20,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import hydra
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
@@ -30,30 +35,14 @@ from testbed.methods.actionbed import build_policy_nets
 from testbed.methods.dad import build_design_net
 from testbed.methods.rlboed import build_design_space, make_networks
 
-DEFAULTS = OmegaConf.create(
-    {
-        "run_dir": "???",
-        "checkpoint": "best.pt",
-        "method": None,  # dad | actionbed | rlboed; None infers from the checkpoint
-        "n_inner": 5000,  # contrastive samples L (DAD paper uses 5000)
-        # Rollouts for the outer expectation. The DAD paper pools 10000; 2000 is a
-        # lighter default (SE ~2x larger), override upward for the final published table.
-        "n_rollouts": 2000,
-        "seed": 0,
-        "batch_size": 100,  # outer mini-batch; bounds memory at batch_size * (L+1)
-        "device": None,  # None -> cuda if available else cpu
-        "results_dir": "results",  # None -> skip the results/ write
-        "n_speed_rollouts": 10,
-        "wandb": {
-            "enabled": False,
-            "project": "testbed",
-            "entity": None,
-            "mode": "online",
-            "tags": None,
-            "group": None,
-        },
-    }
-)
+CONFIG_DIR = Path(__file__).parent / "config"
+
+# The default protocol lives in config/default.yaml (single source of truth);
+# the code loads it rather than duplicating the values. The `hydra` node in that
+# file configures Hydra only, so it is dropped from the programmatic base used by
+# evaluate() when a caller passes a partial config.
+DEFAULTS = OmegaConf.load(CONFIG_DIR / "default.yaml")
+DEFAULTS.pop("hydra", None)
 
 
 # ============================================================================
@@ -352,8 +341,12 @@ def _make_wandb_logger(cfg, payload):
 # ============================================================================
 
 
-def main(cfg):
-    """Evaluates one saved run and writes/prints/logs the results."""
+def evaluate(cfg):
+    """Evaluates one saved run and writes/prints/logs the results.
+
+    Merges DEFAULTS underneath cfg so partial configs (e.g. from tests) are
+    completed; Hydra-composed configs already carry every field.
+    """
     cfg = OmegaConf.merge(DEFAULTS, cfg)
     if cfg.device is None:
         cfg.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -384,5 +377,11 @@ def main(cfg):
     return payload
 
 
+@hydra.main(version_base="1.3", config_path="config", config_name="default")
+def main(cfg):
+    """CLI entry point: Hydra composes cfg from config/ plus command-line overrides."""
+    evaluate(cfg)
+
+
 if __name__ == "__main__":
-    main(OmegaConf.from_cli())
+    main()

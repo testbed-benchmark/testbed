@@ -44,15 +44,17 @@ You can launch a local version of the documentation with `cd docs && make liveht
 # Benchmarks
 
 Policies trained with the recipes in `testbed/recipes/` are evaluated with the
-standalone eval script, which writes one JSON per (task, method) into `results/`:
+standalone eval script, which writes one JSON per (task, method) into `results/`.
+The eval protocol is configured from `testbed/eval/config/` (`--config-name paper`
+reproduces the DAD paper's 10000-rollout protocol):
 
 ```
-python testbed/eval/evaluate.py run_dir=<training run dir> [checkpoint=best.pt]
+python testbed/eval/evaluate.py --config-name paper run_dir=<training run dir>
 ```
 
 The table below is generated from `results/` by `python scripts/update_benchmark.py`;
 do not edit it by hand. sPCE/sNMC are lower/upper bounds on the total expected
-information gain (mean ± standard error over seeded eval runs); proposal time is
+information gain (mean ± standard error over the pooled rollouts); proposal time is
 the median per-design CPU latency.
 
 <!-- benchmark:start -->

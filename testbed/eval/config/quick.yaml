@@ -1,0 +1,8 @@
+# Fast, low-fidelity protocol for development sanity checks (not for published numbers).
+# Inherits default.yaml, so only the deltas are needed.
+defaults:
+  - default
+  - _self_
+
+n_inner: 500
+n_rollouts: 500

@@ -1,5 +1,5 @@
 """Checkpoint evaluation for trained BED policies."""
 
-from .evaluate import evaluate_bounds, load_run, main
+from .evaluate import evaluate, evaluate_bounds, load_run
 
-__all__ = ["evaluate_bounds", "load_run", "main"]
+__all__ = ["evaluate", "evaluate_bounds", "load_run"]

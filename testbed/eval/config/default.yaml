@@ -1,0 +1,37 @@
+# Default evaluation protocol, loaded automatically by testbed/eval/evaluate.py.
+# Other configs in this folder layer on top of it via their `defaults:` list.
+#
+# Usage:
+#   python testbed/eval/evaluate.py run_dir=<dir>                 # uses this file
+#   python testbed/eval/evaluate.py --config-name paper run_dir=<dir>
+# CLI key=value pairs override the chosen config for one-off runs.
+
+# Keep Hydra from creating outputs/ and .hydra dirs or changing the working dir;
+# eval writes its own results/ and eval.json instead.
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false
+
+run_dir: ???              # training run directory to evaluate (required, usually via CLI)
+checkpoint: best.pt       # checkpoint file within run_dir
+method: null              # dad | actionbed | rlboed; null infers from the checkpoint
+
+n_inner: 5000             # contrastive samples L (DAD paper uses 5000)
+n_rollouts: 2000          # rollouts for the outer expectation; SE is pooled over these
+seed: 0
+batch_size: 100           # outer mini-batch; bounds memory at batch_size * (L+1)
+
+device: null              # null -> cuda if available else cpu
+results_dir: results      # null -> skip the results/ write
+n_speed_rollouts: 10      # rollouts for the CPU proposal-time measurement
+
+wandb:
+  enabled: false
+  project: testbed
+  entity: null
+  mode: online
+  tags: null
+  group: null
