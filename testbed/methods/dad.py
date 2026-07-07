@@ -160,9 +160,6 @@ def build_design_net(cfg, task):
 
 def build_spce_reinforce(cfg, task, designer):
     """Instantiates a Reinforce objective with an SPCE value function."""
-    if designer is None:
-        raise ValueError("reinforce objective requires a designer")
-
     spce = SPCE(task, n_contrastive=cfg.objective.n_inner)
     baseline = getattr(cfg.objective, "baseline", None)
 

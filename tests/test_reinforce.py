@@ -70,13 +70,6 @@ def test_build_objective_creates_reinforce():
     assert stochastic_obj.requires_policy_log_probs
 
 
-def test_build_objective_reinforce_requires_designer():
-    task = _make_task()
-    cfg = SimpleNamespace(objective=SimpleNamespace(name="reinforce", n_inner=4))
-    with pytest.raises(ValueError):
-        build_objective(cfg, task)
-
-
 def test_rejects_unknown_baseline():
     task = _make_task()
     spce = SPCE(task, n_contrastive=4)
