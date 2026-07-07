@@ -105,13 +105,32 @@ def normal_cdf(x):
     return 0.5 * (1 + torch.erf(x / 2**0.5))
 
 
-def sort_by_norm(x):
-    """Sorts n_objects according to their norm."""
-    # x: [batch, n_objects, *object_shape]
+def sort_by_norm(x: Tensor) -> Tensor:
+    """Sorts tensors according to their norm.
+
+    Args:
+        x: Either
+            [batch, n_objects, *object_shape], or
+            [n_objects, *object_shape].
+
+    Returns:
+        Tensor with the same shape as `x`, with objects sorted by
+        increasing Euclidean norm.
+    """
+    unbatched = x.ndim == 2
+
+    if unbatched:
+        x = x.unsqueeze(0)
+
     b, n = x.shape[:2]
 
     norms = torch.linalg.norm(x.flatten(start_dim=2), dim=-1)
     idx = torch.argsort(norms, dim=1)
 
     idx = idx.view(b, n, *([1] * (x.ndim - 2))).expand_as(x)
-    return torch.gather(x, dim=1, index=idx)
+    x = torch.gather(x, dim=1, index=idx)
+
+    if unbatched:
+        x = x.squeeze(0)
+
+    return x
