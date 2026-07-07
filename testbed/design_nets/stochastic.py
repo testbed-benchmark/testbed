@@ -112,7 +112,7 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         *,
         dim_design: int,
         dim_y: int = 1,
-        dim_h: int = 128,
+        dim_h=[128, 128],
         dim_emb: int = 64,
         log_std_min: float = -20.0,
         log_std_max: float = 0.0,
@@ -123,7 +123,7 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         Args:
             dim_y: Flattened outcome dimension.
             dim_design: Flattened design dimension.
-            dim_h: Hidden layer width.
+            dim_h: Per-layer hidden widths as a list; an int is a single layer.
             dim_emb: History summary dimension.
             log_std_min: Lower bound for Gaussian log standard deviations.
             log_std_max: Upper bound for Gaussian log standard deviations.
@@ -146,13 +146,14 @@ class DeepSetGaussianActor(GaussianPolicyActor):
                 "log_std_min and log_std_max."
             )
 
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         self.encoder_net = MLP(
-            [self.dim_design + self.dim_y, dim_h, dim_h, dim_emb],
+            [self.dim_design + self.dim_y] + hidden_widths + [dim_emb],
             activation=nn.ReLU,
         )
-        self.actor_net = MLP([dim_emb, dim_h, dim_h], activation=nn.ReLU)
-        self.mean_head = nn.Linear(dim_h, self.dim_design)
-        self.log_std_head = nn.Linear(dim_h, self.dim_design)
+        self.actor_net = MLP([dim_emb] + hidden_widths, activation=nn.ReLU)
+        self.mean_head = nn.Linear(hidden_widths[-1], self.dim_design)
+        self.log_std_head = nn.Linear(hidden_widths[-1], self.dim_design)
         _initialize_linear_layers(self)
         nn.init.zeros_(self.log_std_head.weight)
         scaled_log_std = (
