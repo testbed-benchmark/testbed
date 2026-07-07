@@ -31,19 +31,17 @@ grad_clip: 1.0
 # policy networks
 design_net:
   _target_: testbed.design_nets.AttentivePolicyNet
-  encoder_dim_h: 256
+  encoder_dim_h: [256]
   dim_emb: 128
   num_heads: 4
   num_blocks: 3
-  decoder_layers: 1
 
 action_net:
   _target_: testbed.design_nets.AttentivePolicyNet
-  encoder_dim_h: 256
+  encoder_dim_h: [256]
   dim_emb: 128
   num_heads: 4
   num_blocks: 3
-  decoder_layers: 1
 
 # experiment tracking
 wandb:

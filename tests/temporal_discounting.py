@@ -48,11 +48,9 @@ def make_policy_designer(task, device):
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
-        encoder_dim_h=256,
-        encoder_layers=2,
+        encoder_dim_h=[256, 256],
         dim_emb=16,
-        decoder_layers=2,
-        decoder_dim_h=128,
+        decoder_dim_h=[128, 128],
     ).to(device)
     return PolicyDesigner(task, T, policy_net)
 

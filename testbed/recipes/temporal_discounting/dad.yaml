@@ -44,10 +44,8 @@ n_inner_eval: 100_000
 # a [16 -> 256 -> 256 -> 2] emitter, and a fixed-zero null encoding.
 design_net:
   _target_: testbed.design_nets.DeepSetPolicyNet
-  encoder_dim_h: 256
-  encoder_layers: 2
+  encoder_dim_h: [256, 256]
   dim_emb: 16
-  decoder_layers: 2
   decoder_dim_h: [128, 16]
   decoder_activation:
     _target_: torch.nn.ReLU
