@@ -9,17 +9,6 @@ from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP
 
-_ACTIVATIONS = {"relu": nn.ReLU, "gelu": nn.GELU}
-
-
-def _resolve_activation(activation):
-    """Maps an activation name to its class; passes classes through."""
-    if isinstance(activation, str):
-        if activation not in _ACTIVATIONS:
-            raise ValueError(f"Unknown activation: {activation}")
-        return _ACTIVATIONS[activation]
-    return activation
-
 
 class DeterministicPolicyNet(DesignNet):
     """Arbitrary encoder followed by an MLP readout layer.
@@ -32,7 +21,7 @@ class DeterministicPolicyNet(DesignNet):
     decoder_layers: number of hidden layers in decoder
     dim_h: width of hidden layers, or a list of per-layer widths (overrides
         decoder_layers); defaults to dim_emb from the encoder
-    activation: activation class or name ("relu", "gelu") for the decoder
+    activation: activation class (nn.ReLU, nn.GELU, ...) for the decoder
     """
 
     def __init__(
@@ -56,7 +45,7 @@ class DeterministicPolicyNet(DesignNet):
         )
 
         layer_widths = [encoder.dim_emb] + hidden_widths + [prod(self.event_shape_out)]
-        self.decoder = MLP(layer_widths, activation=_resolve_activation(activation))
+        self.decoder = MLP(layer_widths, activation=activation)
 
     def forward(self, y_history, design_history, mask=None):
         """Forward pass of the policy net. Combines the encoder with the decoder, which is assumed to be an MLP."""
