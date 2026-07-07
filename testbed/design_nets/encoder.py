@@ -137,9 +137,7 @@ class AttentiveEncoder(HistoryEncoder):
 class DeepSetEncoder(HistoryEncoder):
     """Per-step MLP + masked sum pooling (DeepSets style). Permutation invariant."""
 
-    def __init__(
-        self, event_shape_y, event_shape_design, dim_h=[128, 128], dim_emb=64
-    ):
+    def __init__(self, event_shape_y, event_shape_design, dim_h=[128, 128], dim_emb=64):
         """dim_h: per-layer hidden widths as a list; an int is a single layer."""
         super().__init__(event_shape_y, event_shape_design, dim_emb)
 
