@@ -69,8 +69,8 @@ def make_random_designer(task, device):
 def train(task, designer):
     objective = Reinforce(
         task,
-        SPCE(task, n_contrastive=N_INNER).reinforce_value,
-        designer.policy_net,
+        SPCE(task, n_contrastive=N_INNER).per_sample_gain,
+        designer,
     )
     optimizer = torch.optim.Adam(designer.policy_net.parameters(), lr=LR)
 

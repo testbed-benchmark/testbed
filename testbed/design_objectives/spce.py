@@ -6,7 +6,6 @@ from torch import Tensor
 
 from ..tasks.base import Task
 from .base_objective import Objective
-from .reinforce import leave_one_out_baseline
 
 
 class SPCE(Objective):
@@ -23,6 +22,8 @@ class SPCE(Objective):
 
     where theta_0' = theta_i and theta_l' ~ p(theta) for l >= 1.
     """
+
+    is_expected_log_ratio = True
 
     def __init__(self, task: Task, n_contrastive: int):
         """Initializes the SPCE estimator."""
@@ -53,63 +54,37 @@ class SPCE(Objective):
         task = self.task
         n_contrastive = self.n_contrastive
         b = theta_0.shape[0]
-        L = n_contrastive + 1
+        L_plus_1 = n_contrastive + 1
 
         theta_contrastive = task.sample_current_prior(b * n_contrastive)
         theta_contrastive = theta_contrastive.reshape(
             b, n_contrastive, *task.event_shape_theta
         )
 
-        # [b, L, *event_shape_theta]
+        # [b, L_plus_1, *event_shape_theta]
         theta_all = torch.cat([theta_0.unsqueeze(1), theta_contrastive], dim=1)
-        theta_flat = theta_all.reshape(b * L, *task.event_shape_theta)
+        theta_flat = theta_all.reshape(b * L_plus_1, *task.event_shape_theta)
 
-        # Repeat each history L times: [b*L, T, *event_shape_*]
+        # Repeat each history L_plus_1 times: [b*L_plus_1, T, *event_shape_*]
         y_rep = (
             y_history.unsqueeze(1)
-            .expand(b, L, *y_history.shape[1:])
-            .reshape(b * L, *y_history.shape[1:])
+            .expand(b, L_plus_1, *y_history.shape[1:])
+            .reshape(b * L_plus_1, *y_history.shape[1:])
         )
         design_rep = (
             design_history.unsqueeze(1)
-            .expand(b, L, *design_history.shape[1:])
-            .reshape(b * L, *design_history.shape[1:])
+            .expand(b, L_plus_1, *design_history.shape[1:])
+            .reshape(b * L_plus_1, *design_history.shape[1:])
         )
 
         logp_all = task.history_logp(y_rep, design_rep, theta_flat).reshape(
-            b, L
-        )  # [b, L]
+            b, L_plus_1
+        )  # [b, L_plus_1]
 
         logp_joint = logp_all[:, 0]
-        logp_marginal = torch.logsumexp(logp_all, dim=1) - np.log(L)
+        logp_marginal = torch.logsumexp(logp_all, dim=1) - np.log(L_plus_1)
 
         return logp_joint - logp_marginal
-
-    def reinforce_value(
-        self,
-        y_history: Tensor,
-        design_history: Tensor,
-        theta_0: Tensor,
-        *,
-        baseline: str | None = None,
-    ):
-        """Per-sample SPCE values whose backprop gives the DAD Eq. 16 gradient.
-
-        Value equals per_sample_gain; gradient is the pathwise gain gradient plus
-        (gain - baseline) * d/dphi log p(h_T | theta_0). Intended as the value_fn
-        of a pathwise Reinforce objective. Shapes as in per_sample_gain; returns [b].
-        """
-        if baseline not in (None, "leave_one_out"):
-            raise ValueError(f"Unknown baseline: {baseline}")
-
-        gain = self.per_sample_gain(y_history, design_history, theta_0)  # [b]
-        if baseline == "leave_one_out":
-            baseline_value = leave_one_out_baseline(gain.detach())
-        else:
-            baseline_value = 0.0
-
-        score = self.task.history_logp(y_history, design_history, theta_0)  # [b]
-        return gain + (gain.detach() - baseline_value) * (score - score.detach())
 
 
 class PCE(Objective):
