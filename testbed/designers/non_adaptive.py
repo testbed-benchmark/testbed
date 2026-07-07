@@ -26,10 +26,14 @@ class StaticDesigner(Designer, nn.Module):
         b = y_history.shape[0]
         return self.design[t].unsqueeze(0).expand(b, *self.task.event_shape_design)
 
-    def rollout(self, theta):
+    def rollout(self, theta, return_policy_log_probs: bool = False):
         """Runs the static design sequence."""
         # theta: [b, *event_shape_theta]
         # returns: y_history [b, T, *event_shape_y], design_history [b, T, *event_shape_design]
+        if return_policy_log_probs:
+            raise RuntimeError(
+                "StaticDesigner has no policy log probs; use a stochastic PolicyDesigner."
+            )
         assert theta.device == self.device, (
             f"theta is on {theta.device} but designer is on {self.device}. "
             f"Move theta with theta.to(designer.device), or move the designer with designer.to(theta.device)."
@@ -67,10 +71,14 @@ class RandomDesigner(Designer):
         b = y_history.shape[0]
         return self.dist.sample(b)  # [b, *event_shape_design]
 
-    def rollout(self, theta):
+    def rollout(self, theta, return_policy_log_probs: bool = False):
         """Runs a random design rollout."""
         # theta: [b, *event_shape_theta]
         # returns: y_history [b, T, *event_shape_y], design_history [b, T, *event_shape_design]
+        if return_policy_log_probs:
+            raise RuntimeError(
+                "RandomDesigner has no policy log probs; use a stochastic PolicyDesigner."
+            )
 
         b = theta.shape[0]
 
