@@ -124,9 +124,9 @@ class HyperbolicTemporalDiscounting(Task):
             outcomes are sampled from a (non-reparametrized) Bernoulli;
             otherwise a RelaxedBernoulli is used (default: 0.0).
         unconstrained_design (bool, optional):
-            If True, the design is an unconstrained :math:`(\xi_d, \xi_r)`
-            mapped to :math:`D_1 = \exp(\xi_d - \log \mathbb{E}[k])` and
-            :math:`R_0 = 100 \, \sigma(\xi_r)`. Without it, near-zero policy
+            If True, the design is an unconstrained :math:`(x_d, x_r)`
+            mapped to :math:`D_1 = \exp(x_d - \log \mathbb{E}[k])` and
+            :math:`R_0 = 100 \, \sigma(x_r)`. Without it, near-zero policy
             outputs saturate the choice probability and all design gradients
             vanish (default: False).
         prior (Distribution, optional):
@@ -164,7 +164,7 @@ class HyperbolicTemporalDiscounting(Task):
         # Otherwise, uses a relaex categorical at sampling time
         self.temperature = temperature
 
-        # Shift so k * D_1 is O(1) for xi_d near 0 (cf. Step-DAD): log E[k] under the prior
+        # Shift so k * D_1 is O(1) for x_d near 0 (cf. Step-DAD): log E[k] under the prior
         self.unconstrained_design = unconstrained_design
         if unconstrained_design:
             self.log_k_mean = float(prior.k_loc + 0.5 * prior.k_scale**2)
