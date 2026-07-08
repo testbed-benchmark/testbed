@@ -9,6 +9,7 @@ from .loss import (
     SortedLogMSELoss,
     SortedMSELoss,
 )
+from .reinforce import Reinforce
 from .snmc import NMC, SNMC
 from .spce import PCE, SPCE
 
@@ -19,6 +20,7 @@ __all__ = [
     "SPCE",
     "MSELoss",
     "LogMSELoss",
+    "Reinforce",
     "SortedMSELoss",
     "SortedLogMSELoss",
     "PermutationInvariantMSELoss",

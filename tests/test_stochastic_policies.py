@@ -83,6 +83,19 @@ def test_tanh_gaussian_policy_samples_bounded_designs_and_log_probs():
     assert make_space().contains(sample.deterministic_design)
 
 
+def test_tanh_gaussian_policy_non_reparameterized_sample():
+    torch.manual_seed(0)
+    policy = make_policy()
+    y_history = torch.randn(5, 3, 1)
+    design_history = torch.randn(5, 3, 2)
+
+    sample = policy.sample(y_history, design_history, reparameterize_policy=False)
+
+    # Design carries no graph; the log prob is the pure score.
+    assert not sample.design.requires_grad
+    assert sample.log_prob.requires_grad
+
+
 def test_tanh_gaussian_policy_raw_designs_are_approximately_normal():
     torch.manual_seed(0)
     policy = make_policy()

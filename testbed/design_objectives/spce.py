@@ -25,7 +25,7 @@ class SPCE(Objective):
 
     def __init__(self, task: Task, n_contrastive: int):
         """Initializes the SPCE estimator."""
-        super().__init__(task)
+        super().__init__(task, is_expected_log_ratio=True)
         self.n_contrastive = int(n_contrastive)
 
     def __call__(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
@@ -40,40 +40,49 @@ class SPCE(Objective):
         theta_0: ``[b, *event_shape_theta]``; true theta used to generate the history.
         returns: scalar SPCE estimate.
         """
+        return self.per_sample_gain(y_history, design_history, theta_0).mean()
+
+    def per_sample_gain(
+        self, y_history: Tensor, design_history: Tensor, theta_0: Tensor
+    ):
+        """Estimates per-sample gains from batched histories.
+
+        Shapes as in estimate_gain; returns: [b] per-sample SPCE estimates.
+        """
         task = self.task
         n_contrastive = self.n_contrastive
         b = theta_0.shape[0]
-        L = n_contrastive + 1
+        L_plus_1 = n_contrastive + 1
 
         theta_contrastive = task.sample_current_prior(b * n_contrastive)
         theta_contrastive = theta_contrastive.reshape(
             b, n_contrastive, *task.event_shape_theta
         )
 
-        # [b, L, *event_shape_theta]
+        # [b, L_plus_1, *event_shape_theta]
         theta_all = torch.cat([theta_0.unsqueeze(1), theta_contrastive], dim=1)
-        theta_flat = theta_all.reshape(b * L, *task.event_shape_theta)
+        theta_flat = theta_all.reshape(b * L_plus_1, *task.event_shape_theta)
 
-        # Repeat each history L times: [b*L, T, *event_shape_*]
+        # Repeat each history L_plus_1 times: [b*L_plus_1, T, *event_shape_*]
         y_rep = (
             y_history.unsqueeze(1)
-            .expand(b, L, *y_history.shape[1:])
-            .reshape(b * L, *y_history.shape[1:])
+            .expand(b, L_plus_1, *y_history.shape[1:])
+            .reshape(b * L_plus_1, *y_history.shape[1:])
         )
         design_rep = (
             design_history.unsqueeze(1)
-            .expand(b, L, *design_history.shape[1:])
-            .reshape(b * L, *design_history.shape[1:])
+            .expand(b, L_plus_1, *design_history.shape[1:])
+            .reshape(b * L_plus_1, *design_history.shape[1:])
         )
 
         logp_all = task.history_logp(y_rep, design_rep, theta_flat).reshape(
-            b, L
-        )  # [b, L]
+            b, L_plus_1
+        )  # [b, L_plus_1]
 
         logp_joint = logp_all[:, 0]
-        logp_marginal = torch.logsumexp(logp_all, dim=1) - np.log(L)
+        logp_marginal = torch.logsumexp(logp_all, dim=1) - np.log(L_plus_1)
 
-        return torch.mean(logp_joint - logp_marginal)
+        return logp_joint - logp_marginal
 
 
 class PCE(Objective):

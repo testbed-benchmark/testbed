@@ -4,8 +4,6 @@ References:
     1. https://arxiv.org/abs/2103.02438
 """
 
-import math
-
 import torch
 from torch import Tensor
 from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoulli
@@ -34,16 +32,17 @@ class HTDPrior(Distribution):
             Mean of the log-discount rate :math:`\log k` (default: -4.25).
         k_scale (float, optional):
             Standard deviation of the log-discount rate :math:`\log k`
-            (default: :math:`\sqrt{1.5}`).
+            (default: 1.5).
         alpha_scale (float, optional):
-            Scale of the half-normal prior over :math:`\alpha`
-            (default: :math:`\sqrt{2}`).
+            Scale of the half-normal prior over :math:`\alpha` (default: 2).
     """
 
-    def __init__(
-        self, k_loc=-4.25, k_scale=math.sqrt(1.5), alpha_scale=math.sqrt(2)
-    ) -> None:
-        """Initializes HTD prior parameters."""
+    def __init__(self, k_loc=-4.25, k_scale=1.5, alpha_scale=2.0) -> None:
+        """Initializes HTD prior parameters.
+
+        The scales are standard deviations, matching the official DAD code
+        (log_k ~ Normal(-4.25, 1.5), alpha ~ HalfNormal(2)).
+        """
         super().__init__()
 
         self.register_buffer("k_loc", torch.tensor(k_loc))
@@ -150,7 +149,7 @@ class HyperbolicTemporalDiscounting(Task):
         # Acts as a bias towards y=1
         self.epsilon = epsilon
 
-        # Aka "s" -- s=1 corresponds to the HTD model
+        # Aka "s" - s=1 corresponds to the HTD model
         # Other values correspond to the Rachlin model
         self.exponent = exponent
 
@@ -179,14 +178,19 @@ class HyperbolicTemporalDiscounting(Task):
                 Probability :math:`p(y=1 \mid \theta, x)`, shape ``[b, 1]``.
         """
         k = theta[:, 0].unsqueeze(-1)
-        alpha = theta[:, 1].unsqueeze(-1)
+        # Floor alpha: prior samples can round to exactly zero, making the
+        # division below produce nan gradients.
+        alpha = theta[:, 1].unsqueeze(-1).clamp(min=self.clamp_val)
 
         D1 = design[:, 0].unsqueeze(-1)
         R0 = design[:, 1].unsqueeze(-1)
 
         V1 = 100 / (1 + (k * D1).pow(self.exponent))
 
-        cdf_in = (V1 - R0) / alpha
+        # Clamp for numerical stability: normal_cdf is saturated beyond +-15
+        # (phi(15) ~ 5e-50), but the unclamped backward can produce inf/nan
+        # gradients via 1/alpha when alpha is tiny.
+        cdf_in = ((V1 - R0) / alpha).clamp(-15.0, 15.0)
         p_y1 = self.epsilon + (1.0 - 2 * self.epsilon) * normal_cdf(cdf_in)
         return p_y1.clamp(self.clamp_val, 1.0 - self.clamp_val)
 

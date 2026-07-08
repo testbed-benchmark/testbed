@@ -20,20 +20,21 @@ class RLBOEDQNetwork(nn.Module):
         design_high,
         outcome_low,
         outcome_high,
-        dim_h: int = 128,
+        dim_h=[128, 128],
         dim_emb: int = 64,
     ):
-        """Initializes the history encoder and design-conditioned emitter."""
+        """dim_h: per-layer hidden widths as a list; an int is a single layer."""
         super().__init__()
         self.dim_y = dim_y
         self.dim_design = dim_design
         self.dim_emb = dim_emb
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         self.encoder_net = MLP(
-            [dim_y + dim_design, dim_h, dim_h, dim_emb],
+            [dim_y + dim_design] + hidden_widths + [dim_emb],
             activation=nn.ReLU,
         )
         self.emitter_net = MLP(
-            [dim_emb + dim_design, dim_h, dim_h, 1],
+            [dim_emb + dim_design] + hidden_widths + [1],
             activation=nn.ReLU,
         )
         _initialize_linear_layers(self)

@@ -82,7 +82,7 @@ class AttentiveEncoder(HistoryEncoder):
         self,
         event_shape_y,
         event_shape_design,
-        dim_h=64,
+        dim_h=[64],
         dim_emb=64,
         num_heads=4,
         num_blocks=2,
@@ -97,7 +97,10 @@ class AttentiveEncoder(HistoryEncoder):
         # Learnable query, used as the readout
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim_emb))
 
-        self.input_encoder = MLP([self.dim_in, dim_h, dim_emb], activation=nn.GELU)
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
+        self.input_encoder = MLP(
+            [self.dim_in] + hidden_widths + [dim_emb], activation=nn.GELU
+        )
 
         # Transformer encoder blocks
         self.blocks = nn.ModuleList(
@@ -179,13 +182,12 @@ class AttentiveEncoder(HistoryEncoder):
 class DeepSetEncoder(HistoryEncoder):
     """Per-step MLP + masked sum pooling (DeepSets style). Permutation invariant."""
 
-    def __init__(
-        self, event_shape_y, event_shape_design, dim_h=128, hidden_layers=2, dim_emb=64
-    ):
-        """Initializes."""
+    def __init__(self, event_shape_y, event_shape_design, dim_h=[128, 128], dim_emb=64):
+        """dim_h: per-layer hidden widths as a list; an int is a single layer."""
         super().__init__(event_shape_y, event_shape_design, dim_emb)
 
-        layer_widths = [self.dim_in] + hidden_layers * [dim_h] + [dim_emb]
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
+        layer_widths = [self.dim_in] + hidden_widths + [dim_emb]
         self.encoder_net = MLP(layer_widths, activation=nn.ReLU)
 
     def encode_tokens(self, tokens, mask=None):

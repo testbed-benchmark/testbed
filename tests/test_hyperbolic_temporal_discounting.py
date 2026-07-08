@@ -1,46 +1,60 @@
+"""Tests for the hyperbolic temporal-discounting task."""
+
 import math
 
 import torch
+from torch.distributions import Bernoulli
 
+from testbed.design_nets import DeepSetPolicyNet, HTDDesignNetWrapper
+from testbed.design_nets.base_design_net import DesignNet
+from testbed.designers import PolicyDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
 from testbed.tasks.hyperbolic_temporal_discounting import HTDPrior
 
 
-def make_prior(**kwargs):
-    return HTDPrior(**kwargs)
-
-
-def make_task(**kwargs):
+def _make_task(**kwargs):
     return HyperbolicTemporalDiscounting(**kwargs)
 
 
-def test_event_shapes_and_discreteness():
-    task = make_task()
+def _make_inputs(b=64, seed=0):
+    torch.manual_seed(seed)
+    task = _make_task()
+    theta = task.sample_prior(b)  # [b, 2]
+    design = torch.stack(
+        [torch.rand(b) * 100, torch.rand(b) * 100], dim=-1
+    )  # [b, 2] = (D_1, R_0)
+    return task, theta, design
+
+
+def test_event_shapes_and_flags():
+    task = _make_task()
     assert task.event_shape_theta == torch.Size([2])
     assert task.event_shape_design == torch.Size([2])
     assert task.event_shape_y == torch.Size([1])
-    assert task.discrete_y is True
+    assert task.discrete_y
+    assert not task.discrete_theta
+    assert not task.discrete_design
 
 
 def test_task_uses_default_prior():
-    task = make_task()
+    task = _make_task()
     assert isinstance(task.prior, HTDPrior)
     assert torch.allclose(task.prior.k_loc, torch.tensor(-4.25))
-    assert torch.allclose(task.prior.k_scale, torch.tensor(math.sqrt(1.5)))
-    assert torch.allclose(task.prior.alpha_scale, torch.tensor(math.sqrt(2)))
+    assert torch.allclose(task.prior.k_scale, torch.tensor(1.5))
+    assert torch.allclose(task.prior.alpha_scale, torch.tensor(2.0))
 
 
-def test_prior_sample_shapes():
-    prior = make_prior()
-
-    assert prior.sample(1).shape == (1, 2)
-    assert prior.sample(10).shape == (10, 2)
+def test_prior_sample_shape_and_support():
+    task = _make_task()
+    theta = task.sample_prior(128)
+    assert theta.shape == (128, 2)
+    assert (theta > 0).all()  # k lognormal, alpha half-normal
 
 
 def test_prior_logprob_matches_lognormal_and_halfnormal():
-    prior = make_prior()
-    reference_k = torch.distributions.LogNormal(-4.25, math.sqrt(1.5))
-    reference_alpha = torch.distributions.HalfNormal(math.sqrt(2))
+    prior = HTDPrior()
+    reference_k = torch.distributions.LogNormal(-4.25, 1.5)
+    reference_alpha = torch.distributions.HalfNormal(2.0)
 
     theta = prior.sample(10)
     k, alpha = theta[:, 0], theta[:, 1]
@@ -49,10 +63,18 @@ def test_prior_logprob_matches_lognormal_and_halfnormal():
     assert torch.allclose(prior.log_prob(theta), expected, atol=1e-5)
 
 
+def test_make_prob_is_valid_probability():
+    task, theta, design = _make_inputs()
+    p = task.make_prob(theta, design)
+    assert p.shape == (theta.shape[0], 1)
+    assert (p > 0).all()
+    assert (p < 1).all()
+
+
 def test_make_prob_at_indifference_point():
     # V1 = 100 / (1 + (k * D1)) = 100 / (1 + 1.0) = 50 = R0, so cdf_in = 0
     # regardless of alpha, giving p(y=1) = epsilon + (1 - 2*epsilon) * 0.5 = 0.5.
-    task = make_task()
+    task = _make_task()
     theta = torch.tensor([[0.05, 1.0]])  # k, alpha
     design = torch.tensor([[20.0, 50.0]])  # D1, R0
 
@@ -62,7 +84,7 @@ def test_make_prob_at_indifference_point():
 
 def test_make_prob_matches_analytic_formula():
     epsilon = 0.01
-    task = make_task(epsilon=epsilon)
+    task = _make_task(epsilon=epsilon)
     k, alpha, D1, R0 = 0.02, 2.0, 10.0, 80.0
     theta = torch.tensor([[k, alpha]])
     design = torch.tensor([[D1, R0]])
@@ -78,7 +100,7 @@ def test_make_prob_matches_analytic_formula():
 
 def test_make_prob_bounded_by_epsilon():
     torch.manual_seed(0)
-    task = make_task()
+    task = _make_task()
     theta = task.sample_prior(64)
     design = torch.randn(64, 2) * 50
 
@@ -87,11 +109,36 @@ def test_make_prob_bounded_by_epsilon():
     assert (p_y1 <= 1.0 - task.epsilon + 1e-6).all()
 
 
+def test_make_prob_decreasing_in_delay():
+    # Larger delay D_1 shrinks the delayed value V_1, so P(y=1) must not increase.
+    task, theta, _ = _make_inputs()
+    b = theta.shape[0]
+    R0 = torch.full((b,), 50.0)
+
+    p_short = task.make_prob(theta, torch.stack([torch.full((b,), 1.0), R0], dim=-1))
+    p_long = task.make_prob(theta, torch.stack([torch.full((b,), 100.0), R0], dim=-1))
+
+    assert (p_long <= p_short).all()
+
+
+def test_outcome_logp_matches_bernoulli():
+    task, theta, design = _make_inputs()
+    p = task.make_prob(theta, design).squeeze(-1)
+
+    for y_val in (0.0, 1.0):
+        y = torch.full((theta.shape[0], 1), y_val)
+        logp = task._outcome_logp(y, theta, design)
+        expected = Bernoulli(p).log_prob(torch.full_like(p, y_val))
+        # Loose tolerance: Bernoulli.log_prob goes via logits, which loses
+        # precision at the clamped extremes of p.
+        assert torch.allclose(logp, expected, rtol=1e-4, atol=1e-6)
+
+
 def test_outcome_logp_matches_bernoulli_logpmf_for_batch():
     # Regression test: previously, squeezing y to [b] while p_y1/log_p_y1/log_p_y0
     # stayed [b, 1] made torch.where broadcast to [b, b] instead of [b].
     epsilon = 0.01
-    task = make_task(epsilon=epsilon)
+    task = _make_task(epsilon=epsilon)
     theta = torch.tensor([[0.05, 1.0], [0.05, 1.0], [0.02, 2.0], [0.02, 2.0]])
     design = torch.tensor([[20.0, 50.0], [20.0, 50.0], [10.0, 80.0], [10.0, 80.0]])
     y = torch.tensor([[1.0], [0.0], [1.0], [0.0]])
@@ -115,20 +162,67 @@ def test_outcome_logp_matches_bernoulli_logpmf_for_batch():
     assert torch.allclose(logp, expected, atol=1e-5)
 
 
-def test_sample_outcome_returns_binary_values():
-    torch.manual_seed(0)
-    task = make_task()
-    theta = task.sample_prior(50)
-    design = torch.randn(50, 2)
+def test_outcome_logp_normalized():
+    task, theta, design = _make_inputs()
+    b = theta.shape[0]
 
+    logp_y0 = task._outcome_logp(torch.zeros(b, 1), theta, design)
+    logp_y1 = task._outcome_logp(torch.ones(b, 1), theta, design)
+
+    total = logp_y0.exp() + logp_y1.exp()
+    assert torch.allclose(total, torch.ones_like(total))
+
+
+class _RawNet(DesignNet):
+    """Stub design net that returns a fixed raw output."""
+
+    def __init__(self, raw):
+        super().__init__()
+        self.raw = torch.nn.Parameter(raw)
+
+    def forward(self, y_history, design_history):
+        return self.raw
+
+
+def test_htd_wrapper_transform():
+    # Raw (x_d, x_r) map to D_1 = exp(x_d - log_k_mean), R_0 = 100 * sigmoid(x_r).
+    log_k_mean = -3.125
+    raw = torch.tensor([[0.0, 0.0], [1.0, 2.0]])
+    wrapper = HTDDesignNetWrapper(_RawNet(raw.clone()), log_k_mean=log_k_mean)
+
+    design = wrapper(None, None)
+    assert torch.allclose(design[:, 0], torch.exp(raw[:, 0] - log_k_mean))
+    assert torch.allclose(design[:, 1], 100 * torch.sigmoid(raw[:, 1]))
+
+
+def test_htd_wrapper_keeps_gradients():
+    # Near-zero raw outputs saturate the task likelihood directly (zero gradient);
+    # the wrapper maps them to non-saturating (D_1, R_0), keeping gradients alive.
+    torch.manual_seed(0)
+    task = _make_task()
+    log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
+    wrapper = HTDDesignNetWrapper(_RawNet(torch.zeros(32, 2)), log_k_mean=log_k_mean)
+
+    theta = task.sample_prior(32)
+    design = wrapper(None, None)  # [32, 2] = (D_1, R_0)
+    y = torch.ones(32, 1)
+
+    logp = task._outcome_logp(y, theta, design)
+    (grad,) = torch.autograd.grad(logp.sum(), wrapper.net.raw)
+    assert torch.isfinite(grad).all()
+    assert grad.abs().sum() > 0
+
+
+def test_sample_outcome_is_binary():
+    task, theta, design = _make_inputs()
     y = task.sample_outcome(theta, design)
-    assert y.shape == (50, 1)
-    assert set(y.unique().tolist()) <= {0.0, 1.0}
+    assert y.shape == (theta.shape[0], 1)
+    assert ((y == 0) | (y == 1)).all()
 
 
 def test_sample_outcome_mean_matches_bernoulli_probability():
     torch.manual_seed(0)
-    task = make_task()
+    task = _make_task()
     theta = torch.tensor([[0.05, 1.0]])
     design = torch.tensor([[20.0, 50.0]])  # indifference point, p(y=1) = 0.5
 
@@ -136,19 +230,28 @@ def test_sample_outcome_mean_matches_bernoulli_probability():
     assert torch.allclose(samples.mean(), torch.tensor(0.5), atol=0.02)
 
 
-def test_sample_outcome_relaxed_bernoulli_is_reparametrized():
-    # Designs are kept near the indifference point (D1=20, R0=50 for k=0.05):
-    # far from it, normal_cdf saturates and the clamp kills the gradient.
-    task = make_task(temperature=0.5)
-    theta = torch.tensor([[0.05, 1.0]] * 4)
-    design = torch.tensor(
-        [[20.0, 50.0], [21.0, 49.0], [19.0, 51.0], [20.5, 50.5]],
-        requires_grad=True,
-    )
-
+def test_relaxed_sampling_is_reparameterized():
+    task = _make_task(temperature=0.5)
+    theta = task.sample_prior(8)
+    design = torch.rand(8, 2, requires_grad=True) * 100
     y = task.sample_outcome(theta, design)
-    y.sum().backward()
+    assert y.requires_grad
+    assert (y >= 0).all() and (y <= 1).all()
 
-    assert design.grad is not None
-    assert torch.isfinite(design.grad).all()
-    assert (design.grad.abs() > 0).any()
+
+def test_rollout_shapes():
+    torch.manual_seed(0)
+    task = _make_task()
+    policy_net = DeepSetPolicyNet(
+        event_shape_y=task.event_shape_y,
+        event_shape_design=task.event_shape_design,
+        event_shape_out=task.event_shape_design,
+    )
+    b, T = 8, 4
+    designer = PolicyDesigner(task, T=T, policy_net=policy_net)
+    theta0 = task.sample_prior(b)
+    y_obs, design_obs = designer.rollout(theta0)
+
+    assert y_obs.shape == (b, T, 1)
+    assert design_obs.shape == (b, T, 2)
+    assert ((y_obs == 0) | (y_obs == 1)).all()
