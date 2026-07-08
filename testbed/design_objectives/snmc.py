@@ -14,11 +14,9 @@ class SNMC(Objective):
     See Equation 10 of the DAD paper (https://arxiv.org/pdf/2103.02438).
     """
 
-    is_expected_log_ratio = True
-
     def __init__(self, task: Task, n_contrastive: int):
         """Initializes the SNMC estimator."""
-        super().__init__(task)
+        super().__init__(task, is_expected_log_ratio=True)
         self.n_contrastive = int(n_contrastive)
 
     def __call__(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):

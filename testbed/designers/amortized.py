@@ -123,6 +123,16 @@ class PolicyDesigner(Designer):
         """Returns the policy network device."""
         return self.policy_net.device
 
+    @property
+    def reinforce_requires_policy_log_probs(self) -> bool:
+        """True when estimate_gain needs per-step policy log probs.
+
+        Score-function form: the designer samples designs without
+        reparameterization (and not greedily), so the gradient must come from
+        the policy score rather than a pathwise graph.
+        """
+        return not self.deterministic and not self.reparameterize_policy
+
     def propose_design(self, y_history, design_history, *, mask=None):
         """Evaluates the policy network."""
         # y_history, design_history: [b, T, **dim]

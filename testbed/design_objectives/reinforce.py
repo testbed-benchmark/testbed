@@ -66,7 +66,7 @@ class Reinforce(Objective):
         self,
         task: Task,
         value_fn,
-        designer,
+        requires_policy_log_probs: bool,
         baseline: str | None = None,
     ):
         """value_fn: (y_history, design_history, theta_0) -> [b] per-sample values.
@@ -78,28 +78,18 @@ class Reinforce(Objective):
         as an opaque, possibly non-differentiable reward.
 
         baseline: "leave_one_out" or None; a control variate on the score term.
-        designer: the PolicyDesigner used for the rollout.
+        designer: True when estimate_gain needs per-step policy log probs.
+            Score-function form: the designer samples designs without
+            reparameterization (and not greedily), so the gradient must come from
+            the policy score rather than a pathwise graph.
         """
-        super().__init__(task)
+        super().__init__(task, requires_policy_log_probs=requires_policy_log_probs)
 
         if baseline not in (None, "leave_one_out"):
             raise ValueError(f"Unknown baseline: {baseline}")
 
-        self.designer = designer
         self.value_fn = value_fn
         self.baseline = baseline
-
-    @property
-    def requires_policy_log_probs(self) -> bool:
-        """True when estimate_gain needs per-step policy log probs.
-
-        Score-function form: the designer samples designs without
-        reparameterization (and not greedily), so the gradient must come from
-        the policy score rather than a pathwise graph.
-        """
-        return (
-            not self.designer.deterministic and not self.designer.reparameterize_policy
-        )
 
     @property
     def _value_is_expected_log_ratio(self) -> bool:

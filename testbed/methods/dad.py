@@ -75,7 +75,7 @@ class Trainer:
 
         # Policy log probs are recorded at sample time so the value matches the
         # exact policy distribution the designs were drawn from.
-        if getattr(self.objective, "requires_policy_log_probs", False):
+        if self.objective.requires_policy_log_probs:
             y_obs, design_obs, policy_log_probs = self.designer.rollout(
                 theta0, return_policy_log_probs=True
             )
@@ -158,31 +158,27 @@ def build_design_net(cfg, task):
     )
     # Optional wrapper (e.g. the HTD constraint transform), applied after the
     # base net so event shapes still reach it.
-    wrapper_cfg = cfg.get("design_net_wrapper", None)
-    if wrapper_cfg is not None:
-        net = instantiate(wrapper_cfg, design_net=net)
+    if cfg.design_net_wrapper is not None:
+        net = instantiate(cfg.design_net_wrapper, design_net=net)
     return net
 
 
-def build_spce_reinforce(cfg, task, designer):
-    """Instantiates a Reinforce objective with an SPCE value function."""
-    spce = SPCE(task, n_contrastive=cfg.objective.n_inner)
-    baseline = getattr(cfg.objective, "baseline", None)
-
-    # Reinforce reads the estimator mode (score-function vs pathwise DAD Eq. 16)
-    # from the designer; the SPCE gain is the value in both cases.
-    return Reinforce(task, spce.per_sample_gain, designer, baseline=baseline)
-
-
-def build_objective(cfg, task, designer=None):
+def build_objective(cfg, task):
     """Instantiates the objective for training DAD.
 
     SNMC/SPCE need the task to construct, so it can't be a pure instantiate.
     """
+    n_inner = cfg.objective.n_inner
+
     objectives = {
-        "snmc": lambda: SNMC(task, n_contrastive=cfg.objective.n_inner),
-        "spce": lambda: SPCE(task, n_contrastive=cfg.objective.n_inner),
-        "reinforce": lambda: build_spce_reinforce(cfg, task, designer),
+        "snmc": lambda: SNMC(task, n_contrastive=n_inner),
+        "spce": lambda: SPCE(task, n_contrastive=n_inner),
+        "reinforce": lambda: Reinforce(
+            task,
+            SPCE(task, n_contrastive=n_inner).per_sample_gain,
+            cfg.objective.requires_policy_log_probs,
+            baseline=cfg.objective.baseline,
+        ),
     }
     name = cfg.objective.name
     return objectives[name]()
@@ -197,10 +193,22 @@ if __name__ == "__main__":
 
     Usage: python dad.py config='./path/to/config.yaml' save_dir='./save_path/'
     """
-    conf_cli = OmegaConf.from_cli()
-    cfg = OmegaConf.load(conf_cli.config)
-    # sync cli args with config
-    cfg = OmegaConf.merge(cfg, conf_cli)
+    cfg_cli = OmegaConf.from_cli()
+    cfg_file = OmegaConf.load(cfg_cli.config)
+    # Some defaults for optional args
+    # You should set these in your config file if you want to change them
+    cfg_defaults = OmegaConf.create(
+        {
+            "design_net_wrapper": None,
+            "objective": {
+                "reparameterize_policy": False,
+                "baseline": None,
+                "requires_policy_log_probs": False,
+            },
+        }
+    )
+    # Precedence: CLI > file > defaults
+    cfg = OmegaConf.merge(cfg_defaults, cfg_file, cfg_cli)
 
     # Manager setup
     run_name = f"{os.environ.get('SLURM_ARRAY_JOB_ID', '0')}_{os.environ.get('SLURM_ARRAY_TASK_ID', '0')}"
@@ -218,10 +226,14 @@ if __name__ == "__main__":
         task,
         cfg.T,
         policy_net,
-        reparameterize_policy=getattr(cfg.objective, "reparameterize_policy", False),
+        reparameterize_policy=cfg.objective.reparameterize_policy,
+    )
+    # Update config to match designer
+    cfg.objective.requires_policy_log_probs = (
+        designer.reinforce_requires_policy_log_probs
     )
 
-    objective = build_objective(cfg, task, designer)
+    objective = build_objective(cfg, task)
 
     optimizer = torch.optim.Adam(
         policy_net.parameters(),

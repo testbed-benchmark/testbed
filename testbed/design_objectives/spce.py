@@ -23,11 +23,9 @@ class SPCE(Objective):
     where theta_0' = theta_i and theta_l' ~ p(theta) for l >= 1.
     """
 
-    is_expected_log_ratio = True
-
     def __init__(self, task: Task, n_contrastive: int):
         """Initializes the SPCE estimator."""
-        super().__init__(task)
+        super().__init__(task, is_expected_log_ratio=True)
         self.n_contrastive = int(n_contrastive)
 
     def __call__(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):

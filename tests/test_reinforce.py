@@ -68,15 +68,25 @@ def _policy_grad(policy_net, gain):
 
 def test_build_objective_creates_reinforce():
     task = _make_task()
-    cfg = SimpleNamespace(objective=SimpleNamespace(name="reinforce", n_inner=4))
+    cfg = SimpleNamespace(
+        objective=SimpleNamespace(
+            name="reinforce", n_inner=4, baseline=None, requires_policy_log_probs=False
+        )
+    )
 
     det_designer = PolicyDesigner(task, T=3, policy_net=_make_design_net(task))
-    deterministic_obj = build_objective(cfg, task, det_designer)
+    cfg.objective.requires_policy_log_probs = (
+        det_designer.reinforce_requires_policy_log_probs
+    )
+    deterministic_obj = build_objective(cfg, task)
     assert isinstance(deterministic_obj, Reinforce)
     assert not deterministic_obj.requires_policy_log_probs
 
     stoch_designer = PolicyDesigner(task, T=3, policy_net=_make_stochastic_net(task))
-    stochastic_obj = build_objective(cfg, task, stoch_designer)
+    cfg.objective.requires_policy_log_probs = (
+        stoch_designer.reinforce_requires_policy_log_probs
+    )
+    stochastic_obj = build_objective(cfg, task)
     assert stochastic_obj.requires_policy_log_probs
 
 
@@ -85,7 +95,12 @@ def test_rejects_unknown_baseline():
     spce = SPCE(task, n_contrastive=4)
     designer = PolicyDesigner(task, T=3, policy_net=_make_stochastic_net(task))
     with pytest.raises(ValueError):
-        Reinforce(task, spce.per_sample_gain, designer, baseline="unknown")
+        Reinforce(
+            task,
+            spce.per_sample_gain,
+            designer.reinforce_requires_policy_log_probs,
+            baseline="unknown",
+        )
 
 
 # ============================================================================
@@ -102,7 +117,9 @@ def test_deterministic_value_equals_mean_spce_gain():
     y_obs, design_obs = designer.rollout(theta0)
 
     spce = SPCE(task, n_contrastive=16)
-    reinforce = Reinforce(task, spce.per_sample_gain, designer)
+    reinforce = Reinforce(
+        task, spce.per_sample_gain, designer.reinforce_requires_policy_log_probs
+    )
 
     torch.manual_seed(1)  # contrastive draws
     gain_reinforce = reinforce.estimate_gain(y_obs, design_obs, theta0)
@@ -124,7 +141,12 @@ def test_deterministic_matches_dad_eq16(baseline):
     y_obs, design_obs = designer.rollout(theta0)
 
     spce = SPCE(task, n_contrastive=16)
-    reinforce = Reinforce(task, spce.per_sample_gain, designer, baseline=baseline)
+    reinforce = Reinforce(
+        task,
+        spce.per_sample_gain,
+        designer.reinforce_requires_policy_log_probs,
+        baseline=baseline,
+    )
 
     torch.manual_seed(1)
     gain = reinforce.estimate_gain(y_obs, design_obs, theta0)
@@ -157,7 +179,9 @@ def test_deterministic_constant_value():
     def constant_value(y_history, design_history, theta_0):
         return y_history.new_full((y_history.shape[0],), 3.0)
 
-    reinforce = Reinforce(task, constant_value, designer)
+    reinforce = Reinforce(
+        task, constant_value, designer.reinforce_requires_policy_log_probs
+    )
     gain = reinforce.estimate_gain(y_obs, design_obs, theta0)
     assert gain.item() == pytest.approx(3.0)
 
@@ -198,7 +222,9 @@ def test_stochastic_requires_policy_log_probs():
 
     spce = SPCE(task, n_contrastive=4)
     designer = PolicyDesigner(task, T=3, policy_net=policy_net)
-    reinforce = Reinforce(task, spce.per_sample_gain, designer)
+    reinforce = Reinforce(
+        task, spce.per_sample_gain, designer.reinforce_requires_policy_log_probs
+    )
     with pytest.raises(ValueError):
         reinforce.estimate_gain(y_obs, design_obs, theta0)
 
@@ -214,7 +240,9 @@ def test_stochastic_value_equals_mean_spce_gain():
     )
 
     spce = SPCE(task, n_contrastive=16)
-    reinforce = Reinforce(task, spce.per_sample_gain, designer)
+    reinforce = Reinforce(
+        task, spce.per_sample_gain, designer.reinforce_requires_policy_log_probs
+    )
 
     torch.manual_seed(1)
     gain = reinforce.estimate_gain(y_obs, design_obs, theta0, policy_log_probs)
@@ -237,7 +265,9 @@ def test_stochastic_grad_comes_from_score_term():
     )
 
     spce = SPCE(task, n_contrastive=4)
-    reinforce = Reinforce(task, spce.per_sample_gain, designer)
+    reinforce = Reinforce(
+        task, spce.per_sample_gain, designer.reinforce_requires_policy_log_probs
+    )
     gain = reinforce.estimate_gain(y_obs, design_obs, theta0, policy_log_probs)
     grad = _policy_grad(policy_net, gain)
 
@@ -260,7 +290,12 @@ def test_stochastic_constant_value_loo_baseline_zero_grad():
     def constant_value(y_history, design_history, theta_0):
         return y_history.new_full((y_history.shape[0],), 3.0)
 
-    reinforce = Reinforce(task, constant_value, designer, baseline="leave_one_out")
+    reinforce = Reinforce(
+        task,
+        constant_value,
+        designer.reinforce_requires_policy_log_probs,
+        baseline="leave_one_out",
+    )
     gain = reinforce.estimate_gain(y_obs, design_obs, theta0, policy_log_probs)
     grad = _policy_grad(policy_net, gain)
 
@@ -281,7 +316,12 @@ def test_stochastic_baseline_does_not_change_value():
     spce = SPCE(task, n_contrastive=16)
     gains = []
     for baseline in (None, "leave_one_out"):
-        reinforce = Reinforce(task, spce.per_sample_gain, designer, baseline=baseline)
+        reinforce = Reinforce(
+            task,
+            spce.per_sample_gain,
+            designer.reinforce_requires_policy_log_probs,
+            baseline=baseline,
+        )
         torch.manual_seed(1)
         gains.append(
             reinforce.estimate_gain(y_obs, design_obs, theta0, policy_log_probs)
@@ -304,7 +344,9 @@ def test_stochastic_reparameterized_pathwise_grad():
     assert design_obs.requires_grad
 
     spce = SPCE(task, n_contrastive=4)
-    reinforce = Reinforce(task, spce.per_sample_gain, designer)
+    reinforce = Reinforce(
+        task, spce.per_sample_gain, designer.reinforce_requires_policy_log_probs
+    )
     assert not reinforce.requires_policy_log_probs
 
     gain = reinforce.estimate_gain(y_obs, design_obs, theta0)
@@ -347,12 +389,19 @@ def test_spce_per_sample_gain_matches_estimate_gain():
 def test_train_step_with_reinforce(net_factory):
     torch.manual_seed(0)
     task = _make_task()
-    cfg = SimpleNamespace(
-        n_outer=4, grad_clip=1.0, objective=SimpleNamespace(name="reinforce", n_inner=4)
-    )
     policy_net = net_factory(task)
     designer = PolicyDesigner(task, T=3, policy_net=policy_net)
-    objective = build_objective(cfg, task, designer)
+    cfg = SimpleNamespace(
+        n_outer=4,
+        grad_clip=1.0,
+        objective=SimpleNamespace(
+            name="reinforce",
+            n_inner=4,
+            baseline=None,
+            requires_policy_log_probs=designer.reinforce_requires_policy_log_probs,
+        ),
+    )
+    objective = build_objective(cfg, task)
     optimizer = torch.optim.Adam(policy_net.parameters(), lr=1e-3)
     trainer = Trainer(task, designer, objective, optimizer, cfg)
 
