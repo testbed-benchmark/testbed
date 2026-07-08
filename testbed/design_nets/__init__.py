@@ -1,7 +1,7 @@
 """Policy network exports."""
 
 from .base_design_net import DesignNet
-from .deterministic import AttentivePolicyNet, DeepSetPolicyNet
+from .deterministic import AttentivePolicyNet, DeepSetPolicyNet, MLPPolicyNet
 from .htd import HTDDesignNetWrapper
 from .modules import affine_rescale
 from .rlboed import RLBOEDQNetwork

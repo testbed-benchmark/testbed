@@ -101,7 +101,7 @@ class TransformerEncoderBlock(nn.Module):
         # out: [b, T, dim]
 
         h = self.ln1(x)
-        attn_out, _ = self.attn(h, h, h)
+        attn_out, _ = self.attn(h, h, h, need_weights=False)
         x = x + self.dropout(attn_out)
 
         h = self.ln2(x)

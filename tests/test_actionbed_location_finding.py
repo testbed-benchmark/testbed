@@ -40,7 +40,7 @@ def _make_trainer(task=None, cfg=None, manager=None):
     all_params = list(policy_net.parameters()) + list(action_net.parameters())
     optimizer = torch.optim.Adam(all_params, lr=1e-3)
     return (
-        Trainer(task, designer, action_net, loss_fn, optimizer, cfg, manager),
+        Trainer(task, designer, action_net, loss_fn, optimizer, cfg, manager=manager),
         policy_net,
         action_net,
     )

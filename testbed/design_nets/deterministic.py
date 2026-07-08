@@ -62,10 +62,10 @@ class AttentivePolicyNet(DeterministicPolicyNet):
         event_shape_y,
         event_shape_design,
         event_shape_out,
-        encoder_dim_h=[256],
-        dim_emb=128,
+        encoder_dim_h=[64],
+        dim_emb=64,
         num_heads=4,
-        num_blocks=3,
+        num_blocks=2,
         decoder_dim_h=None,
         decoder_activation=nn.GELU,
     ):
@@ -117,3 +117,52 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
             dim_h=decoder_dim_h,
             activation=decoder_activation,
         )
+
+
+class MLPPolicyNet(DesignNet):
+    """Preset: An MLP-based policy with no explicit history aggregation.
+
+    Works by flattening all inputs. Note that this won't allow for variable-length sequences.
+    Thus, it's mostly useful for action policies which only act at a fixed time point.
+    """
+
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        event_shape_out,
+        dims,
+        activation=nn.ReLU,
+    ):
+        """Initializes."""
+        super().__init__()
+
+        self.event_shape_y = torch.Size(event_shape_y)
+        self.event_shape_design = torch.Size(event_shape_design)
+
+        self.dim_y = prod(self.event_shape_y)
+        self.dim_design = prod(self.event_shape_design)
+
+        self.event_shape_out = torch.Size(event_shape_out)
+
+        self.mlp = MLP(dims, activation=activation)
+
+    def forward(self, y_history, design_history, mask=None):
+        """Forward pass of the policy net."""
+        if mask is not None:
+            raise NotImplementedError("Masks are not supported by MLPPolicyNet.")
+
+        b, T = y_history.shape[0], y_history.shape[1]
+        tokens = torch.cat(
+            [
+                y_history.reshape(b, T, self.dim_y),
+                design_history.reshape(b, T, self.dim_design),
+            ],
+            dim=-1,
+        )  # [b, T, dim_in]
+
+        tokens = tokens.reshape(b, -1)  # [b, T * dim_in]
+
+        out = self.mlp(tokens)
+        out = out.reshape(b, *self.event_shape_out)
+        return out

@@ -6,8 +6,9 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
+from testbed.core.distributions import TorchDistribution
 from testbed.core.manager import Manager
-from testbed.designers import PolicyDesigner
+from testbed.designers import PolicyDesigner, RandomDesigner
 
 # ============================================================================
 # Training class
@@ -18,7 +19,16 @@ class Trainer:
     """Training class for ActionBED-style training."""
 
     def __init__(
-        self, task, designer, action_net, loss_fn, optimizer, cfg, manager=None
+        self,
+        task,
+        designer,
+        action_net,
+        loss_fn,
+        optimizer,
+        cfg,
+        scheduler=None,
+        random_designer=None,
+        manager=None,
     ):
         """Initializes the trainer."""
         assert isinstance(designer, PolicyDesigner), (
@@ -30,7 +40,11 @@ class Trainer:
         self.action_net = action_net
         self.loss_fn = loss_fn
         self.optimizer = optimizer
+        self.scheduler = scheduler
         self.cfg = cfg
+
+        # used for action policy warmup
+        self.random_designer = random_designer
 
         self.manager = manager
 
@@ -42,7 +56,35 @@ class Trainer:
         self.designer.policy_net.train()
         self.action_net.train()
 
-        for step in range(self.cfg.n_train_iter):
+        # Action warm-up
+        if self.manager and self.cfg.n_action_warmup_iter > 0:
+            self.manager.event_logger.info("Starting action warmup training...")
+        for step in range(self.cfg.n_action_warmup_iter):
+            metrics = self.action_warmup_step()
+            metrics["step"] = step
+
+            if self.manager and self.manager.metric_logger:
+                self.manager.metric_logger.log(metrics)
+
+            # evaluation
+            if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
+                eval_metrics = self.evaluate_warmup()
+                eval_metrics["step"] = step
+
+                if self.manager:
+                    self.manager.event_logger.info(
+                        f"[Eval Warmup @ step {step}/{self.cfg.n_action_warmup_iter}]: loss={eval_metrics['action_warmup/eval/loss']}"
+                    )
+                    if self.manager.metric_logger is not None:
+                        self.manager.metric_logger.log(eval_metrics)
+
+        # Joint action-data training
+        if self.manager:
+            self.manager.event_logger.info("Starting joint data-action training...")
+        for step in range(
+            self.cfg.n_action_warmup_iter,
+            self.cfg.n_action_warmup_iter + self.cfg.n_train_iter,
+        ):
             metrics = self.train_step()
             metrics["step"] = step
 
@@ -56,7 +98,7 @@ class Trainer:
 
                 if self.manager:
                     self.manager.event_logger.info(
-                        f"[Eval @ step {step}/{self.cfg.n_train_iter}]: loss={eval_metrics['eval/loss']}"
+                        f"[Eval @ step {step}/{self.cfg.n_action_warmup_iter + self.cfg.n_train_iter}]: loss={eval_metrics['eval/loss']}"
                     )
                     if self.manager.metric_logger is not None:
                         self.manager.metric_logger.log(eval_metrics)
@@ -75,6 +117,29 @@ class Trainer:
 
         if self.manager.metric_logger is not None:
             self.manager.metric_logger.close()
+
+    def action_warmup_step(self):
+        """Takes a single training step while warming up the action network."""
+        cfg = self.cfg
+
+        theta = self.task.sample_prior(cfg.n_outer)
+        y_obs, design_obs = self.random_designer.rollout(theta)
+
+        action = self.action_net(y_obs, design_obs)
+        loss = self.loss_fn(action, theta)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        if cfg.grad_clip is not None:
+            all_params = list(self.designer.policy_net.parameters()) + list(
+                self.action_net.parameters()
+            )
+            torch.nn.utils.clip_grad_norm_(all_params, cfg.grad_clip)
+
+        self.optimizer.step()
+
+        return {"action_warmup/loss": loss.item()}
 
     def train_step(self):
         """Takes a single training step."""
@@ -96,9 +161,33 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(all_params, cfg.grad_clip)
 
         self.optimizer.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
 
         return {
             "loss": loss.item(),
+        }
+
+    def evaluate_warmup(self):
+        """Evalutes warmup with a fresh batch of rollouts."""
+        cfg = self.cfg
+
+        policy_was_training = self.designer.policy_net.training
+        action_was_training = self.action_net.training
+        self.designer.policy_net.eval()
+        self.action_net.eval()
+
+        with torch.no_grad():
+            theta = self.task.sample_prior(cfg.n_outer_eval)
+            y_obs, design_obs = self.random_designer.rollout(theta)
+            action = self.action_net(y_obs, design_obs)
+            loss = self.loss_fn(action, theta)
+
+        self.designer.policy_net.train(policy_was_training)
+        self.action_net.train(action_was_training)
+
+        return {
+            "action_warmup/eval/loss": loss.item(),
         }
 
     def evaluate(self):
@@ -206,10 +295,20 @@ if __name__ == "__main__":
 
     Usage: python actionbed.py config='./path/to/config.yaml' save_dir='./save_path/'
     """
-    conf_cli = OmegaConf.from_cli()
-    cfg = OmegaConf.load(conf_cli.config)
-    # sync cli args with config
-    cfg = OmegaConf.merge(cfg, conf_cli)
+    cfg_cli = OmegaConf.from_cli()
+    cfg_file = OmegaConf.load(cfg_cli.config)
+    # Some defaults for optional args
+    cfg_defaults = OmegaConf.create(
+        {
+            "n_action_warmup_iter": 0,
+            "betas": (0.9, 0.999),
+            "grad_clip": None,
+            "lr_period": None,
+            "lr_gamma": None,
+        }
+    )
+    # Precedence: CLI > file > defaults
+    cfg = OmegaConf.merge(cfg_defaults, cfg_file, cfg_cli)
 
     # Manager setup
     run_name = f"{os.environ.get('SLURM_ARRAY_JOB_ID', '0')}_{os.environ.get('SLURM_ARRAY_TASK_ID', '0')}"
@@ -226,8 +325,29 @@ if __name__ == "__main__":
     action_net = action_net.to(cfg.device)
     designer = PolicyDesigner(task, cfg.T, design_net)
 
+    # Setup for action-warmup
+    random_designer = None
+    if cfg.n_action_warmup_iter > 0:
+        manager.event_logger.warning(
+            "Assuming a Gaussian design prior for action warmup. Also assumes that task.event_shape_design is flat."
+        )
+        design_dist = TorchDistribution(
+            torch.distributions.MultivariateNormal(
+                torch.zeros(task.event_shape_design, device=cfg.device),
+                torch.eye(task.event_shape_design.numel(), device=cfg.device),
+            )
+        )
+        random_designer = RandomDesigner(task, cfg.T, design_dist)
+
+    # Create optimizer + LR scheduler
     all_policy_params = list(design_net.parameters()) + list(action_net.parameters())
-    optimizer = torch.optim.Adam(all_policy_params, lr=cfg.lr)
+    optimizer = torch.optim.Adam(all_policy_params, lr=cfg.lr, betas=cfg.betas)
+
+    scheduler = None
+    if cfg.lr_period is not None:
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma
+        )
 
     loss_fn = instantiate(cfg.loss)
 
@@ -238,6 +358,8 @@ if __name__ == "__main__":
         loss_fn=loss_fn,
         optimizer=optimizer,
         cfg=cfg,
+        scheduler=scheduler,
+        random_designer=random_designer,
         manager=manager,
     )
 
