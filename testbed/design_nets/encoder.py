@@ -108,9 +108,8 @@ class AttentiveEncoder(HistoryEncoder):
         )
 
         # Optional time embeddings
-        self.use_time_embeddding = use_time_embedding
-        print(f"set use_time_embedding: {use_time_embedding}")
-        if self.use_time_embeddding:
+        self.use_time_embedding = use_time_embedding
+        if self.use_time_embedding:
             self.time_emb = nn.Embedding(max_T + 1, dim_emb)
             self.max_T = max_T
 
@@ -143,7 +142,7 @@ class AttentiveEncoder(HistoryEncoder):
         cls = self.cls_token.expand(b, 1, -1)  # [b, 1, dim_emb]
 
         # Add time embeddings
-        if self.use_time_embeddding:
+        if self.use_time_embedding:
             if T > 0:
                 time_idx = (
                     torch.arange(T, device=tokens.device).unsqueeze(0).expand(b, T)

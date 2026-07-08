@@ -142,9 +142,7 @@ class MLPPolicyNet(DesignNet):
     def forward(self, y_history, design_history, mask=None):
         """Forward pass of the policy net."""
         if mask is not None:
-            raise NotImplementedError(
-                "Masking not yet supported with an attention-based encoder."
-            )
+            raise NotImplementedError("Masks are not supported by MLPPolicyNet.")
 
         b, T = y_history.shape[0], y_history.shape[1]
         tokens = torch.cat(
@@ -156,10 +154,6 @@ class MLPPolicyNet(DesignNet):
         )  # [b, T, dim_in]
 
         tokens = tokens.reshape(b, -1)  # [b, T * dim_in]
-
-        # mean = tokens.mean(dim=0)
-        # std = tokens.std(dim=0)
-        # tokens = (tokens - mean) / std
 
         out = self.mlp(tokens)
         out = out.reshape(b, *self.event_shape_out)

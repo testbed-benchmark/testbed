@@ -342,6 +342,8 @@ if __name__ == "__main__":
     # Create optimizer + LR scheduler
     all_policy_params = list(design_net.parameters()) + list(action_net.parameters())
     optimizer = torch.optim.Adam(all_policy_params, lr=cfg.lr, betas=cfg.betas)
+
+    scheduler = None
     if cfg.lr_period is not None:
         scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma
