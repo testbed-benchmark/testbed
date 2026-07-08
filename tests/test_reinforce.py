@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from testbed.design_nets import DeepSetPolicyNet, TanhGaussianPolicyNet
+from testbed.design_nets import (
+    DeepSetPolicyNet,
+    HTDDesignNetWrapper,
+    TanhGaussianPolicyNet,
+)
 from testbed.design_objectives import SPCE, Reinforce
 from testbed.design_objectives.reinforce import leave_one_out_baseline
 from testbed.designers import PolicyDesigner
@@ -15,21 +19,27 @@ from testbed.tasks import HyperbolicTemporalDiscounting
 
 
 def _make_task():
-    # unconstrained_design keeps the likelihood non-saturated for an untrained
-    # policy, so design gradients are non-zero.
-    return HyperbolicTemporalDiscounting(unconstrained_design=True)
+    return HyperbolicTemporalDiscounting()
+
+
+def _log_k_mean(task):
+    # log E[k] under the prior; keeps k * D_1 ~ O(1) so gradients don't vanish.
+    return float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
 
 
 def _make_design_net(task):
-    return DeepSetPolicyNet(
+    # Wrap so raw (near-zero at init) outputs map to non-saturating (D_1, R_0).
+    net = DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
     )
+    return HTDDesignNetWrapper(net, log_k_mean=_log_k_mean(task))
 
 
 def _make_stochastic_net(task):
-    space = BoxDesignSpace(-1.0, 1.0, event_shape=tuple(task.event_shape_design))
+    # Box over valid (D_1, R_0); centered near k * D_1 ~ 1 so it is non-saturating.
+    space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0])
     return TanhGaussianPolicyNet(space)
 
 

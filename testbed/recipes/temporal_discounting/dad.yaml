@@ -13,7 +13,6 @@ task:
   epsilon: 0.01
   exponent: 1.0
   temperature: 0.0          # true discrete sampling; REINFORCE handles the gradient
-  unconstrained_design: true    # policy outputs raw (xi_d, xi_r); task maps to (D_1, R_0)
 T: 20
 
 # objective
@@ -50,3 +49,9 @@ design_net:
   decoder_activation:
     _target_: torch.nn.ReLU
     _partial_: true
+
+# Maps the raw net output to valid HTD designs (D_1, R_0), following Step-DAD.
+# log_k_mean = k_loc + 0.5 * k_scale**2 = -4.25 + 0.5 * 1.5**2 for the default prior.
+design_net_wrapper:
+  _target_: testbed.design_nets.HTDDesignNetWrapper
+  log_k_mean: -3.125

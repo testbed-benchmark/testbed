@@ -123,12 +123,6 @@ class HyperbolicTemporalDiscounting(Task):
             Relaxation temperature for reparametrized sampling. If 0,
             outcomes are sampled from a (non-reparametrized) Bernoulli;
             otherwise a RelaxedBernoulli is used (default: 0.0).
-        unconstrained_design (bool, optional):
-            If True, the design is an unconstrained :math:`(x_d, x_r)`
-            mapped to :math:`D_1 = \exp(x_d - \log \mathbb{E}[k])` and
-            :math:`R_0 = 100 \, \sigma(x_r)`. Without it, near-zero policy
-            outputs saturate the choice probability and all design gradients
-            vanish (default: False).
         prior (Distribution, optional):
             Prior over parameters. If None, the default HTDPrior is used.
     """
@@ -138,7 +132,6 @@ class HyperbolicTemporalDiscounting(Task):
         epsilon: float = 0.01,
         exponent: float = 1.0,
         temperature: float = 0.0,
-        unconstrained_design: bool = False,
         prior=None,
     ) -> None:
         """Initializes the HTD task."""
@@ -156,18 +149,13 @@ class HyperbolicTemporalDiscounting(Task):
         # Acts as a bias towards y=1
         self.epsilon = epsilon
 
-        # Aka "s" -- s=1 corresponds to the HTD model
+        # Aka "s" - s=1 corresponds to the HTD model
         # Other values correspond to the Rachlin model
         self.exponent = exponent
 
         # If temperature=0, we do not have reparametrised sampling
         # Otherwise, uses a relaex categorical at sampling time
         self.temperature = temperature
-
-        # Shift so k * D_1 is O(1) for x_d near 0 (cf. Step-DAD): log E[k] under the prior
-        self.unconstrained_design = unconstrained_design
-        if unconstrained_design:
-            self.log_k_mean = float(prior.k_loc + 0.5 * prior.k_scale**2)
 
         # Numerical clamping
         self.clamp_val = 1e-6
@@ -196,10 +184,6 @@ class HyperbolicTemporalDiscounting(Task):
 
         D1 = design[:, 0].unsqueeze(-1)
         R0 = design[:, 1].unsqueeze(-1)
-
-        if self.unconstrained_design:
-            D1 = torch.exp(D1 - self.log_k_mean)
-            R0 = 100 * torch.sigmoid(R0)
 
         V1 = 100 / (1 + (k * D1).pow(self.exponent))
 

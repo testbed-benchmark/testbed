@@ -5,7 +5,8 @@ import math
 import torch
 from torch.distributions import Bernoulli
 
-from testbed.design_nets import DeepSetPolicyNet
+from testbed.design_nets import DeepSetPolicyNet, HTDDesignNetWrapper
+from testbed.design_nets.base_design_net import DesignNet
 from testbed.designers import PolicyDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
 from testbed.tasks.hyperbolic_temporal_discounting import HTDPrior
@@ -172,32 +173,42 @@ def test_outcome_logp_normalized():
     assert torch.allclose(total, torch.ones_like(total))
 
 
-def test_unconstrained_design_transform():
+class _RawNet(DesignNet):
+    """Stub design net that returns a fixed raw output."""
+
+    def __init__(self, raw):
+        super().__init__()
+        self.raw = torch.nn.Parameter(raw)
+
+    def forward(self, y_history, design_history):
+        return self.raw
+
+
+def test_htd_wrapper_transform():
+    # Raw (x_d, x_r) map to D_1 = exp(x_d - log_k_mean), R_0 = 100 * sigmoid(x_r).
+    log_k_mean = -3.125
+    raw = torch.tensor([[0.0, 0.0], [1.0, 2.0]])
+    wrapper = HTDDesignNetWrapper(_RawNet(raw.clone()), log_k_mean=log_k_mean)
+
+    design = wrapper(None, None)
+    assert torch.allclose(design[:, 0], torch.exp(raw[:, 0] - log_k_mean))
+    assert torch.allclose(design[:, 1], 100 * torch.sigmoid(raw[:, 1]))
+
+
+def test_htd_wrapper_keeps_gradients():
+    # Near-zero raw outputs saturate the task likelihood directly (zero gradient);
+    # the wrapper maps them to non-saturating (D_1, R_0), keeping gradients alive.
     torch.manual_seed(0)
-    task_raw = _make_task()
-    task_unc = _make_task(unconstrained_design=True)
-    theta = task_unc.sample_prior(64)
+    task = _make_task()
+    log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
+    wrapper = HTDDesignNetWrapper(_RawNet(torch.zeros(32, 2)), log_k_mean=log_k_mean)
 
-    # (xi_d, xi_r) = 0 maps to D_1 = exp(-log E[k]) = 1 / E[k], R_0 = 50
-    xi = torch.zeros(64, 2)
-    p_unc = task_unc.make_prob(theta, xi)
-    D1 = torch.full((64,), float(torch.exp(torch.tensor(-task_unc.log_k_mean))))
-    R0 = torch.full((64,), 50.0)
-    p_raw = task_raw.make_prob(theta, torch.stack([D1, R0], dim=-1))
-    assert torch.allclose(p_unc, p_raw)
-
-
-def test_unconstrained_design_has_gradients():
-    # Near-zero designs saturate the raw task's likelihood (zero gradient); the
-    # unconstrained parameterization must keep gradients alive.
-    torch.manual_seed(0)
-    task = _make_task(unconstrained_design=True)
     theta = task.sample_prior(32)
-    design = torch.zeros(32, 2, requires_grad=True)
+    design = wrapper(None, None)  # [32, 2] = (D_1, R_0)
     y = torch.ones(32, 1)
 
     logp = task._outcome_logp(y, theta, design)
-    (grad,) = torch.autograd.grad(logp.sum(), design)
+    (grad,) = torch.autograd.grad(logp.sum(), wrapper.net.raw)
     assert torch.isfinite(grad).all()
     assert grad.abs().sum() > 0
 

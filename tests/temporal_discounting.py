@@ -16,8 +16,7 @@ from rich.panel import Panel
 from rich.progress import track
 from rich.table import Table
 
-from testbed.core.distributions import TorchDistribution
-from testbed.design_nets import DeepSetPolicyNet
+from testbed.design_nets import DeepSetPolicyNet, HTDDesignNetWrapper
 from testbed.design_objectives import SNMC, SPCE, Reinforce
 from testbed.designers import PolicyDesigner, RandomDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
@@ -51,19 +50,36 @@ def make_policy_designer(task, device):
         encoder_dim_h=[256, 256],
         dim_emb=16,
         decoder_dim_h=[128, 128],
-    ).to(device)
+    )
+    # Map raw outputs to valid (D_1, R_0), following Step-DAD.
+    log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
+    policy_net = HTDDesignNetWrapper(policy_net, log_k_mean=log_k_mean).to(device)
     return PolicyDesigner(task, T, policy_net)
 
 
+class _HTDRandomDesigns:
+    """Random HTD designs: raw N(0, 1) mapped to (D_1, R_0), as in Step-DAD."""
+
+    def __init__(self, log_k_mean, device):
+        self.log_k_mean = log_k_mean
+        self._device = torch.device(device)
+
+    @property
+    def device(self):
+        return self._device
+
+    def sample(self, n):
+        raw = torch.randn(n, 2, device=self._device)
+        D1 = torch.exp(raw[:, 0:1] - self.log_k_mean)
+        R0 = 100 * torch.sigmoid(raw[:, 1:2])
+        return torch.cat((D1, R0), dim=-1)
+
+
 def make_random_designer(task, device):
-    # Standard normal in the unconstrained design space (cf. Step-DAD random baseline)
-    design_prior = TorchDistribution(
-        torch.distributions.Normal(
-            torch.zeros(2, device=device),
-            torch.ones(2, device=device),
-        )
-    )
-    return RandomDesigner(task, T, design_prior)
+    # Random designs in the unconstrained space, mapped to valid (D_1, R_0) the
+    # same way as the policy net's wrapper (cf. Step-DAD random baseline).
+    log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
+    return RandomDesigner(task, T, _HTDRandomDesigns(log_k_mean, device))
 
 
 def train(task, designer):
@@ -109,7 +125,7 @@ def test_dad_reinforce_eig():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(0)
 
-    task = HyperbolicTemporalDiscounting(unconstrained_design=True).to(device)
+    task = HyperbolicTemporalDiscounting().to(device)
 
     random_designer = make_random_designer(task, device)
     policy_designer = make_policy_designer(task, device)

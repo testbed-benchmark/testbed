@@ -150,12 +150,18 @@ class Trainer:
 
 def build_design_net(cfg, task):
     """Instantiates the design policy network."""
-    return instantiate(
+    net = instantiate(
         cfg.design_net,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
     )
+    # Optional wrapper (e.g. the HTD constraint transform), applied after the
+    # base net so event shapes still reach it.
+    wrapper_cfg = cfg.get("design_net_wrapper", None)
+    if wrapper_cfg is not None:
+        net = instantiate(wrapper_cfg, design_net=net)
+    return net
 
 
 def build_spce_reinforce(cfg, task, designer):
