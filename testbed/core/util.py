@@ -110,11 +110,11 @@ def sort_by_norm(x: Tensor) -> Tensor:
 
     Args:
         x: Either
-            [batch, n_objects, *object_shape], or
-            [n_objects, *object_shape].
+            ``[batch, n_objects, *object_shape]``, or
+            ``[n_objects, *object_shape]``.
 
     Returns:
-        Tensor with the same shape as `x`, with objects sorted by
+        Tensor with the same shape as ``x``, with objects sorted by
         increasing Euclidean norm.
     """
     unbatched = x.ndim == 2
