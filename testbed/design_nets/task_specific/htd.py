@@ -31,11 +31,10 @@ class HTDDesignNetWrapper(DesignNet):
 
     def forward(self, y_history, design_history) -> Tensor:
         """Maps the wrapped net's raw output to (D_1, R_0); see class docstring."""
-
         # This is a hack to make this wrapper match previous DAD implementations
         # TODO clean-up
         design_history_raw = self._invert(design_history)
-        
+
         design_raw = self.net(y_history, design_history_raw)  # [*batch, 2]
         D_raw = design_raw[..., 0:1]
         R_raw = design_raw[..., 1:2]
