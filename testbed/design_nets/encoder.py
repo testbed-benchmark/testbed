@@ -76,28 +76,52 @@ class HistoryEncoder(nn.Module, ABC):
 
 
 class AttentiveEncoder(HistoryEncoder):
-    """Transformer + CLS-token pooling. No positional encoding, so permutation invariant."""
+    """Transformer + CLS-token pooling."""
 
     def __init__(
         self,
         event_shape_y,
         event_shape_design,
-        dim_h=256,
-        dim_emb=128,
+        dim_h=64,
+        dim_emb=64,
         num_heads=4,
-        num_blocks=3,
+        num_blocks=2,
+        dropout: float = 0.0,
+        use_time_embedding: bool = True,
+        max_T: int = 128,
+        use_type_embedding: bool = False,
     ):
         """Initializes."""
         super().__init__(event_shape_y, event_shape_design, dim_emb)
 
+        # Learnable query, used as the readout
+        self.cls_token = nn.Parameter(torch.randn(1, 1, dim_emb))
+
         self.input_encoder = MLP([self.dim_in, dim_h, dim_emb], activation=nn.GELU)
 
+        # Transformer encoder blocks
         self.blocks = nn.ModuleList(
-            [TransformerEncoderBlock(dim_emb, num_heads) for _ in range(num_blocks)]
+            [
+                TransformerEncoderBlock(dim_emb, num_heads, dropout=dropout)
+                for _ in range(num_blocks)
+            ]
         )
 
-        # Learnable query, used as the readout
-        self.cls_token = nn.Parameter(torch.randn(1, 1, dim_emb) * 0.02)
+        # Optional time embeddings
+        self.use_time_embedding = use_time_embedding
+        if self.use_time_embedding:
+            self.time_emb = nn.Embedding(max_T + 1, dim_emb)
+            self.max_T = max_T
+
+        # Optional embeddings for history/cls types
+        self.use_type_embedding = use_type_embedding
+        if self.use_type_embedding:
+            self.type_emb = nn.Embedding(2, dim_emb)
+
+        # Normalization layers
+        self.enc_norm = nn.LayerNorm(dim_emb)
+        self.enc_dropout = nn.Dropout(dropout)
+        self.output_norm = nn.LayerNorm(dim_emb)
 
     def encode_tokens(self, tokens, mask=None):
         """Runs the forward pass of the encoder.
@@ -111,24 +135,45 @@ class AttentiveEncoder(HistoryEncoder):
 
         b, T, _ = tokens.shape
 
-        # Note: you could remove this branch entirely.
-        # In that case, the cls_token is passed through the transformer, and the resulting output
-        # is used as the T=0 encoding. This is entirely valid, but in my (limited) testing,
-        # keeping a separate null encoding worked a bit better. YMMV. -- Gav
-        if T == 0:
-            return self.empty_encoding(b)
-
-        # Pre-attention embeddings
+        # Input projection
         enc = self.input_encoder(tokens)  # [b, T, dim_emb]
-        cls = self.cls_token.expand(b, -1, -1)  # [b, 1, dim_emb]
-        enc = torch.cat([cls, enc], dim=1)  # [b, T+1, dim_emb]
+
+        # Class token
+        cls = self.cls_token.expand(b, 1, -1)  # [b, 1, dim_emb]
+
+        # Add time embeddings
+        if self.use_time_embedding:
+            if T > 0:
+                time_idx = (
+                    torch.arange(T, device=tokens.device).unsqueeze(0).expand(b, T)
+                )
+                enc = enc + self.time_emb(time_idx)
+
+            # Always use T for the class token
+            cls_time_idx = torch.full((b, 1), T, dtype=torch.long, device=tokens.device)
+            cls = cls + self.time_emb(cls_time_idx)
+
+        # Add type embeddings
+        if self.use_type_embedding:
+            hist_idx = torch.zeros(b, T, dtype=torch.long, device=tokens.device)
+            enc = enc + self.type_emb(hist_idx)
+
+            cls_idx = torch.ones(b, 1, dtype=torch.long, device=tokens.device)
+            cls = cls + self.type_emb(cls_idx)
+
+        # Stack and normalize
+        enc = torch.cat([enc, cls], dim=1)  # [b, T+1, dim_emb]
+        enc = self.enc_norm(enc)
+        enc = self.enc_dropout(enc)
 
         # Attention blocks
         for block in self.blocks:
             enc = block(enc)
 
-        # CLS readout
-        return enc[:, 0, :]
+        # cls readout
+        cls_out = enc[:, -1, :]
+        cls_out = self.output_norm(cls_out)
+        return cls_out
 
 
 class DeepSetEncoder(HistoryEncoder):

@@ -9,41 +9,51 @@ task:
   _target_: testbed.tasks.LocationFinding 
   n_sources: 1
   dim_theta: 2
+  # default hyperparameters; explicitly pinning
+  amplitude: 1.0
+  base_signal: 0.1
+  max_signal: 1e-4
+  noise_scale: 0.5
 T: 10
 
 # loss
 loss:
-  _target_: testbed.design_objectives.SortedMSELoss # testbed.design_objectives.MSELoss also works
-  #epsilon: 1e-8  # Only needed for the LogMSE variants
+  _target_: testbed.design_objectives.PermutationInvariantMSELoss
 
 # training
+# NB: these are fairly short runs
+# you can likely get better results by training for much longer
 n_train_iter: 5_000
-n_outer: 2_048
+n_action_warmup_iter: 5_000
+n_outer: 2_000
 
 # eval
 eval_every: 100
 n_outer_eval: 2_048
 
 # optimizer
-lr: 1e-4
-grad_clip: 1.0
+lr: 5e-4
+betas: [0.8, 0.998]
+lr_gamma: 0.95
+lr_period: 2000
 
 # policy networks
 design_net:
   _target_: testbed.design_nets.AttentivePolicyNet
-  encoder_dim_h: 256
-  dim_emb: 128
+  encoder_dim_h: 64
+  dim_emb: 64
   num_heads: 4
-  num_blocks: 3
+  num_blocks: 2
   decoder_layers: 1
 
 action_net:
-  _target_: testbed.design_nets.AttentivePolicyNet
-  encoder_dim_h: 256
-  dim_emb: 128
-  num_heads: 4
-  num_blocks: 3
-  decoder_layers: 1
+  _target_: testbed.design_nets.MLPPolicyNet
+  # input dim: T * (dim_y + n_sources * dim_theta)
+  # output dim: dim_theta
+  dims: [30, 512, 256, 128, 2]
+  activation:
+    _target_: torch.nn.GELU
+    _partial_: true
 
 # experiment tracking
 wandb:

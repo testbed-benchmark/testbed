@@ -39,11 +39,11 @@ docs = ["sphinx", "sphinx-autoapi", "sphinx-autobuild", "myst-parser", "sphinx-b
 testpaths = ["tests"]   # where to look
 
 [tool.ruff]
+extend-exclude = ["testbed/notebooks/**/*.ipynb"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*.py" = ["F401", "D"]
 "examples/*.py" = ["D"]
-"testbed/notebooks/**.ipynb" = ["D", "I"]
 
 [tool.ruff.lint]
 extend-select = ["I", "D"]
