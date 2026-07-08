@@ -2,7 +2,6 @@
 
 from .base_design_net import DesignNet
 from .deterministic import AttentivePolicyNet, DeepSetPolicyNet, MLPPolicyNet
-from .htd import HTDDesignNetWrapper
 from .modules import affine_rescale
 from .rlboed import RLBOEDQNetwork
 from .stochastic import (
@@ -12,3 +11,4 @@ from .stochastic import (
     StochasticDesignNet,
     TanhGaussianPolicyNet,
 )
+from .task_specific.htd import HTDDesignNetWrapper

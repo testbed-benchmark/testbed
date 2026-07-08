@@ -3,7 +3,7 @@
 import torch
 from torch import Tensor
 
-from .base_design_net import DesignNet
+from ..base_design_net import DesignNet
 
 
 class HTDDesignNetWrapper(DesignNet):
