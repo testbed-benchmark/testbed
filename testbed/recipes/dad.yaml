@@ -5,21 +5,17 @@ defaults:
   - wandb: default
   - hydra_run: default
   - _self_
-
 # system (device/save_dir come from the system group)
 seed: 0
 T: 10
-
 # objective
 objective:
   name: spce
-  n_inner: 1_024            # contrastive samples for sPCE
+  n_inner: 1_024  # contrastive samples for sPCE
   reparameterize_policy: false
   baseline: null
   requires_policy_log_probs: false
-
 design_net_wrapper: null
-
 # training
 n_train_iter: 25_000
 n_outer: 2_048
@@ -29,6 +25,6 @@ lr: 1e-4
 grad_clip: 1.0
 
 # eval
-eval_every: 0               # eval is expensive here; off for this recipe
+eval_every: 0  # eval is expensive here; off for this recipe
 n_outer_eval: 2_048
 n_inner_eval: 100_000
