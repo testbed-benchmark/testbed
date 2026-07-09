@@ -4,8 +4,8 @@ import hydra
 import torch
 from hydra.utils import instantiate
 
-from testbed.core.setup import setup
 from testbed.core.distributions import TorchDistribution
+from testbed.core.setup import setup
 from testbed.designers import PolicyDesigner, RandomDesigner
 
 # ============================================================================
