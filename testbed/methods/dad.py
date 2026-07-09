@@ -5,7 +5,7 @@ import torch
 from hydra.utils import instantiate
 
 from testbed.core.setup import setup
-from testbed.design_objectives import SNMC, SPCE
+from testbed.design_objectives import SNMC, SPCE, Reinforce
 from testbed.designers import PolicyDesigner
 
 # ============================================================================
@@ -70,9 +70,19 @@ class Trainer:
         cfg = self.cfg
 
         theta0 = self.task.sample_prior(cfg.n_outer)
-        y_obs, design_obs = self.designer.rollout(theta0)
 
-        gain = self.objective.estimate_gain(y_obs, design_obs, theta0)
+        # Policy log probs are recorded at sample time so the value matches the
+        # exact policy distribution the designs were drawn from.
+        if self.objective.requires_policy_log_probs:
+            y_obs, design_obs, policy_log_probs = self.designer.rollout(
+                theta0, return_policy_log_probs=True
+            )
+            gain = self.objective.estimate_gain(
+                y_obs, design_obs, theta0, policy_log_probs
+            )
+        else:
+            y_obs, design_obs = self.designer.rollout(theta0)
+            gain = self.objective.estimate_gain(y_obs, design_obs, theta0)
         loss = -gain
 
         self.optimizer.zero_grad()
@@ -138,12 +148,17 @@ class Trainer:
 
 def build_design_net(cfg, task):
     """Instantiates the design policy network."""
-    return instantiate(
+    net = instantiate(
         cfg.design_net,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
     )
+    # Optional wrapper (e.g. the HTD constraint transform), applied after the
+    # base net so event shapes still reach it.
+    if cfg.design_net_wrapper is not None:
+        net = instantiate(cfg.design_net_wrapper, design_net=net)
+    return net
 
 
 def build_objective(cfg, task):
@@ -151,9 +166,17 @@ def build_objective(cfg, task):
 
     SNMC/SPCE need the task to construct, so it can't be a pure instantiate.
     """
+    n_inner = cfg.objective.n_inner
+
     objectives = {
-        "snmc": lambda: SNMC(task, n_contrastive=cfg.objective.n_inner),
-        "spce": lambda: SPCE(task, n_contrastive=cfg.objective.n_inner),
+        "snmc": lambda: SNMC(task, n_contrastive=n_inner),
+        "spce": lambda: SPCE(task, n_contrastive=n_inner),
+        "reinforce": lambda: Reinforce(
+            task,
+            SPCE(task, n_contrastive=n_inner).per_sample_gain,
+            cfg.objective.requires_policy_log_probs,
+            baseline=cfg.objective.baseline,
+        ),
     }
     name = cfg.objective.name
     return objectives[name]()
@@ -177,7 +200,16 @@ def main(cfg):
 
     policy_net = build_design_net(cfg, task)
     policy_net = policy_net.to(cfg.device)
-    designer = PolicyDesigner(task, cfg.T, policy_net)
+    designer = PolicyDesigner(
+        task,
+        cfg.T,
+        policy_net,
+        reparameterize_policy=cfg.objective.reparameterize_policy,
+    )
+    # Update config to match designer
+    cfg.objective.requires_policy_log_probs = (
+        designer.reinforce_requires_policy_log_probs
+    )
 
     objective = build_objective(cfg, task)
 

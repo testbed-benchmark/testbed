@@ -18,12 +18,17 @@ class DeterministicPolicyNet(DesignNet):
     Args:
     encoder: HistoryEncoder object
     event_shape_out: tuple or torch.Size of shape for outputs of the network
-    decoder_layers: number of hidden layers in decoder
-    dim_h: width of hidden layers; defaults to dim_emb from the encoder
+    dim_h: per-layer hidden widths as a list, e.g. [128, 16]; an int is a
+        single hidden layer of that width. Defaults to dim_emb from the encoder.
+    activation: activation class (nn.ReLU, nn.GELU, ...) for the decoder
     """
 
     def __init__(
-        self, encoder: HistoryEncoder, event_shape_out, decoder_layers=1, dim_h=None
+        self,
+        encoder: HistoryEncoder,
+        event_shape_out,
+        dim_h=None,
+        activation=nn.GELU,
     ):
         """Initializes."""
         super().__init__()
@@ -33,11 +38,10 @@ class DeterministicPolicyNet(DesignNet):
         self.event_shape_out = torch.Size(event_shape_out)
 
         dim_h = dim_h or encoder.dim_emb
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
 
-        layer_widths = (
-            [encoder.dim_emb] + decoder_layers * [dim_h] + [prod(self.event_shape_out)]
-        )
-        self.decoder = MLP(layer_widths, activation=nn.GELU)
+        layer_widths = [encoder.dim_emb] + hidden_widths + [prod(self.event_shape_out)]
+        self.decoder = MLP(layer_widths, activation=activation)
 
     def forward(self, y_history, design_history, mask=None):
         """Forward pass of the policy net. Combines the encoder with the decoder, which is assumed to be an MLP."""
@@ -58,12 +62,12 @@ class AttentivePolicyNet(DeterministicPolicyNet):
         event_shape_y,
         event_shape_design,
         event_shape_out,
-        encoder_dim_h=256,
-        dim_emb=128,
+        encoder_dim_h=[64],
+        dim_emb=64,
         num_heads=4,
-        num_blocks=3,
-        decoder_layers=1,
+        num_blocks=2,
         decoder_dim_h=None,
+        decoder_activation=nn.GELU,
     ):
         """Initializes."""
         encoder = AttentiveEncoder(
@@ -76,7 +80,10 @@ class AttentivePolicyNet(DeterministicPolicyNet):
         )
 
         super().__init__(
-            encoder, event_shape_out, decoder_layers=decoder_layers, dim_h=decoder_dim_h
+            encoder,
+            event_shape_out,
+            dim_h=decoder_dim_h,
+            activation=decoder_activation,
         )
 
 
@@ -92,20 +99,70 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
         event_shape_y,
         event_shape_design,
         event_shape_out,
-        encoder_dim_h=128,
-        encoder_layers=2,
+        encoder_dim_h=[128, 128],
         dim_emb=64,
-        decoder_layers=1,
         decoder_dim_h=None,
+        decoder_activation=nn.GELU,
     ):
         """Initializes."""
         encoder = DeepSetEncoder(
             event_shape_y,
             event_shape_design,
             dim_h=encoder_dim_h,
-            hidden_layers=encoder_layers,
             dim_emb=dim_emb,
         )
         super().__init__(
-            encoder, event_shape_out, decoder_layers=decoder_layers, dim_h=decoder_dim_h
+            encoder,
+            event_shape_out,
+            dim_h=decoder_dim_h,
+            activation=decoder_activation,
         )
+
+
+class MLPPolicyNet(DesignNet):
+    """Preset: An MLP-based policy with no explicit history aggregation.
+
+    Works by flattening all inputs. Note that this won't allow for variable-length sequences.
+    Thus, it's mostly useful for action policies which only act at a fixed time point.
+    """
+
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        event_shape_out,
+        dims,
+        activation=nn.ReLU,
+    ):
+        """Initializes."""
+        super().__init__()
+
+        self.event_shape_y = torch.Size(event_shape_y)
+        self.event_shape_design = torch.Size(event_shape_design)
+
+        self.dim_y = prod(self.event_shape_y)
+        self.dim_design = prod(self.event_shape_design)
+
+        self.event_shape_out = torch.Size(event_shape_out)
+
+        self.mlp = MLP(dims, activation=activation)
+
+    def forward(self, y_history, design_history, mask=None):
+        """Forward pass of the policy net."""
+        if mask is not None:
+            raise NotImplementedError("Masks are not supported by MLPPolicyNet.")
+
+        b, T = y_history.shape[0], y_history.shape[1]
+        tokens = torch.cat(
+            [
+                y_history.reshape(b, T, self.dim_y),
+                design_history.reshape(b, T, self.dim_design),
+            ],
+            dim=-1,
+        )  # [b, T, dim_in]
+
+        tokens = tokens.reshape(b, -1)  # [b, T * dim_in]
+
+        out = self.mlp(tokens)
+        out = out.reshape(b, *self.event_shape_out)
+        return out
