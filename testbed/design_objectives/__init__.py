@@ -3,6 +3,7 @@
 # Included so that you can do `from testbed.design_objectives import MSELoss` (for consistency with the other losses)
 from torch.nn import MSELoss
 
+from .log_loss import LogLoss
 from .loss import (
     LogMSELoss,
     PermutationInvariantMSELoss,
@@ -19,6 +20,7 @@ __all__ = [
     "SNMC",
     "SPCE",
     "MSELoss",
+    "LogLoss",
     "LogMSELoss",
     "Reinforce",
     "SortedMSELoss",

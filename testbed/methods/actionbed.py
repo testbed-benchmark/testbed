@@ -1,9 +1,10 @@
 """Training for ActionBED (Rossa et al., 2026)."""
 
+import inspect
 import os
 
 import torch
-from hydra.utils import instantiate
+from hydra.utils import get_class, instantiate
 from omegaconf import OmegaConf
 
 from testbed.core.distributions import TorchDistribution
@@ -286,6 +287,43 @@ def build_policy_nets(cfg, task, manager):
     return design_net, action_net
 
 
+def default_design_distr(task, device, manager):
+    """A Gaussian distribution over designs, for objectives that need a design prior.
+
+    Assumes ``task.event_shape_design`` is flat.
+    """
+    manager.event_logger.warning(
+        "Assuming a Gaussian design prior. Also assumes that task.event_shape_design is flat."
+    )
+    return TorchDistribution(
+        torch.distributions.MultivariateNormal(
+            torch.zeros(task.event_shape_design, device=device),
+            torch.eye(task.event_shape_design.numel(), device=device),
+        )
+    )
+
+
+def build_loss_fn(cfg, task, device, manager):
+    """Instantiates the training loss.
+
+    Most losses only depend on ``cfg.loss``, but some (e.g. LogLoss) also
+    need runtime objects the config can't express, like the task itself or a
+    design distribution to estimate an outer expectation. Rather than special
+    casing loss classes by name, we inspect the target's constructor and only
+    supply what it actually declares.
+    """
+    loss_cls = get_class(cfg.loss._target_)
+    params = inspect.signature(loss_cls.__init__).parameters
+
+    extra_kwargs = {}
+    if "task" in params:
+        extra_kwargs["task"] = task
+    if "design_distr" in params:
+        extra_kwargs["design_distr"] = default_design_distr(task, device, manager)
+
+    return instantiate(cfg.loss, **extra_kwargs)
+
+
 # ============================================================================
 # Entry point
 # ============================================================================
@@ -328,15 +366,7 @@ if __name__ == "__main__":
     # Setup for action-warmup
     random_designer = None
     if cfg.n_action_warmup_iter > 0:
-        manager.event_logger.warning(
-            "Assuming a Gaussian design prior for action warmup. Also assumes that task.event_shape_design is flat."
-        )
-        design_dist = TorchDistribution(
-            torch.distributions.MultivariateNormal(
-                torch.zeros(task.event_shape_design, device=cfg.device),
-                torch.eye(task.event_shape_design.numel(), device=cfg.device),
-            )
-        )
+        design_dist = default_design_distr(task, cfg.device, manager)
         random_designer = RandomDesigner(task, cfg.T, design_dist)
 
     # Create optimizer + LR scheduler
@@ -349,7 +379,7 @@ if __name__ == "__main__":
             optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma
         )
 
-    loss_fn = instantiate(cfg.loss)
+    loss_fn = build_loss_fn(cfg, task, cfg.device, manager)
 
     trainer = Trainer(
         task=task,
