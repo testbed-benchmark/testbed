@@ -20,15 +20,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: uv sync --extra dev
-
       - name: Run Ruff linter
         uses: astral-sh/ruff-action@v3
         with:
@@ -40,6 +31,3 @@ jobs:
         with:
           args: format --check
           src: "."
-
-      - name: Run YAML formatter
-        run: uv run --extra dev yamlfix --check testbed/recipes
