@@ -1,3 +1,5 @@
+# @package _global_
+
 # Hyperparameter settings for reproducing ActionBED on the 2D, 2 source LF problem
 # See: ActionBED (Rossa et al., 2026), Table 13. 
 
@@ -31,6 +33,7 @@ n_outer_eval: 2_048
 # optimizer
 lr: 5e-4
 betas: [0.8, 0.998]
+grad_clip: null
 lr_gamma: 0.95
 lr_period: 2000
 # policy networks

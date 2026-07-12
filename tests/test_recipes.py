@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from hydra import compose, initialize_config_dir
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
@@ -51,9 +52,27 @@ def test_actionbed_recipe_wires_design_and_action_nets():
     assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
     assert cfg.action_net._target_ == "testbed.design_nets.AttentivePolicyNet"
 
+    instantiate(
+        cfg.design_net,
+        event_shape_y=(1,),
+        event_shape_design=(2,),
+        event_shape_out=(2,),
+    )
+
 
 def test_rlboed_recipe_overrides_shared_task():
     cfg = _compose("rlboed")
     # The recipe overrides the shared 1-source task group to the 2-source variant.
     assert cfg.task.n_sources == 2
     assert cfg.sac.num_envs > 0
+
+
+def test_temporal_discounting_dad_preserves_objective_defaults():
+    cfg = _compose("temporal_discounting/dad")
+    assert cfg.objective.reparameterize_policy is False
+    assert cfg.objective.requires_policy_log_probs is False
+
+
+def test_two_source_actionbed_preserves_grad_clip_default():
+    cfg = _compose("location_finding_2src/actionbed")
+    assert cfg.grad_clip is None
