@@ -7,7 +7,7 @@ from testbed.core.manager import Manager
 
 
 def setup(cfg):
-    """Builds the run Manager and task common to every Hydra entry point.
+    """Build the run manager and task common to every Hydra entry point.
 
     Hydra owns the run directory, so its resolved ``runtime.output_dir`` is
     handed straight to the Manager. The task is instantiated from ``cfg.task``

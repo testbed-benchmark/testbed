@@ -293,7 +293,10 @@ def build_policy_nets(cfg, task, manager):
 def main(cfg):
     """Entry point for ActionBED training.
 
-    Usage: python testbed/methods/actionbed.py save_dir='./save_path/' [overrides...]
+    Args:
+        cfg: Composed Hydra configuration for the training run.
+
+    Run with ``python testbed/methods/actionbed.py [overrides...]``.
     """
     manager, task = setup(cfg)
 

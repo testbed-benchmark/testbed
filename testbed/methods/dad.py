@@ -191,7 +191,10 @@ def build_objective(cfg, task):
 def main(cfg):
     """Entry point for DAD training.
 
-    Usage: python testbed/methods/dad.py save_dir='./save_path/' [overrides...]
+    Args:
+        cfg: Composed Hydra configuration for the training run.
+
+    Run with ``python testbed/methods/dad.py [overrides...]``.
     """
     manager, task = setup(cfg)
 

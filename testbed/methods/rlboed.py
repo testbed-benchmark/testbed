@@ -906,7 +906,10 @@ def build_replay_buffer(cfg, task):
 def main(cfg):
     """Entry point for RL-BOED (SAC) training.
 
-    Usage: python testbed/methods/rlboed.py save_dir='./save_path/' [overrides...]
+    Args:
+        cfg: Composed Hydra configuration for the training run.
+
+    Run with ``python testbed/methods/rlboed.py [overrides...]``.
     """
     manager, task = setup(cfg)
 

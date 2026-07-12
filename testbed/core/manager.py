@@ -27,11 +27,21 @@ class Manager:
         timestamp=True,
         run_dir=None,
     ):
-        """Creates a run directory and loggers.
+        """Create a run directory and loggers.
 
-        Pass ``run_dir`` to adopt an already-resolved run directory (e.g. the one
-        a Hydra entry point built); its basename becomes the run name. Otherwise
-        the directory is ``root/[timestamp_]name``.
+        Args:
+            cfg: Experiment configuration to save with the run and pass to
+                configured loggers.
+            root: Parent directory in which to create the run directory.
+            name: Run name. If omitted, the current timestamp is used.
+            logger: Metric logger to use. If omitted, a JSONL logger is created,
+                optionally alongside a Weights & Biases logger configured by
+                ``cfg.wandb``.
+            console: Whether to write event log messages to the console.
+            timestamp: Whether to prefix ``name`` with the current timestamp.
+                Ignored when ``name`` is omitted or ``run_dir`` is provided.
+            run_dir: Existing run directory to adopt instead of constructing the
+                default ``root/[timestamp_]name``.
         """
         self.cfg = cfg
 
