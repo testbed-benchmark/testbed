@@ -17,7 +17,12 @@ from omegaconf import OmegaConf
 
 RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
 
-ENTRY_POINT_RECIPES = ["dad", "actionbed", "rlboed", "experiments/location_finding_2src/actionbed"]
+ENTRY_POINT_RECIPES = [
+    "dad",
+    "actionbed",
+    "rlboed",
+    "experiments/location_finding_2src/actionbed",
+]
 
 
 def _compose(recipe):
