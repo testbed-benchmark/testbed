@@ -1,32 +1,42 @@
-"""Base design-objective interface."""
+"""Base design-objective interfaces."""
 
 from abc import ABC, abstractmethod
 
 from torch import Tensor
 
+from ..core.rollout import Rollout
 from ..tasks.base import Task
 
 
 class Objective(ABC):
-    """Base class for design objectives."""
+    """Shared base for design objectives."""
 
-    def __init__(
-        self,
-        task: Task,
-        is_expected_log_ratio: bool = False,
-        requires_policy_log_probs: bool = False,
-    ):
+    def __init__(self, task: Task):
         """Initializes."""
         self.task = task
 
-        # True for expected-log-ratio objectives (SPCE / SNMC): with a deterministic
-        # or reparameterized policy, Reinforce adds the DAD Eq. 16 outcome score.
-        self.is_expected_log_ratio = is_expected_log_ratio
 
-        # Does this objective require log-probs from the policy? (e.g., REINFORCE)
-        self.requires_policy_log_probs = requires_policy_log_probs
+class DesignObjective(Objective):
+    """Estimates a gain for a single design (no history).
+
+    Used by `SequentialDesigner`, which optimizes one design at a time via
+    gradient ascent (e.g. `NMC`, `PCE`).
+    """
 
     @abstractmethod
-    def estimate_gain(self, design: Tensor):
-        """Estimates expected information gain."""
+    def estimate_gain(self, design: Tensor) -> Tensor:
+        """Estimates expected information gain for a design."""
+        ...
+
+
+class RolloutObjective(Objective):
+    """Estimates a gain/surrogate from a full rollout.
+
+    Used by amortized (`PolicyDesigner`) training (e.g. `SNMC`, `SPCE`,
+    `Reinforce`).
+    """
+
+    @abstractmethod
+    def estimate_gain(self, rollout: Rollout) -> Tensor:
+        """Estimates expected information gain (or a training surrogate) from a rollout."""
         ...

@@ -16,18 +16,15 @@ import torch.optim as optim
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
+from testbed.core.design_spaces import BoxDesignSpace, DesignSpace
 from testbed.core.manager import Manager
 from testbed.design_nets import (
     DeepSetGaussianActor,
     RLBOEDQNetwork,
     TanhGaussianPolicyNet,
 )
-from testbed.designers import PolicyDesigner
-from testbed.envs import (
-    BEDEnv,
-    BoxDesignSpace,
-)
-from testbed.envs.design_spaces import DesignSpace
+from testbed.designers import PolicyDesigner, build_policy_designer
+from testbed.envs import BEDEnv
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
 from testbed.tasks.base import Task
@@ -616,7 +613,7 @@ class Trainer:
 
     def train(self):
         """Full training loop."""
-        self.designer.policy_net.train()
+        self.designer.design_net.train()
         self._start_time = time.time()
 
         for step in range(self.cfg.sac.num_training_iterations):
@@ -732,12 +729,12 @@ class Trainer:
     @torch.no_grad()
     def evaluate(self):
         """Estimates the policy-mean SPCE of the deterministic policy."""
-        was_training = self.designer.policy_net.training
+        was_training = self.designer.design_net.training
         cpu_rng_state = torch.get_rng_state()
         cuda_rng_state = (
             torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         )
-        self.designer.policy_net.eval()
+        self.designer.design_net.eval()
 
         eval_env = build_env(
             self.cfg,
@@ -748,13 +745,13 @@ class Trainer:
         obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
         returns = torch.zeros(self.cfg.sac.num_envs, device=self.device)
         for _ in range(self.env.horizon):
-            designs = self.designer.policy_net.sample_from_observation(
+            designs = self.designer.design_net.sample_from_observation(
                 obs, deterministic=True
             ).design
             obs, rewards, _, _, _ = eval_env.step(designs)
             returns += rewards
 
-        self.designer.policy_net.train(was_training)
+        self.designer.design_net.train(was_training)
         torch.set_rng_state(cpu_rng_state)
         if cuda_rng_state is not None:
             torch.cuda.set_rng_state_all(cuda_rng_state)
@@ -929,7 +926,7 @@ if __name__ == "__main__":
 
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = PolicyDesigner(task, cfg.T, nets.actor, deterministic=False)
+    designer = build_policy_designer(task, cfg.T, nets.actor)
 
     trainer = Trainer(
         task=task,

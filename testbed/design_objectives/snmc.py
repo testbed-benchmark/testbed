@@ -4,11 +4,12 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from testbed.design_objectives.base_objective import Objective
+from testbed.core.rollout import Rollout
+from testbed.design_objectives.base_objective import DesignObjective, RolloutObjective
 from testbed.tasks.base import Task
 
 
-class SNMC(Objective):
+class SNMC(RolloutObjective):
     """Implements sequential NMC.
 
     See Equation 10 of the DAD paper (https://arxiv.org/pdf/2103.02438).
@@ -16,32 +17,32 @@ class SNMC(Objective):
 
     def __init__(self, task: Task, n_contrastive: int):
         """Initializes the SNMC estimator."""
-        super().__init__(task, is_expected_log_ratio=True)
+        super().__init__(task)
         self.n_contrastive = int(n_contrastive)
 
-    def __call__(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
-        """Estimates gain for a simulated history."""
-        return self.estimate_gain(y_history, design_history, theta_0)
+    def __call__(self, rollout: Rollout):
+        """Estimates gain for a simulated rollout."""
+        return self.estimate_gain(rollout)
 
-    def estimate_gain(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
-        """Estimates gain from batched histories.
+    def estimate_gain(self, rollout: Rollout):
+        """Estimates gain from a batched rollout.
 
-        y_history: ``[b, T, *event_shape_y]``
-        design_history: ``[b, T, *event_shape_design]``
-        theta_0: ``[b, *event_shape_theta]``
-        returns:        scalar EIG estimate.
+        returns: scalar EIG estimate.
         """
-        return self.per_sample_gain(y_history, design_history, theta_0).mean()
+        return self.per_sample_gain(rollout).mean()
 
-    def per_sample_gain(
-        self, y_history: Tensor, design_history: Tensor, theta_0: Tensor
-    ):
-        """Estimates per-sample gains from batched histories.
+    def per_sample_gain(self, rollout: Rollout):
+        """Estimates per-sample gains from a batched rollout.
 
-        Shapes as in estimate_gain; returns: [b] per-sample SNMC estimates.
+        returns: [b] per-sample SNMC estimates.
         """
         task = self.task
         n_contrastive = self.n_contrastive
+        y_history, design_history, theta_0 = (
+            rollout.y_history,
+            rollout.design_history,
+            rollout.theta,
+        )
         b = theta_0.shape[0]
 
         logp_joint = task.history_logp(y_history, design_history, theta_0)  # [b,]
@@ -77,7 +78,7 @@ class SNMC(Objective):
         return logp_joint - logp_marginal
 
 
-class NMC(Objective):
+class NMC(DesignObjective):
     """Nested Monte Carlo (NMC) estimator for EIG with a single fixed design.
 
     A thin wrapper around SNMC that draws outer samples (theta, y) and
@@ -121,4 +122,7 @@ class NMC(Objective):
             design.unsqueeze(0).expand(b, *self.task.event_shape_design).unsqueeze(1)
         )
 
-        return self.inner_snmc(y_history, design_history, theta_outer)
+        rollout = Rollout(
+            theta=theta_outer, y_history=y_history, design_history=design_history
+        )
+        return self.inner_snmc(rollout)

@@ -7,8 +7,8 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from testbed.core.manager import Manager
-from testbed.design_objectives import SNMC, SPCE, Reinforce
-from testbed.designers import PolicyDesigner
+from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
+from testbed.designers import PolicyDesigner, build_policy_designer
 
 # ============================================================================
 # Training class
@@ -36,7 +36,7 @@ class Trainer:
 
     def train(self):
         """Full training loop."""
-        self.designer.policy_net.train()
+        self.designer.design_net.train()
 
         for step in range(self.cfg.n_train_iter):
             metrics = self.train_step()
@@ -58,7 +58,7 @@ class Trainer:
         save_path = self.manager.path("final_step.pt")
         torch.save(
             {
-                "model": self.designer.policy_net.state_dict(),
+                "model": self.designer.design_net.state_dict(),
                 "step": step,
             },
             save_path,
@@ -72,19 +72,8 @@ class Trainer:
         cfg = self.cfg
 
         theta0 = self.task.sample_prior(cfg.n_outer)
-
-        # Policy log probs are recorded at sample time so the value matches the
-        # exact policy distribution the designs were drawn from.
-        if self.objective.requires_policy_log_probs:
-            y_obs, design_obs, policy_log_probs = self.designer.rollout(
-                theta0, return_policy_log_probs=True
-            )
-            gain = self.objective.estimate_gain(
-                y_obs, design_obs, theta0, policy_log_probs
-            )
-        else:
-            y_obs, design_obs = self.designer.rollout(theta0)
-            gain = self.objective.estimate_gain(y_obs, design_obs, theta0)
+        rollout = self.designer.rollout(theta0)
+        gain = self.objective.estimate_gain(rollout)
         loss = -gain
 
         self.optimizer.zero_grad()
@@ -92,7 +81,7 @@ class Trainer:
 
         if cfg.grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(
-                self.designer.policy_net.parameters(), cfg.grad_clip
+                self.designer.design_net.parameters(), cfg.grad_clip
             )
 
         self.optimizer.step()
@@ -131,7 +120,7 @@ class Trainer:
 
             torch.save(
                 {
-                    "model": self.designer.policy_net.state_dict(),
+                    "model": self.designer.design_net.state_dict(),
                     "step": step,
                     "metric": metric_val,
                 },
@@ -149,18 +138,18 @@ class Trainer:
 
 
 def build_design_net(cfg, task):
-    """Instantiates the design policy network."""
-    net = instantiate(
+    """Instantiates the design policy network.
+
+    Any raw-to-design reparametrization (e.g. HTD's exp/sigmoid transform)
+    lives on task.design_space and is applied automatically by the designer
+    -- no net-level wrapper needed.
+    """
+    return instantiate(
         cfg.design_net,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
     )
-    # Optional wrapper (e.g. the HTD constraint transform), applied after the
-    # base net so event shapes still reach it.
-    if cfg.design_net_wrapper is not None:
-        net = instantiate(cfg.design_net_wrapper, design_net=net)
-    return net
 
 
 def build_objective(cfg, task):
@@ -173,10 +162,10 @@ def build_objective(cfg, task):
     objectives = {
         "snmc": lambda: SNMC(task, n_contrastive=n_inner),
         "spce": lambda: SPCE(task, n_contrastive=n_inner),
-        "reinforce": lambda: Reinforce(
+        "reinforce": lambda: SPCEReinforce(
             task,
-            SPCE(task, n_contrastive=n_inner).per_sample_gain,
-            cfg.objective.requires_policy_log_probs,
+            n_contrastive=n_inner,
+            stochastic_design_policy=cfg.objective.requires_policy_log_probs,
             baseline=cfg.objective.baseline,
         ),
     }
@@ -199,7 +188,6 @@ if __name__ == "__main__":
     # You should set these in your config file if you want to change them
     cfg_defaults = OmegaConf.create(
         {
-            "design_net_wrapper": None,
             "objective": {
                 "reparameterize_policy": False,
                 "baseline": None,
@@ -222,7 +210,7 @@ if __name__ == "__main__":
 
     policy_net = build_design_net(cfg, task)
     policy_net = policy_net.to(cfg.device)
-    designer = PolicyDesigner(
+    designer = build_policy_designer(
         task,
         cfg.T,
         policy_net,
