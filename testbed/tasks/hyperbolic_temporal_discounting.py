@@ -8,9 +8,66 @@ import torch
 from torch import Tensor
 from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoulli
 
+from ..core.design_spaces import DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import normal_cdf
 from .base import Task
+
+
+class HTDDesignSpace(DesignSpace):
+    """Reparametrization for HTD designs: raw (x_d, x_r) -> valid (D_1, R_0).
+
+    D_1 = exp(x_d - log_k_mean), R_0 = 100 * sigmoid(x_r). log_k_mean shifts
+    D_1 so k * D_1 ~ O(1) at a raw value near zero, keeping gradients from
+    vanishing for an untrained policy. Typically pass prior.k_loc + 0.5 * prior.k_scale**2.
+
+    to_raw is deliberately not a working inverse: designs are a function of a
+    raw value, never the reverse -- sample or optimize a raw value and call
+    to_design() on it, rather than inverting an existing design.
+    """
+
+    event_shape = torch.Size([2])
+    is_discrete = False
+
+    def __init__(self, log_k_mean: float = 0.0):
+        """Initializes with the D_1 shift."""
+        self.log_k_mean = float(log_k_mean)
+
+    def sample(self, batch_shape=(), *, device=None) -> Tensor:
+        """Samples a raw value and maps it forward -- never inverts."""
+        batch_shape = torch.Size(batch_shape)
+        raw = torch.randn(*batch_shape, *self.event_shape, device=device)
+        return self.to_design(raw)
+
+    def contains(self, design: Tensor) -> bool:
+        """Checks D_1 > 0 and 0 < R_0 < 100."""
+        design = torch.as_tensor(design)
+        if design.shape[-len(self.event_shape) :] != self.event_shape:
+            return False
+        D1, R0 = design[..., 0], design[..., 1]
+        return bool(torch.all((D1 > 0) & (R0 > 0) & (R0 < 100)).item())
+
+    def project(self, design: Tensor) -> Tensor:
+        """Lossy fallback: clamps into the open domain."""
+        D1 = design[..., 0:1].clamp(min=1e-30)
+        R0 = design[..., 1:2].clamp(min=0.0, max=100.0)
+        return torch.cat((D1, R0), dim=-1)
+
+    def to_design(self, raw_design: Tensor) -> Tensor:
+        """Maps raw (x_d, x_r) to valid (D_1, R_0)."""
+        D_raw = raw_design[..., 0:1]
+        R_raw = raw_design[..., 1:2]
+        D1 = torch.exp(D_raw - self.log_k_mean)
+        R0 = 100 * torch.sigmoid(R_raw)
+        return torch.cat((D1, R0), dim=-1)
+
+    def to_raw(self, design: Tensor) -> Tensor:
+        """Not supported, see class docstring."""
+        raise NotImplementedError(
+            "HTDDesignSpace's transform is not meant to be inverted -- designs "
+            "are a function of a raw value, never the reverse. Sample or "
+            "optimize a raw value and call to_design() on it instead."
+        )
 
 
 class HTDPrior(Distribution):
@@ -125,6 +182,8 @@ class HyperbolicTemporalDiscounting(Task):
             otherwise a RelaxedBernoulli is used (default: 0.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default HTDPrior is used.
+        design_space (DesignSpace, optional):
+            Controls the design parametrization. If None, the default HTDDesignSpace is used.
     """
 
     def __init__(
@@ -133,10 +192,15 @@ class HyperbolicTemporalDiscounting(Task):
         exponent: float = 1.0,
         temperature: float = 0.0,
         prior=None,
+        design_space: DesignSpace | None = None,
     ) -> None:
         """Initializes the HTD task."""
         if prior is None:
             prior = HTDPrior()
+
+        if design_space is None:
+            log_k_mean = float(prior.k_loc + 0.5 * prior.k_scale**2)
+            design_space = HTDDesignSpace(log_k_mean=log_k_mean)
 
         super().__init__(
             event_shape_y=[1],
@@ -144,6 +208,7 @@ class HyperbolicTemporalDiscounting(Task):
             event_shape_design=[2],
             prior=prior,
             discrete_y=True,
+            design_space=design_space,
         )
 
         # Acts as a bias towards y=1

@@ -1,4 +1,4 @@
-"""Design spaces for BED environments."""
+"""Design spaces: constraints and raw/design reparametrization for Tasks."""
 
 from abc import ABC, abstractmethod
 
@@ -14,7 +14,15 @@ def _has_event_shape(tensor: Tensor, event_shape: torch.Size) -> bool:
 
 
 class DesignSpace(ABC):
-    """Base class for environment design spaces."""
+    """Base class for a Task's design space.
+
+    Beyond the space itself (sample/contains/project), a DesignSpace may
+    support a raw<->design reparametrization (to_design/to_raw), used by
+    designers that optimize or condition a net on a raw/latent
+    parametrization rather than the design directly -- for pathwise/
+    reparameterization-trick gradients, or for numerically stable history
+    conditioning. Default: identity, i.e. raw and design coincide.
+    """
 
     event_shape: torch.Size
     is_discrete: bool
@@ -33,6 +41,25 @@ class DesignSpace(ABC):
     def project(self, design: Tensor) -> Tensor:
         """Projects a tensor into the design space."""
         ...
+
+    def to_design(self, raw_design: Tensor) -> Tensor:
+        """Maps a raw/latent value to a design in this space.
+
+        A pure pointwise map -- no log-det-Jacobian or density tracking --
+        for pathwise/reparameterization-trick gradients (SequentialDesigner,
+        DeterministicPolicyDesigner, StaticDesigner). Default: identity.
+        """
+        return raw_design
+
+    def to_raw(self, design: Tensor) -> Tensor:
+        """Inverse of to_design. Default: identity.
+
+        Not every DesignSpace can support this efficiently or safely --
+        override to raise if inversion isn't well-defined (e.g. because the
+        forward map is lossy, or because designs should only ever be
+        produced from a raw value, never inverted back to one).
+        """
+        return design
 
 
 class BoxDesignSpace(DesignSpace):
@@ -80,3 +107,32 @@ class BoxDesignSpace(DesignSpace):
         low = self.low.to(device=design.device, dtype=design.dtype)
         high = self.high.to(device=design.device, dtype=design.dtype)
         return design.clamp(low, high)
+
+
+class DefaultDesignSpace(DesignSpace):
+    """Every real vector of the right shape is valid.
+
+    The default Task.design_space for tasks that declare no real space of
+    their own (e.g. LocationFinding). sample() draws standard normal --
+    there's no well-defined "uniform over R^d" -- matching what designers
+    already assumed by default before this class existed.
+    """
+
+    is_discrete = False
+
+    def __init__(self, event_shape):
+        """Initializes with the task's design event shape."""
+        self.event_shape = torch.Size(event_shape)
+
+    def sample(self, batch_shape=(), *, device=None) -> Tensor:
+        """Draws a standard normal sample."""
+        batch_shape = torch.Size(batch_shape)
+        return torch.randn(*batch_shape, *self.event_shape, device=device)
+
+    def contains(self, design: Tensor) -> bool:
+        """Checks shape only -- every value is valid."""
+        return _has_event_shape(torch.as_tensor(design), self.event_shape)
+
+    def project(self, design: Tensor) -> Tensor:
+        """No-op: every value is already valid."""
+        return design
