@@ -18,22 +18,44 @@ class Manager:
     """Manage run directories, config snapshots, and loggers."""
 
     def __init__(
-        self, cfg, root="runs", name=None, logger=None, console=True, timestamp=True
+        self,
+        cfg,
+        root="runs",
+        name=None,
+        logger=None,
+        console=True,
+        timestamp=True,
+        run_dir=None,
     ):
-        """Creates a run directory and loggers."""
+        """Create a run directory and loggers.
+
+        Args:
+            cfg: Experiment configuration to save with the run and pass to
+                configured loggers.
+            root: Parent directory in which to create the run directory.
+            name: Run name. If omitted, the current timestamp is used.
+            logger: Metric logger to use. If omitted, a JSONL logger is created,
+                optionally alongside a Weights & Biases logger configured by
+                ``cfg.wandb``.
+            console: Whether to write event log messages to the console.
+            timestamp: Whether to prefix ``name`` with the current timestamp.
+                Ignored when ``name`` is omitted or ``run_dir`` is provided.
+            run_dir: Existing run directory to adopt instead of constructing the
+                default ``root/[timestamp_]name``.
+        """
         self.cfg = cfg
 
         # create run directory
-        timestamp_str = time.strftime("%Y-%m-%d_%H-%M-%S")
-        if name is not None:
-            if timestamp:
-                self.run_name = f"{timestamp_str}_{name}"
-            else:
-                self.run_name = name
+        if run_dir is not None:
+            self.dir = run_dir
+            self.run_name = os.path.basename(os.path.normpath(run_dir))
         else:
-            self.run_name = timestamp_str
-
-        self.dir = os.path.join(root, self.run_name)
+            timestamp_str = time.strftime("%Y-%m-%d_%H-%M-%S")
+            if name is not None:
+                self.run_name = f"{timestamp_str}_{name}" if timestamp else name
+            else:
+                self.run_name = timestamp_str
+            self.dir = os.path.join(root, self.run_name)
         os.makedirs(self.dir, exist_ok=True)
 
         # save config

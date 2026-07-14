@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import copy
-import os
 import random
 import time
 from dataclasses import dataclass
 from math import ceil, log
 
+import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from testbed.core.manager import Manager
+from testbed.core.setup import setup
 from testbed.design_nets import (
     DeepSetGaussianActor,
     RLBOEDQNetwork,
@@ -902,22 +901,17 @@ def build_replay_buffer(cfg, task):
 # Entry point
 # ============================================================================
 
-if __name__ == "__main__":
-    """ Entry point for RL-BOED (SAC) training.
 
-    Usage: python rlboed.py config='./path/to/config.yaml' save_dir='./save_path/'
+@hydra.main(version_base="1.3", config_path="../recipes", config_name="rlboed")
+def main(cfg):
+    """Entry point for RL-BOED (SAC) training.
+
+    Args:
+        cfg: Composed Hydra configuration for the training run.
+
+    Run with ``python testbed/methods/rlboed.py [overrides...]``.
     """
-    conf_cli = OmegaConf.from_cli()
-    cfg = OmegaConf.load(conf_cli.config)
-    # sync cli args with config
-    cfg = OmegaConf.merge(cfg, conf_cli)
-
-    # Manager setup
-    run_name = f"{os.environ.get('SLURM_ARRAY_JOB_ID', '0')}_{os.environ.get('SLURM_ARRAY_TASK_ID', '0')}"
-    manager = Manager(cfg, root=cfg.save_dir, name=run_name, timestamp=True)
-
-    task = instantiate(cfg.task)
-    task = task.to(cfg.device)
+    manager, task = setup(cfg)
 
     design_space = build_design_space(cfg, task)
     validate_config(task, cfg, design_space)
@@ -948,3 +942,7 @@ if __name__ == "__main__":
         f"policy-mean SPCE with {cfg.eval_n_contrastive} contrastive samples: "
         f"{eval_metrics['eval/spce']:.4f} ± {eval_metrics['eval/spce_se']:.4f}"
     )
+
+
+if __name__ == "__main__":
+    main()

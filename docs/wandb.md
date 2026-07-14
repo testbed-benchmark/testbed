@@ -33,7 +33,9 @@ Alternatively, set the `WANDB_API_KEY` environment variable (handy on clusters /
 
 ## Enable it via the recipe config
 
-Each recipe under `testbed/recipes/` carries a `wandb:` block. Flip `enabled` to `true`:
+Every recipe composes the shared `testbed/recipes/wandb/default.yaml` group, which supplies
+the `wandb:` block. Flip `enabled` to `true` there (to affect all recipes), or override it per
+run on the CLI:
 
 ```yaml
 wandb:
@@ -50,12 +52,12 @@ stays off.
 
 ## Enable / override on the CLI
 
-The Hydra/OmegaConf entry points (e.g. `testbed/methods/dad.py`) merge dotted CLI
-overrides into the loaded config, so you can flip W&B on without editing the YAML:
+The Hydra entry points (e.g. `testbed/methods/dad.py`) merge dotted CLI overrides into the
+composed config, so you can flip W&B on without editing the YAML:
 
 ```sh
 python testbed/methods/dad.py \
-    config=testbed/recipes/location_finding/dad.yaml \
+    save_dir=./runs \
     wandb.enabled=true \
     wandb.project=my-project \
     wandb.tags=[baseline,seed0]

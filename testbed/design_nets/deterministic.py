@@ -16,11 +16,11 @@ class DeterministicPolicyNet(DesignNet):
     The MLP readout produces a flat output which is reshaped to event_shape_out.
 
     Args:
-    encoder: HistoryEncoder object
-    event_shape_out: tuple or torch.Size of shape for outputs of the network
-    dim_h: per-layer hidden widths as a list, e.g. [128, 16]; an int is a
-        single hidden layer of that width. Defaults to dim_emb from the encoder.
-    activation: activation class (nn.ReLU, nn.GELU, ...) for the decoder
+        encoder: HistoryEncoder object.
+        event_shape_out: Tuple or torch.Size describing network output shapes.
+        dim_h: Per-layer hidden widths, e.g. [128, 16]. An int specifies a
+            single hidden layer. Defaults to the encoder's dim_emb.
+        activation: Activation class for the decoder, e.g. nn.ReLU or nn.GELU.
     """
 
     def __init__(

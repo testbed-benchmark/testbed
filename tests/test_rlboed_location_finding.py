@@ -1,7 +1,6 @@
 """Tests for the RL-BOED (SAC) training components."""
 
 import json
-from pathlib import Path
 
 import pytest
 import torch
@@ -31,14 +30,6 @@ from testbed.methods.rlboed import (
 from testbed.tasks import LocationFinding
 
 SoftQNetwork = RLBOEDQNetwork
-
-RECIPE_PATH = (
-    Path(__file__).parents[1]
-    / "testbed"
-    / "recipes"
-    / "location_finding"
-    / "rlboed.yaml"
-)
 
 
 # ============================================================================

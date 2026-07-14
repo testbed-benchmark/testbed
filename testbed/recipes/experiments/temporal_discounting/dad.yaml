@@ -1,27 +1,25 @@
+# @package _global_
+
+defaults:
+  - /dad
+  - override /task: temporal_discounting
+  - override /net@design_net: null
+  - _self_
+
 # DAD on hyperbolic temporal discounting, trained with the REINFORCE gradient
 # estimator (DAD paper Eq. 16). Architecture and hyperparameters follow the
 # DAD paper HTD experiment (Foster et al. 2021, Appendix D.2).
 
-# system
-device: 'cuda'
 seed: 0
-save_dir: ???
-
-# task
-task:
-  _target_: testbed.tasks.HyperbolicTemporalDiscounting
-  epsilon: 0.01
-  exponent: 1.0
-  temperature: 0.0          # true discrete sampling; REINFORCE handles the gradient
 T: 20
-
 # objective
 objective:
   name: reinforce
-  n_inner: 1_023            # contrastive samples for the sPCE reward
-  baseline: null            # or leave_one_out for variance reduction
+  n_inner: 1_023  # contrastive samples for the sPCE reward
+  reparameterize_policy: false
+  baseline: null  # or leave_one_out for variance reduction
+  requires_policy_log_probs: false
   # deterministic policy -> pathwise Reinforce with SPCE.reinforce_value (DAD Eq. 16)
-
 # training
 n_train_iter: 100_000
 n_outer: 1_024
@@ -31,10 +29,9 @@ lr: 5e-5
 grad_clip: 1.0
 
 # eval
-eval_every: 0               # eval is expensive here; off for this recipe
+eval_every: 0  # eval is expensive here; off for this recipe
 n_outer_eval: 1_024
 n_inner_eval: 100_000
-
 # design policy network
 # DeepSets net in the spirit of the DAD paper: encoder [3 -> 256 -> 256 -> 16]
 # + sum pooling, emitter [16 -> 128 -> 16 -> 2], ReLU throughout. Not an exact
@@ -49,7 +46,6 @@ design_net:
   decoder_activation:
     _target_: torch.nn.ReLU
     _partial_: true
-
 # Maps the raw net output to valid HTD designs (D_1, R_0), following Step-DAD.
 # log_k_mean = k_loc + 0.5 * k_scale**2 = -4.25 + 0.5 * 1.5**2 for the default prior.
 design_net_wrapper:
