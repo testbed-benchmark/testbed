@@ -1,5 +1,8 @@
 """Tests for PPO on destructive lot inspection."""
 
+import importlib.util
+from pathlib import Path
+
 import torch
 from omegaconf import OmegaConf
 
@@ -9,6 +12,17 @@ from testbed.envs import CategoricalDesignSpace
 from testbed.envs.history import History
 from testbed.methods.ppo import Trainer, build_env, make_networks, validate_config
 from testbed.tasks import DestructiveLotInspection
+
+EXAMPLE_PATH = (
+    Path(__file__).parents[1] / "examples" / "ppo_destructive_lot_inspection.py"
+)
+SPEC = importlib.util.spec_from_file_location(
+    "ppo_destructive_lot_inspection", EXAMPLE_PATH
+)
+assert SPEC is not None
+assert SPEC.loader is not None
+ppo_example = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(ppo_example)
 
 
 def make_config():
@@ -89,3 +103,43 @@ def test_ppo_trainer_runs_one_update():
     assert metrics[0]["env_steps"] == 8.0
     assert torch.isfinite(torch.tensor(metrics[0]["policy_loss"]))
     assert torch.isfinite(torch.tensor(metrics[0]["value_loss"]))
+
+
+def test_reproduction_script_preserves_experiment_defaults():
+    args = ppo_example.Args()
+
+    assert args.seed == 1
+    assert args.horizon == 30
+    assert args.batch_size == 8
+    assert args.num_training_iterations == 2_000
+    assert args.num_envs == 256
+    assert args.gamma == 1.0
+    assert args.ppo_learning_rate == 0.01
+    assert args.ppo_critic_learning_rate == 2.5e-4
+    assert args.ppo_anneal_lr is False
+    assert args.ppo_gae_lambda == 1.0
+    assert args.ppo_ent_coef == 0.0
+
+
+def test_reproduction_script_runs_fixed_rule_experiment():
+    args = ppo_example.Args(
+        cuda=False,
+        save=False,
+        num_zones=3,
+        horizon=2,
+        batch_size=2,
+        dm_suspicious_zones="0",
+        dm_rho_grid_size=4,
+        eval_episodes=4,
+        num_training_iterations=1,
+        num_envs=4,
+        ppo_num_minibatches=2,
+    )
+
+    result, checkpoint_path = ppo_example.train(args)
+    evaluation = ppo_example.evaluate_policy_mean_risk(args, result.designer.policy_net)
+
+    assert checkpoint_path is None
+    assert result.checkpoint["algorithm"] == "ppo_fixed_conservative_dm"
+    assert result.checkpoint["config"] == ppo_example.asdict(args)
+    assert torch.isfinite(torch.tensor(evaluation["mean_risk"]))

@@ -407,7 +407,12 @@ class Trainer:
             "clipfrac": float(np.mean(clip_fractions)),
             "explained_variance": float(explained_variance),
         }
+        metrics.update(self._policy_metrics(flat_observation))
         return [metrics]
+
+    def _policy_metrics(self, observation: History) -> dict[str, float]:
+        """Returns optional policy-specific diagnostics."""
+        return {}
 
     def build_checkpoint(self, step=None):
         """Builds a checkpoint containing inference and training state."""
@@ -417,6 +422,10 @@ class Trainer:
                 self.cfg, resolve=True, throw_on_missing=False
             ),
             "horizon": self.env.horizon,
+            "design_low": self.policy.design_low.detach().cpu(),
+            "design_high": self.policy.design_high.detach().cpu(),
+            "outcome_low": torch.as_tensor(self.cfg.reward.outcome_low),
+            "outcome_high": torch.as_tensor(self.cfg.reward.outcome_high),
             "designer": self.policy.state_dict(),
             "policy": self.policy.state_dict(),
             "value_net": self.value_net.state_dict(),
@@ -435,6 +444,7 @@ class Trainer:
             ),
             "env_steps": self.env_steps,
             "training_iterations": self.cfg.ppo.num_training_iterations,
+            "global_step": self.env_steps,
         }
         if step is not None:
             checkpoint["step"] = step
