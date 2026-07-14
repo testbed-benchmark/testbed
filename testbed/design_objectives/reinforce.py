@@ -120,7 +120,7 @@ class Reinforce(Objective):
         theta_0: Tensor,
         policy_log_probs: Tensor | None = None,
     ):
-        """Builds the REINFORCE surrogate from batched histories.
+        r"""Builds the REINFORCE surrogate from batched histories.
 
         y_history:      [b, T, \*event_shape_y]
         design_history: [b, T, \*event_shape_design]
