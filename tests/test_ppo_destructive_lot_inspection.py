@@ -114,7 +114,7 @@ def test_reproduction_script_preserves_experiment_defaults():
     assert args.num_training_iterations == 2_000
     assert args.num_envs == 256
     assert args.gamma == 1.0
-    assert args.ppo_learning_rate == 0.01
+    assert args.ppo_learning_rate == 2.5e-4
     assert args.ppo_critic_learning_rate == 2.5e-4
     assert args.ppo_anneal_lr is False
     assert args.ppo_gae_lambda == 1.0

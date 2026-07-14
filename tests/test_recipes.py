@@ -109,8 +109,9 @@ def test_destructive_lot_actionbed_uses_categorical_policy():
     assert cfg.loss.false_accept_cost == 1.0
     assert cfg.loss.false_reject_cost == 1.0
     assert cfg.loss.reduction == "none"
-    assert cfg.n_action_warmup_iter == 0
+    assert cfg.n_action_warmup_iter == 10_000
     assert cfg.n_train_iter == 50_000
     assert cfg.n_outer == 2_048
     assert cfg.n_outer_eval == 16_384
     assert cfg.eval_every == 500
+    assert cfg.lr_period == 10_000

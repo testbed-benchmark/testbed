@@ -8,9 +8,13 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from omegaconf import OmegaConf
 from torch import Tensor
 
+from testbed.design_nets import CategoricalPolicyActor, CategoricalPolicyNet
+from testbed.design_nets.modules import MLP, _initialize_ppo_linear_layers
 from testbed.designers import PolicyDesigner
 from testbed.envs import BEDEnv, RewardFunction
 from testbed.envs.history import History
@@ -19,12 +23,152 @@ from testbed.methods.ppo import (
 )
 from testbed.methods.ppo import (
     _set_seed,
-    make_networks,
     validate_config,
 )
 from testbed.tasks import DestructiveLotInspection
 
 EVAL_EPISODES = 10_000
+
+
+def _zone_one_hot(
+    design_history: Tensor,
+    *,
+    num_zones: int,
+    normalized: bool,
+) -> Tensor:
+    """Encodes scalar zone histories as one-hot zone identities."""
+    zone = design_history.squeeze(-1)
+    if normalized:
+        zone = zone * (num_zones - 1)
+    zone_index = zone.round().long().clamp(0, num_zones - 1)
+    return F.one_hot(zone_index, num_classes=num_zones).to(design_history.dtype)
+
+
+def _lot_summary_features(
+    y_history: Tensor,
+    design_history: Tensor,
+    mask: Tensor | None,
+    *,
+    num_zones: int,
+    horizon: int,
+    normalized_designs: bool,
+) -> Tensor:
+    """Builds per-zone count and defect summaries for lot inspection."""
+    zone_features = _zone_one_hot(
+        design_history,
+        num_zones=num_zones,
+        normalized=normalized_designs,
+    )
+    if mask is not None:
+        zone_features = zone_features * mask.to(dtype=zone_features.dtype).unsqueeze(-1)
+        y_history = y_history * mask.to(dtype=y_history.dtype).unsqueeze(-1)
+    visits = zone_features.sum(dim=1)
+    defect_load = (zone_features * y_history).sum(dim=1)
+    defect_rate = defect_load / visits.clamp_min(1.0)
+    visit_fraction = visits / horizon
+    elapsed_fraction = visits.sum(dim=-1, keepdim=True) / horizon
+    return torch.cat(
+        [visit_fraction, defect_rate, defect_load / horizon, elapsed_fraction],
+        dim=-1,
+    )
+
+
+class LotInspectionCategoricalActor(CategoricalPolicyActor):
+    """Categorical actor with explicit per-zone inspection summaries."""
+
+    def __init__(
+        self,
+        *,
+        num_zones: int,
+        dim_y: int,
+        horizon: int,
+        initial_zone_probs: Tensor | None = None,
+        dim_h: int = 128,
+    ) -> None:
+        """Initializes the lot-inspection actor."""
+        super().__init__()
+        if dim_y != 1:
+            raise ValueError("LotInspectionCategoricalActor expects scalar outcomes.")
+        self.num_zones = int(num_zones)
+        self.horizon = int(horizon)
+        self.actor_net = MLP(
+            [3 * self.num_zones + 1, dim_h, dim_h],
+            activation=nn.ReLU,
+        )
+        self.logits_head = nn.Linear(dim_h, self.num_zones)
+        _initialize_ppo_linear_layers(self, output_scales={self.logits_head: 0.01})
+        if initial_zone_probs is not None:
+            probabilities = torch.as_tensor(
+                initial_zone_probs,
+                dtype=self.logits_head.bias.dtype,
+            )
+            probabilities = probabilities / probabilities.sum()
+            with torch.no_grad():
+                self.logits_head.bias.copy_(probabilities.clamp_min(1e-12).log())
+
+    def forward(
+        self,
+        y_history: Tensor,
+        design_history: Tensor,
+        *,
+        mask: Tensor | None = None,
+    ) -> Tensor:
+        """Computes zone logits from normalized summary histories."""
+        features = _lot_summary_features(
+            y_history,
+            design_history,
+            num_zones=self.num_zones,
+            horizon=self.horizon,
+            normalized_designs=True,
+            mask=mask,
+        )
+        return self.logits_head(self.actor_net(features))
+
+
+class LotInspectionValueNetwork(nn.Module):
+    """State-value network with explicit per-zone inspection summaries."""
+
+    def __init__(
+        self,
+        *,
+        num_zones: int,
+        dim_y: int,
+        horizon: int,
+        outcome_low: float,
+        outcome_high: float,
+        dim_h: int = 128,
+    ) -> None:
+        """Initializes the lot-inspection value network."""
+        super().__init__()
+        if dim_y != 1:
+            raise ValueError("LotInspectionValueNetwork expects scalar outcomes.")
+        self.num_zones = int(num_zones)
+        self.horizon = int(horizon)
+        self.emitter_net = MLP(
+            [3 * self.num_zones + 1, dim_h, dim_h, 1],
+            activation=nn.ReLU,
+        )
+        self.register_buffer("outcome_low", torch.as_tensor(outcome_low))
+        self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
+        _initialize_ppo_linear_layers(
+            self,
+            output_scales={self.emitter_net.net[-1]: 1.0},
+        )
+
+    def forward(self, observation: History) -> Tensor:
+        """Estimates V from one-hot zone histories and normalized outcomes."""
+        outcomes = observation.outcomes
+        designs = observation.designs.reshape(*observation.designs.shape, 1)
+        outcomes = (outcomes - self.outcome_low) / (self.outcome_high - self.outcome_low)
+        features = _lot_summary_features(
+            outcomes,
+            designs,
+            num_zones=self.num_zones,
+            horizon=self.horizon,
+            normalized_designs=False,
+            mask=observation.mask,
+        )
+        return self.emitter_net(features)
 
 
 @dataclass
@@ -74,7 +218,7 @@ class Args:
     num_training_iterations: int = 2_000
     num_envs: int = 256
     gamma: float = 1.0
-    ppo_learning_rate: float = 0.01
+    ppo_learning_rate: float = 2.5e-4
     ppo_critic_learning_rate: float = 2.5e-4
     ppo_anneal_lr: bool = False
     ppo_gae_lambda: float = 1.0
@@ -241,6 +385,30 @@ def make_task(args: Args, device: torch.device) -> DestructiveLotInspection:
         bad_rho_loc=args.bad_rho_loc,
         bad_rho_scale=args.bad_rho_scale,
     ).to(device)
+
+
+def make_lot_inspection_networks(args: Args, task: DestructiveLotInspection):
+    """Builds zone-aware PPO actor and critic networks for this example."""
+    actor = LotInspectionCategoricalActor(
+        num_zones=args.num_zones,
+        dim_y=task.event_shape_y.numel(),
+        horizon=args.horizon,
+        initial_zone_probs=decision_maker_location_probs(args, torch.device("cpu")),
+    )
+    policy = CategoricalPolicyNet(
+        task.design_space,
+        actor=actor,
+        dim_y=task.event_shape_y.numel(),
+        outcome_bounds=(0.0, float(args.batch_size)),
+    ).to(task.device)
+    value = LotInspectionValueNetwork(
+        num_zones=args.num_zones,
+        dim_y=task.event_shape_y.numel(),
+        horizon=args.horizon,
+        outcome_low=0.0,
+        outcome_high=float(args.batch_size),
+    ).to(task.device)
+    return policy, value
 
 
 def parse_suspicious_zones(value: str, num_zones: int) -> tuple[int, ...]:
@@ -504,6 +672,33 @@ def make_decision_rule(
     )
 
 
+def make_experimenter_posterior(
+    args: Args,
+    task: DestructiveLotInspection,
+) -> ConservativeDecisionRule:
+    """Builds a posterior calculator under the experimenter's prior."""
+    location_probs = getattr(task.prior, "location_probs", None)
+    if location_probs is None:
+        location_probs = torch.full(
+            (args.num_zones,),
+            1.0 / args.num_zones,
+            device=task.device,
+            dtype=torch.get_default_dtype(),
+        )
+    return ConservativeDecisionRule(
+        task,
+        good_probability=args.experimenter_good_probability,
+        location_probs=location_probs,
+        false_accept_cost=1.0,
+        false_reject_cost=1.0,
+        rho_grid_size=args.dm_rho_grid_size,
+        good_rho_loc=args.good_rho_loc,
+        good_rho_scale=args.good_rho_scale,
+        bad_rho_loc=args.bad_rho_loc,
+        bad_rho_scale=args.bad_rho_scale,
+    )
+
+
 class FixedDecisionRuleTerminalReward(RewardFunction):
     """Negative experimenter loss from the fixed downstream decision rule."""
 
@@ -512,6 +707,7 @@ class FixedDecisionRuleTerminalReward(RewardFunction):
     def __init__(
         self,
         decision_rule: ConservativeDecisionRule,
+        risk_posterior: ConservativeDecisionRule,
         *,
         false_accept_cost: float,
         false_reject_cost: float,
@@ -519,29 +715,32 @@ class FixedDecisionRuleTerminalReward(RewardFunction):
         if false_accept_cost < 0.0 or false_reject_cost < 0.0:
             raise ValueError("experimenter loss costs must be non-negative.")
         self.decision_rule = decision_rule
+        self.risk_posterior = risk_posterior
         self.false_accept_cost = float(false_accept_cost)
         self.false_reject_cost = float(false_reject_cost)
         self.last_accepted: Tensor | None = None
+        self.last_expected_loss: Tensor | None = None
 
     def reset(self, env: BEDEnv, *, theta_all: Tensor | None = None) -> None:
         """Clears the cached terminal action for a new rollout."""
         del theta_all
         self.last_accepted = None
+        self.last_expected_loss = None
 
     def step(self, env: BEDEnv, design: Tensor, outcome: Tensor) -> Tensor:
-        """Returns zero until the final inspection, then negative loss."""
+        """Returns zero until the final inspection, then negative expected loss."""
         if env.t + 1 < env.horizon:
             return torch.zeros(env.batch_shape, device=env.device)
-        if env.theta_0 is None:
-            raise RuntimeError("Environment has not been reset.")
         accepted = self.decision_rule(env.history)
-        self.last_accepted = accepted
-        return -lot_loss(
+        posterior_good = self.risk_posterior.posterior_good_probability(env.history)
+        expected_loss = torch.where(
             accepted,
-            env.theta_0,
-            false_accept_cost=self.false_accept_cost,
-            false_reject_cost=self.false_reject_cost,
+            self.false_accept_cost * (1.0 - posterior_good),
+            self.false_reject_cost * posterior_good,
         )
+        self.last_accepted = accepted
+        self.last_expected_loss = expected_loss
+        return -expected_loss
 
 
 def _validate_args(args: Args) -> None:
@@ -564,6 +763,7 @@ def make_reward(
     """Builds the fixed-rule Bayes-risk reward."""
     return FixedDecisionRuleTerminalReward(
         make_decision_rule(args, task),
+        make_experimenter_posterior(args, task),
         false_accept_cost=args.experimenter_false_accept_cost,
         false_reject_cost=args.experimenter_false_reject_cost,
     )
@@ -632,7 +832,7 @@ def train(args: Args):
     )
     validate_config(task, config, task.design_space)
     _set_seed(config.seed, config.torch_deterministic)
-    policy, value_net = make_networks(task, task.design_space, config)
+    policy, value_net = make_lot_inspection_networks(args, task)
     env = BEDEnv(
         task,
         horizon=args.horizon,
@@ -699,14 +899,12 @@ def evaluate_policy_mean_risk(args: Args, policy_net) -> dict[str, float]:
     )
     policy_net.eval()
     observation, _ = env.reset(seed=args.seed + 1)
-    returns = torch.zeros(args.eval_episodes, device=device)
     for _ in range(args.horizon):
         designs = policy_net.sample_from_observation(
             observation,
             deterministic=args.eval_deterministic,
         ).design
-        observation, rewards, _, _, _ = env.step(designs)
-        returns += rewards
+        observation, _, _, _, _ = env.step(designs)
 
     if env.theta_0 is None:
         raise RuntimeError("Environment has not been reset.")
@@ -716,7 +914,12 @@ def evaluate_policy_mean_risk(args: Args, policy_net) -> dict[str, float]:
     good = env.theta_0[..., 0].bool()
     false_accept = accepted & ~good
     false_reject = ~accepted & good
-    risks = -returns
+    risks = lot_loss(
+        accepted,
+        env.theta_0,
+        false_accept_cost=args.experimenter_false_accept_cost,
+        false_reject_cost=args.experimenter_false_reject_cost,
+    )
     good_acceptance_rate = accepted[good].to(torch.float32).mean().item()
     bad_acceptance_rate = accepted[~good].to(torch.float32).mean().item()
     return {
