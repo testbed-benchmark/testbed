@@ -1,13 +1,14 @@
 import pytest
 import torch
 
+from testbed.core.design_spaces import BoxDesignSpace
 from testbed.design_nets import (
     DeepSetGaussianActor,
     GaussianPolicyActor,
     PolicySample,
     TanhGaussianPolicyNet,
 )
-from testbed.envs import BEDEnv, BoxDesignSpace, ZeroReward
+from testbed.envs import BEDEnv, ZeroReward
 from testbed.tasks import LocationFinding
 
 

@@ -8,14 +8,18 @@ import torch
 from omegaconf import OmegaConf
 from torch import nn
 
+from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.manager import Manager
 from testbed.design_nets import (
     DeepSetGaussianActor,
     RLBOEDQNetwork,
     TanhGaussianPolicyNet,
 )
-from testbed.designers import PolicyDesigner
-from testbed.envs import BoxDesignSpace
+from testbed.designers import (
+    PolicyDesigner,
+    StochasticPolicyDesigner,
+    build_policy_designer,
+)
 from testbed.envs.history import History
 from testbed.methods.rlboed import (
     Trainer,
@@ -377,7 +381,7 @@ def _build_trainer(cfg, *, manager=None):
     nets = make_networks(task, design_space, cfg, task.device)
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = PolicyDesigner(task, cfg.T, nets.actor, deterministic=False)
+    designer = build_policy_designer(task, cfg.T, nets.actor)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
 
 
@@ -467,9 +471,9 @@ def test_trainer_produces_deployable_designer(tmp_path):
     trainer.train()
 
     assert isinstance(trainer.designer, PolicyDesigner)
-    assert isinstance(trainer.designer.policy_net, TanhGaussianPolicyNet)
-    assert not trainer.designer.deterministic
-    assert trainer.designer.policy_net.design_history_bounds == (0.0, 1.0)
+    assert isinstance(trainer.designer.design_net, TanhGaussianPolicyNet)
+    assert isinstance(trainer.designer, StochasticPolicyDesigner)
+    assert trainer.designer.design_net.design_history_bounds == (0.0, 1.0)
 
     checkpoint = trainer.build_checkpoint(step=cfg.sac.num_training_iterations - 1)
     assert checkpoint["config"]["sac"]["gamma"] == cfg.sac.gamma
@@ -484,11 +488,11 @@ def test_trainer_produces_deployable_designer(tmp_path):
     torch.testing.assert_close(checkpoint["design_high"], torch.full((2,), 3.0))
 
     theta = trainer.task.sample_prior(2)
-    y_history, design_history = trainer.designer.rollout(theta)
-    assert y_history.shape == (2, 2, 1)
-    assert design_history.shape == (2, 2, 2)
-    assert torch.all(design_history >= -2.0)
-    assert torch.all(design_history <= 3.0)
+    rollout = trainer.designer.rollout(theta)
+    assert rollout.y_history.shape == (2, 2, 1)
+    assert rollout.design_history.shape == (2, 2, 2)
+    assert torch.all(rollout.design_history >= -2.0)
+    assert torch.all(rollout.design_history <= 3.0)
 
     checkpoint_path = tmp_path / "rlboed.pt"
     torch.save(trainer.build_checkpoint(), checkpoint_path)

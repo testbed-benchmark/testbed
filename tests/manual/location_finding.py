@@ -63,9 +63,9 @@ def test_random_eig():
         torch.manual_seed(i)
         with torch.no_grad():
             theta0 = task.prior.sample(1024)
-            y_obs, xi_obs = designer.rollout(theta0)
-            spce_val = spce.estimate_gain(y_obs, xi_obs, theta0).item()
-            snmc_val = snmc.estimate_gain(y_obs, xi_obs, theta0).item()
+            rollout = designer.rollout(theta0)
+            spce_val = spce.estimate_gain(rollout).item()
+            snmc_val = snmc.estimate_gain(rollout).item()
 
         spce_vals.append(spce_val)
         snmc_vals.append(snmc_val)

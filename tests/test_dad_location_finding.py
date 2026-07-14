@@ -9,7 +9,7 @@ import torch
 from testbed.core.manager import Manager
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import SNMC, SPCE
-from testbed.designers import PolicyDesigner
+from testbed.designers import build_policy_designer
 from testbed.methods.dad import Trainer, build_objective
 from testbed.tasks import LocationFinding
 
@@ -30,7 +30,7 @@ def _make_trainer(task=None, cfg=None, manager=None):
     task = task or _make_task()
     cfg = cfg or SimpleNamespace(n_outer=4, grad_clip=None)
     policy_net = _make_design_net(task)
-    designer = PolicyDesigner(task, T=3, policy_net=policy_net)
+    designer = build_policy_designer(task, T=3, design_net=policy_net)
     objective = SNMC(task, n_contrastive=4)
     optimizer = torch.optim.Adam(policy_net.parameters(), lr=1e-3)
     return Trainer(task, designer, objective, optimizer, cfg, manager), policy_net

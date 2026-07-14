@@ -1,9 +1,9 @@
 import pytest
 import torch
 
+from testbed.core.design_spaces import BoxDesignSpace
 from testbed.envs import (
     BEDEnv,
-    BoxDesignSpace,
     CallableReward,
     History,
     RLBOEDDenseReward,

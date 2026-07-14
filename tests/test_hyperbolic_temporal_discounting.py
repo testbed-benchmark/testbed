@@ -2,14 +2,14 @@
 
 import math
 
+import pytest
 import torch
 from torch.distributions import Bernoulli
 
-from testbed.design_nets import DeepSetPolicyNet, HTDDesignNetWrapper
-from testbed.design_nets.base_design_net import DesignNet
-from testbed.designers import PolicyDesigner
+from testbed.design_nets import DeepSetPolicyNet
+from testbed.designers import build_policy_designer
 from testbed.tasks import HyperbolicTemporalDiscounting
-from testbed.tasks.hyperbolic_temporal_discounting import HTDPrior
+from testbed.tasks.hyperbolic_temporal_discounting import HTDDesignSpace, HTDPrior
 
 
 def _make_task(**kwargs):
@@ -173,44 +173,102 @@ def test_outcome_logp_normalized():
     assert torch.allclose(total, torch.ones_like(total))
 
 
-class _RawNet(DesignNet):
-    """Stub design net that returns a fixed raw output."""
-
-    def __init__(self, raw):
-        super().__init__()
-        self.raw = torch.nn.Parameter(raw)
-
-    def forward(self, y_history, design_history):
-        return self.raw
+def test_task_computes_htd_design_space_from_prior():
+    task = _make_task()
+    assert isinstance(task.design_space, HTDDesignSpace)
+    expected = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
+    assert task.design_space.log_k_mean == pytest.approx(expected)
 
 
-def test_htd_wrapper_transform():
+def test_htd_design_space_transform():
     # Raw (x_d, x_r) map to D_1 = exp(x_d - log_k_mean), R_0 = 100 * sigmoid(x_r).
     log_k_mean = -3.125
+    space = HTDDesignSpace(log_k_mean=log_k_mean)
     raw = torch.tensor([[0.0, 0.0], [1.0, 2.0]])
-    wrapper = HTDDesignNetWrapper(_RawNet(raw.clone()), log_k_mean=log_k_mean)
 
-    design = wrapper(None, None)
+    design = space.to_design(raw)
     assert torch.allclose(design[:, 0], torch.exp(raw[:, 0] - log_k_mean))
     assert torch.allclose(design[:, 1], 100 * torch.sigmoid(raw[:, 1]))
+    assert space.contains(design)
 
 
-def test_htd_wrapper_keeps_gradients():
+def test_htd_design_space_to_raw_not_supported():
+    space = HTDDesignSpace(log_k_mean=-3.125)
+    with pytest.raises(NotImplementedError):
+        space.to_raw(torch.tensor([[20.0, 50.0]]))
+
+
+def test_htd_design_space_keeps_gradients():
     # Near-zero raw outputs saturate the task likelihood directly (zero gradient);
-    # the wrapper maps them to non-saturating (D_1, R_0), keeping gradients alive.
+    # the transform maps them to non-saturating (D_1, R_0), keeping gradients alive.
     torch.manual_seed(0)
     task = _make_task()
-    log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
-    wrapper = HTDDesignNetWrapper(_RawNet(torch.zeros(32, 2)), log_k_mean=log_k_mean)
 
     theta = task.sample_prior(32)
-    design = wrapper(None, None)  # [32, 2] = (D_1, R_0)
+    raw = torch.zeros(32, 2, requires_grad=True)
+    design = task.design_space.to_design(raw)  # [32, 2] = (D_1, R_0)
     y = torch.ones(32, 1)
 
     logp = task._outcome_logp(y, theta, design)
-    (grad,) = torch.autograd.grad(logp.sum(), wrapper.net.raw)
+    (grad,) = torch.autograd.grad(logp.sum(), raw)
     assert torch.isfinite(grad).all()
     assert grad.abs().sum() > 0
+
+
+# ============================================================================
+# design_space validation (Task._check_design)
+# ============================================================================
+
+
+def _invalid_design(b=4):
+    # D_1 <= 0 violates HTDDesignSpace's domain (D_1 > 0).
+    return torch.stack([torch.full((b,), -1.0), torch.full((b,), 50.0)], dim=-1)
+
+
+def test_sample_outcome_rejects_invalid_design():
+    task = _make_task()
+    theta = task.sample_prior(4)
+    with pytest.raises(ValueError, match="design lies outside"):
+        task.sample_outcome(theta, _invalid_design())
+
+
+def test_outcome_logp_rejects_invalid_design():
+    task = _make_task()
+    theta = task.sample_prior(4)
+    y = torch.ones(4, 1)
+    with pytest.raises(ValueError, match="design lies outside"):
+        task.outcome_logp(y, theta, _invalid_design())
+
+
+def test_history_logp_rejects_invalid_design_at_any_step():
+    task = _make_task()
+    theta = task.sample_prior(4)
+    y_history = torch.ones(4, 2, 1)
+    # Step 0 valid, step 1 invalid -- the whole history should still be rejected.
+    valid = torch.tensor([20.0, 50.0]).expand(4, 2)
+    design_history = torch.stack([valid, _invalid_design()], dim=1)
+    with pytest.raises(ValueError, match="design lies outside"):
+        task.history_logp(y_history, design_history, theta)
+
+
+def test_sample_joint_rejects_invalid_design():
+    task = _make_task()
+    with pytest.raises(ValueError, match="design lies outside"):
+        task.sample_joint(_invalid_design())
+
+
+def test_valid_design_does_not_raise():
+    task = _make_task()
+    theta = task.sample_prior(4)
+    design = torch.tensor([20.0, 50.0]).expand(4, 2)
+    task.sample_outcome(theta, design)  # should not raise
+
+
+def test_validate_designs_false_disables_the_check():
+    task = _make_task()
+    task.validate_designs = False
+    theta = task.sample_prior(4)
+    task.sample_outcome(theta, _invalid_design())  # should not raise
 
 
 def test_sample_outcome_is_binary():
@@ -248,10 +306,18 @@ def test_rollout_shapes():
         event_shape_out=task.event_shape_design,
     )
     b, T = 8, 4
-    designer = PolicyDesigner(task, T=T, policy_net=policy_net)
+    designer = build_policy_designer(task, T=T, design_net=policy_net)
     theta0 = task.sample_prior(b)
-    y_obs, design_obs = designer.rollout(theta0)
+    rollout = designer.rollout(theta0)
 
-    assert y_obs.shape == (b, T, 1)
-    assert design_obs.shape == (b, T, 2)
-    assert ((y_obs == 0) | (y_obs == 1)).all()
+    assert rollout.y_history.shape == (b, T, 1)
+    assert rollout.design_history.shape == (b, T, 2)
+    assert ((rollout.y_history == 0) | (rollout.y_history == 1)).all()
+
+    # The net conditions on its own raw output, never a re-derived one --
+    # the direct proof HTDDesignNetWrapper's log/logit round-trip is gone.
+    assert "raw_design_history" in rollout.extra
+    assert rollout.extra["raw_design_history"].shape == (b, T, 2)
+    D1, R0 = rollout.design_history[..., 0], rollout.design_history[..., 1]
+    assert (D1 > 0).all()
+    assert (R0 > 0).all() and (R0 < 100).all()

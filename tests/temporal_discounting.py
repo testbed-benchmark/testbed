@@ -16,9 +16,10 @@ from rich.panel import Panel
 from rich.progress import track
 from rich.table import Table
 
-from testbed.design_nets import DeepSetPolicyNet, HTDDesignNetWrapper
-from testbed.design_objectives import SNMC, SPCE, Reinforce
-from testbed.designers import PolicyDesigner, RandomDesigner
+from testbed.core.distributions import Distribution
+from testbed.design_nets import DeepSetPolicyNet
+from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
+from testbed.designers import RandomDesigner, build_policy_designer
 from testbed.tasks import HyperbolicTemporalDiscounting
 
 # Reference sPCE for HTD at T=20: 5.021 +- 0.013, DAD paper (Foster et al. 2021).
@@ -43,24 +44,29 @@ console = Console()
 
 
 def make_policy_designer(task, device):
-    policy_net = DeepSetPolicyNet(
+    # task.design_space (an HTDDesignSpace) maps the net's raw output to valid
+    # (D_1, R_0); no wrapper needed.
+    design_net = DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
         encoder_dim_h=[256, 256],
         dim_emb=16,
         decoder_dim_h=[128, 128],
-    )
-    # Map raw outputs to valid (D_1, R_0), following Step-DAD.
-    log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
-    policy_net = HTDDesignNetWrapper(policy_net, log_k_mean=log_k_mean).to(device)
-    return PolicyDesigner(task, T, policy_net)
+    ).to(device)
+    return build_policy_designer(task, T, design_net)
 
 
-class _HTDRandomDesigns:
-    """Random HTD designs: raw N(0, 1) mapped to (D_1, R_0), as in Step-DAD."""
+class _HTDRandomDesigns(Distribution):
+    """Random HTD designs: raw N(0, 1) mapped to (D_1, R_0), as in Step-DAD.
+
+    D_1 = exp(raw_0 - log_k_mean), R_0 = 100 * sigmoid(raw_1); log_prob applies
+    the matching change-of-variables correction to the standard normal base
+    density (same pattern as TanhGaussianPolicyNet's squash-log-det).
+    """
 
     def __init__(self, log_k_mean, device):
+        super().__init__()
         self.log_k_mean = log_k_mean
         self._device = torch.device(device)
 
@@ -68,11 +74,22 @@ class _HTDRandomDesigns:
     def device(self):
         return self._device
 
-    def sample(self, n):
-        raw = torch.randn(n, 2, device=self._device)
+    def sample(self, n_samples=1):
+        raw = torch.randn(n_samples, 2, device=self._device)
         D1 = torch.exp(raw[:, 0:1] - self.log_k_mean)
         R0 = 100 * torch.sigmoid(raw[:, 1:2])
         return torch.cat((D1, R0), dim=-1)
+
+    def log_prob(self, design):
+        D1, R0 = design[..., 0], design[..., 1]
+        raw0 = torch.log(D1) + self.log_k_mean
+        raw1 = torch.logit(R0 / 100)
+        standard_normal = torch.distributions.Normal(0.0, 1.0)
+        # D1 = exp(raw0 - log_k_mean) => d(D1)/d(raw0) = D1
+        log_prob_D1 = standard_normal.log_prob(raw0) - torch.log(D1)
+        # R0 = 100 * sigmoid(raw1) => d(R0)/d(raw1) = R0 * (1 - R0 / 100)
+        log_prob_R0 = standard_normal.log_prob(raw1) - torch.log(R0 * (1 - R0 / 100))
+        return log_prob_D1 + log_prob_R0
 
 
 def make_random_designer(task, device):
@@ -83,22 +100,22 @@ def make_random_designer(task, device):
 
 
 def train(task, designer):
-    objective = Reinforce(
+    objective = SPCEReinforce(
         task,
-        SPCE(task, n_contrastive=N_INNER).per_sample_gain,
-        designer,
+        n_contrastive=N_INNER,
+        stochastic_design_policy=designer.reinforce_requires_policy_log_probs,
     )
-    optimizer = torch.optim.Adam(designer.policy_net.parameters(), lr=LR)
+    optimizer = torch.optim.Adam(designer.design_net.parameters(), lr=LR)
 
-    designer.policy_net.train()
+    designer.design_net.train()
     for step in track(range(N_TRAIN_ITER), description="  Training DAD…"):
         theta0 = task.sample_prior(N_OUTER)
-        y_obs, design_obs = designer.rollout(theta0)
-        loss = -objective.estimate_gain(y_obs, design_obs, theta0)
+        rollout = designer.rollout(theta0)
+        loss = -objective.estimate_gain(rollout)
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(designer.policy_net.parameters(), GRAD_CLIP)
+        torch.nn.utils.clip_grad_norm_(designer.design_net.parameters(), GRAD_CLIP)
         optimizer.step()
 
         if step % (N_TRAIN_ITER // 10) == 0:
@@ -114,9 +131,9 @@ def evaluate(task, designer):
         torch.manual_seed(i)
         with torch.no_grad():
             theta0 = task.prior.sample(N_OUTER_EVAL)
-            y_obs, xi_obs = designer.rollout(theta0)
-            spce_vals.append(spce.estimate_gain(y_obs, xi_obs, theta0).item())
-            snmc_vals.append(snmc.estimate_gain(y_obs, xi_obs, theta0).item())
+            rollout = designer.rollout(theta0)
+            spce_vals.append(spce.estimate_gain(rollout).item())
+            snmc_vals.append(snmc.estimate_gain(rollout).item())
 
     return sum(spce_vals) / N_EVAL_RUNS, sum(snmc_vals) / N_EVAL_RUNS
 
@@ -134,7 +151,7 @@ def test_dad_reinforce_eig():
     train(task, policy_designer)
     train_min = (time.perf_counter() - start) / 60
 
-    policy_designer.policy_net.eval()
+    policy_designer.design_net.eval()
     results = {
         "Random": evaluate(task, random_designer),
         "DAD (reinforce)": evaluate(task, policy_designer),
