@@ -60,10 +60,13 @@ Please follow the following guidelines if you would like to contribute to TestBE
 
 1. Fork the repository and create a new branch for your feature or bug fix.
 2. Add your code. Add your tests.
-3. Run the linter, formatter, and tests, and fix any issues:
+3. Install the pre-commit hooks once:
 ```sh
-ruff check
-ruff format
+pre-commit install
+```
+4. Run the hooks and tests, and fix any issues:
+```sh
+pre-commit run --all-files
 pytest
 ```
-4. Submit a pull request with a clear description of your changes and why they are needed.
+5. Submit a pull request with a clear description of your changes and why they are needed.
