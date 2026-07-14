@@ -58,15 +58,20 @@ You can launch a local version of the documentation with `cd docs && make liveht
 
 Please follow the following guidelines if you would like to contribute to TestBED:
 
-1. Fork the repository and create a new branch for your feature or bug fix.
-2. Add your code. Add your tests.
-3. Install the pre-commit hooks once:
+1. Fork the repository and install the package in editable mode with dev
+   dependencies:
+```sh
+pip install -e .[full,dev,docs]
+```
+Also install the pre-commit hooks once:
 ```sh
 pre-commit install
 ```
-4. Run the hooks and tests, and fix any issues:
+2. Create a new branch for your feature or bug fix. Add your code, tests, and
+   docs.
+4. Run the tests and fix any issues before committing:
 ```sh
-pre-commit run --all-files
 pytest
 ```
-5. Submit a pull request with a clear description of your changes and why they are needed.
+5. Submit a pull request with a clear description of your changes and why they
+   are needed.
