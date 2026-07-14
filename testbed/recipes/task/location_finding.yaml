@@ -1,0 +1,3 @@
+_target_: testbed.tasks.LocationFinding
+n_sources: 1
+dim_theta: 2

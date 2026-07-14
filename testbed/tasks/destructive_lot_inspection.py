@@ -5,7 +5,7 @@ from torch import Tensor
 
 from ..core.distributions import Distribution
 from ..envs.design_spaces import CategoricalDesignSpace
-from .base_task import Task
+from .base import Task
 
 
 class DestructiveLotInspectionPrior(Distribution):
@@ -188,18 +188,18 @@ class DestructiveLotInspection(Task):
                 bad_rho_scale=bad_rho_scale,
             )
 
-        self.event_shape_theta = torch.Size([3])
-        self.event_shape_design = torch.Size([])
-        self.event_shape_y = torch.Size([1])
-        self.design_space = CategoricalDesignSpace(num_zones)
         self.num_zones = num_zones
         self.batch_size = batch_size
 
         super().__init__(
-            prior,
+            event_shape_y=(1,),
+            event_shape_theta=(3,),
+            event_shape_design=(),
+            prior=prior,
             discrete_y=True,
             discrete_theta=False,
             discrete_design=True,
+            design_space=CategoricalDesignSpace(num_zones),
         )
 
         dtype = torch.get_default_dtype()

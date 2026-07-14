@@ -26,26 +26,26 @@ from testbed.envs.design_spaces import (
 
 @dataclass
 class PolicySample:
-    """Sampled action and log-probability from a stochastic policy.
+    """Sampled design and log-probability from a stochastic policy.
 
     Attributes:
-        action: Sampled bounded design with shape
-            [*batch_shape, *event_shape_design].
-        log_prob: Summed action log probability with shape [*batch_shape].
-        deterministic_action: Bounded deterministic action, typically the squashed
-            policy mean, with shape [*batch_shape, *event_shape_design].
-        raw_action: Optional unsquashed Gaussian action with shape
-            [*batch_shape, *event_shape_design].
+        design: Sampled bounded design with shape
+            ``[*batch_shape, *event_shape_design]``.
+        log_prob: Summed design log probability with shape ``[*batch_shape]``.
+        deterministic_design: Bounded deterministic design, typically the squashed
+            policy mean, with shape ``[*batch_shape, *event_shape_design]``.
+        raw_design: Optional unsquashed Gaussian design with shape
+            ``[*batch_shape, *event_shape_design]``.
     """
 
-    action: Tensor
+    design: Tensor
     log_prob: Tensor
-    deterministic_action: Tensor
-    raw_action: Tensor | None = None
+    deterministic_design: Tensor
+    raw_design: Tensor | None = None
 
 
 class StochasticDesignNet(DesignNet):
-    """Design network with an RL-friendly stochastic action API."""
+    """Design network with an RL-friendly stochastic design API."""
 
     def sample(
         self,
@@ -54,41 +54,43 @@ class StochasticDesignNet(DesignNet):
         *,
         mask: Tensor | None = None,
         deterministic: bool = False,
+        reparameterize_policy: bool = True,
     ) -> PolicySample:
-        """Samples an action and returns its policy log probability.
+        """Samples a design and returns its policy log probability.
 
         Args:
             y_history: Outcome history with shape
-                [*batch_shape, T, *event_shape_y].
+                ``[*batch_shape, T, *event_shape_y]``.
             design_history: Design history with shape
-                [*batch_shape, T, *event_shape_design].
+                ``[*batch_shape, T, *event_shape_design]``.
             mask: Optional boolean mask for padded histories with shape
-                [*batch_shape, T].
-            deterministic: If True, return the deterministic policy action instead
+                ``[*batch_shape, T]``.
+            deterministic: If True, return the deterministic design instead
                 of a random sample.
+            reparameterize_policy: If False, draw a non-differentiable sample
+                so the log probability's gradient is the pure score (REINFORCE).
 
         Returns:
-            A policy sample containing the action, log probability, deterministic
-            action, and optional raw action.
+            A policy sample containing the design, log probability, deterministic
+            design, and optional raw design.
         """
         raise NotImplementedError
 
     def sample_from_observation(self, obs, *, deterministic: bool = False):
-        """Samples from a padded-history observation dictionary.
+        """Samples from a ``History`` observation.
 
         Args:
-            obs: Observation dictionary produced by `PaddedHistoryObservation`,
-                containing `outcomes`, `designs`, and optionally `mask`.
-            deterministic: If True, return the deterministic policy action instead
+            obs: ``History`` returned by ``BEDEnv.reset()`` or ``BEDEnv.step()``.
+            deterministic: If True, return the deterministic design instead
                 of a random sample.
 
         Returns:
             A policy sample for the observation.
         """
         return self.sample(
-            obs["outcomes"],
-            obs["designs"],
-            mask=obs.get("mask"),
+            obs.outcomes,
+            obs.designs,
+            mask=obs.mask,
             deterministic=deterministic,
         )
 
@@ -102,13 +104,13 @@ class GaussianPolicyActor(nn.Module):
         """Computes Gaussian mean and log standard deviation.
 
         Args:
-            y_history: Outcome history with shape [batch, T, dim_y].
-            design_history: Design history with shape [batch, T, dim_design].
-            mask: Optional boolean or float mask with shape [batch, T].
+            y_history: Outcome history with shape ``[batch, T, dim_y]``.
+            design_history: Design history with shape ``[batch, T, dim_design]``.
+            mask: Optional boolean or float mask with shape ``[batch, T]``.
 
         Returns:
             Gaussian mean and log standard deviation, both with shape
-            [batch, dim_design].
+            ``[batch, dim_design]``.
         """
         raise NotImplementedError
 
@@ -121,7 +123,7 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         *,
         dim_design: int,
         dim_y: int = 1,
-        dim_h: int = 128,
+        dim_h=[128, 128],
         dim_emb: int = 64,
         log_std_min: float = -20.0,
         log_std_max: float = 0.0,
@@ -132,7 +134,7 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         Args:
             dim_y: Flattened outcome dimension.
             dim_design: Flattened design dimension.
-            dim_h: Hidden layer width.
+            dim_h: Per-layer hidden widths as a list; an int is a single layer.
             dim_emb: History summary dimension.
             log_std_min: Lower bound for Gaussian log standard deviations.
             log_std_max: Upper bound for Gaussian log standard deviations.
@@ -155,19 +157,24 @@ class DeepSetGaussianActor(GaussianPolicyActor):
                 "log_std_min and log_std_max."
             )
 
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         self.encoder_net = MLP(
-            [self.dim_design + self.dim_y, dim_h, dim_h, dim_emb],
+            [self.dim_design + self.dim_y] + hidden_widths + [dim_emb],
             activation=nn.ReLU,
         )
-        self.actor_net = MLP([dim_emb, dim_h, dim_h], activation=nn.ReLU)
-        self.mean_head = nn.Linear(dim_h, self.dim_design)
-        self.log_std_head = nn.Linear(dim_h, self.dim_design)
+        self.actor_net = MLP([dim_emb] + hidden_widths, activation=nn.ReLU)
+        self.mean_head = nn.Linear(hidden_widths[-1], self.dim_design)
+        self.log_std_head = nn.Linear(hidden_widths[-1], self.dim_design)
         _initialize_linear_layers(self)
         nn.init.zeros_(self.log_std_head.weight)
-        scaled_log_std = 2.0 * (
-            (init_log_std - self.log_std_min)
-            / (self.log_std_max - self.log_std_min)
-        ) - 1.0
+        scaled_log_std = (
+            2.0
+            * (
+                (init_log_std - self.log_std_min)
+                / (self.log_std_max - self.log_std_min)
+            )
+            - 1.0
+        )
         nn.init.constant_(self.log_std_head.bias, atanh(scaled_log_std))
 
     def forward(
@@ -201,11 +208,10 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         return mean, log_std
 
 
-class _DiscreteActionCodec:
+class _DiscreteDesignCodec:
     """Converts discrete physical designs to factorized categorical indices."""
 
     def __init__(self, design_space: DesignSpace):
-        """Builds flattened component bounds from a discrete design space."""
         if not design_space.is_discrete:
             raise TypeError("CategoricalPolicyNet requires a discrete design space.")
         self.design_space = design_space
@@ -218,12 +224,12 @@ class _DiscreteActionCodec:
 
     @property
     def dim_design(self) -> int:
-        """Returns flattened physical design dimension."""
+        """Returns the flattened physical design dimension."""
         return len(self.nvec)
 
     @property
     def num_logits(self) -> int:
-        """Returns total logits needed for all components."""
+        """Returns the number of logits needed for all components."""
         return sum(self.nvec)
 
     @staticmethod
@@ -243,7 +249,7 @@ class _DiscreteActionCodec:
                         "CategoricalPolicyNet requires every product component "
                         "to be discrete."
                     )
-                part_lows, part_nvec = _DiscreteActionCodec._components(part)
+                part_lows, part_nvec = _DiscreteDesignCodec._components(part)
                 lows.extend(part_lows)
                 nvec.extend(part_nvec)
             return lows, nvec
@@ -252,28 +258,29 @@ class _DiscreteActionCodec:
             "IntegerDesignSpace, and all-discrete ProductDesignSpace."
         )
 
-    def action_to_indices(self, action: Tensor, low: Tensor) -> Tensor:
-        """Maps physical actions to zero-based categorical indices."""
-        return action.reshape(-1, self.dim_design).long() - low
+    def design_to_indices(self, design: Tensor, low: Tensor) -> Tensor:
+        """Maps physical designs to zero-based categorical indices."""
+        return design.reshape(-1, self.dim_design).long() - low
 
-    def flat_indices_to_action(self, indices: Tensor, low: Tensor) -> Tensor:
-        """Maps zero-based categorical indices to physical design values."""
-        action_flat = indices + low
-        return action_flat.reshape(*indices.shape[:-1], *self.design_space.event_shape)
+    def indices_to_design(self, indices: Tensor, low: Tensor) -> Tensor:
+        """Maps zero-based categorical indices to physical designs."""
+        design = indices + low
+        shape = (*indices.shape[:-1], *self.design_space.event_shape)
+        return design.reshape(shape)
 
 
 class CategoricalPolicyActor(nn.Module):
-    """Maps flattened experimental histories to discrete action logits."""
+    """Maps flattened experimental histories to discrete-design logits."""
 
     def forward(
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
     ) -> Tensor:
-        """Computes logits with shape [batch, sum(nvec)]."""
+        """Computes logits with shape ``[batch, sum(nvec)]``."""
         raise NotImplementedError
 
 
 class DeepSetCategoricalActor(CategoricalPolicyActor):
-    """DeepSets-style categorical actor using masked sum pooling over history."""
+    """DeepSets-style categorical actor using masked sum pooling."""
 
     def __init__(
         self,
@@ -286,7 +293,6 @@ class DeepSetCategoricalActor(CategoricalPolicyActor):
     ):
         """Initializes the actor network."""
         super().__init__()
-
         self.dim_y = int(dim_y)
         self.dim_design = int(dim_design)
         self.num_logits = int(num_logits)
@@ -303,24 +309,19 @@ class DeepSetCategoricalActor(CategoricalPolicyActor):
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
     ) -> Tensor:
         """Computes logits from flattened histories."""
-        b_flat, T, _ = design_history.shape
-
-        if T == 0:
+        batch_size, history_length, _ = design_history.shape
+        if history_length == 0:
             summary = torch.zeros(
-                b_flat,
+                batch_size,
                 self.dim_emb,
                 device=design_history.device,
                 dtype=design_history.dtype,
             )
         else:
-            enc_input = torch.cat([y_history, design_history], dim=-1)
-            enc = self.encoder_net(enc_input)
-
+            encoded = self.encoder_net(torch.cat([y_history, design_history], dim=-1))
             if mask is not None:
-                enc = enc * mask.to(dtype=enc.dtype).unsqueeze(-1)
-
-            summary = enc.sum(dim=1)
-
+                encoded = encoded * mask.to(dtype=encoded.dtype).unsqueeze(-1)
+            summary = encoded.sum(dim=1)
         return self.logits_head(self.actor_net(summary))
 
 
@@ -337,10 +338,9 @@ class CategoricalPolicyNet(StochasticDesignNet):
     ):
         """Initializes the policy network."""
         super().__init__()
-
         self.design_space = design_space
         self.event_shape_design = torch.Size(design_space.event_shape)
-        self.codec = _DiscreteActionCodec(design_space)
+        self.codec = _DiscreteDesignCodec(design_space)
         self.dim_design = self.codec.dim_design
         self.nvec = self.codec.nvec
         self.actor = actor or DeepSetCategoricalActor(
@@ -366,8 +366,8 @@ class CategoricalPolicyNet(StochasticDesignNet):
         self._normalize_outcomes = outcome_bounds is not None
 
     def forward(self, y_history, design_history) -> Tensor:
-        """Returns the deterministic discrete action for a history."""
-        return self.sample(y_history, design_history, deterministic=True).action
+        """Returns the deterministic discrete design for a history."""
+        return self.sample(y_history, design_history, deterministic=True).design
 
     def sample(
         self,
@@ -376,87 +376,81 @@ class CategoricalPolicyNet(StochasticDesignNet):
         *,
         mask: Tensor | None = None,
         deterministic: bool = False,
+        reparameterize_policy: bool = True,
     ) -> PolicySample:
-        """Samples a factorized categorical action."""
+        """Samples a factorized categorical design."""
+        del reparameterize_policy
         batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
-            y_history,
-            design_history,
-            mask=mask,
+            y_history, design_history, mask=mask
         )
-        logits = self.actor(y_flat, design_flat, mask=mask_flat)
-        dists = self._distributions(logits)
-
+        distributions = self._distributions(
+            self.actor(y_flat, design_flat, mask=mask_flat)
+        )
         indices = []
         deterministic_indices = []
         log_probs = []
-        for dist in dists:
-            deterministic_index = dist.logits.argmax(dim=-1)
-            index = deterministic_index if deterministic else dist.sample()
+        for distribution in distributions:
+            deterministic_index = distribution.logits.argmax(dim=-1)
+            index = deterministic_index if deterministic else distribution.sample()
             indices.append(index)
             deterministic_indices.append(deterministic_index)
-            log_probs.append(dist.log_prob(index))
+            log_probs.append(distribution.log_prob(index))
 
         index_tensor = torch.stack(indices, dim=-1)
         deterministic_index_tensor = torch.stack(deterministic_indices, dim=-1)
         low = self.design_low.to(index_tensor.device)
-        action = self.codec.flat_indices_to_action(index_tensor, low)
-        deterministic_action = self.codec.flat_indices_to_action(
-            deterministic_index_tensor,
-            low,
+        design = self.codec.indices_to_design(index_tensor, low)
+        deterministic_design = self.codec.indices_to_design(
+            deterministic_index_tensor, low
         )
         return PolicySample(
-            action=action.reshape(*batch_shape, *self.event_shape_design),
+            design=design.reshape(batch_shape + self.event_shape_design),
             log_prob=torch.stack(log_probs, dim=-1).sum(dim=-1).reshape(batch_shape),
-            deterministic_action=deterministic_action.reshape(
-                *batch_shape,
-                *self.event_shape_design,
+            deterministic_design=deterministic_design.reshape(
+                batch_shape + self.event_shape_design
             ),
-            raw_action=index_tensor.reshape(*batch_shape, self.dim_design),
+            raw_design=index_tensor.reshape((*batch_shape, self.dim_design)),
         )
 
-    def evaluate_actions(
+    def evaluate_designs(
         self,
         y_history,
         design_history,
-        action,
+        design,
         *,
         mask: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
-        """Returns log probability and entropy for provided physical actions."""
-        batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
-            y_history,
-            design_history,
-            mask=mask,
+        """Returns log probability and entropy for provided designs."""
+        batch_shape, y_flat, history_flat, mask_flat = self._prepare_histories(
+            y_history, design_history, mask=mask
         )
-        action = torch.as_tensor(action, device=self.design_low.device)
-        action_flat = action.reshape(-1, self.dim_design)
-        indices = self.codec.action_to_indices(
-            action_flat,
-            self.design_low.to(action_flat.device),
+        design = torch.as_tensor(design, device=self.design_low.device)
+        indices = self.codec.design_to_indices(
+            design.reshape(-1, self.dim_design),
+            self.design_low.to(design.device),
         )
-        logits = self.actor(y_flat, design_flat, mask=mask_flat)
-        dists = self._distributions(logits)
+        distributions = self._distributions(
+            self.actor(y_flat, history_flat, mask=mask_flat)
+        )
         log_probs = []
         entropies = []
-        for component, dist in enumerate(dists):
-            log_probs.append(dist.log_prob(indices[:, component]))
-            entropies.append(dist.entropy())
+        for component, distribution in enumerate(distributions):
+            log_probs.append(distribution.log_prob(indices[:, component]))
+            entropies.append(distribution.entropy())
         return (
             torch.stack(log_probs, dim=-1).sum(dim=-1).reshape(batch_shape),
             torch.stack(entropies, dim=-1).sum(dim=-1).reshape(batch_shape),
         )
 
-    def evaluate_actions_from_observation(
-        self,
-        obs,
-        action,
+    def evaluate_designs_from_observation(
+        self, observation, design
     ) -> tuple[Tensor, Tensor]:
-        """Evaluates physical actions from a padded-history observation."""
-        return self.evaluate_actions(
-            obs["outcomes"],
-            obs["designs"],
-            action,
-            mask=obs.get("mask"),
+        """Evaluates designs from a ``History`` observation."""
+        return self.evaluate_designs(
+            observation.outcomes,
+            observation.designs,
+            design,
+            mask=observation.mask,
         )
 
     def _prepare_histories(
@@ -470,54 +464,47 @@ class CategoricalPolicyNet(StochasticDesignNet):
         device = self.design_low.device
         y_history = torch.as_tensor(y_history, device=device, dtype=dtype)
         design_history = torch.as_tensor(design_history, device=device, dtype=dtype)
-
         design_event_ndim = len(self.event_shape_design)
-        design_t_dim = design_history.ndim - design_event_ndim - 1
-        if design_t_dim < 0:
+        time_dim = design_history.ndim - design_event_ndim - 1
+        if time_dim < 0:
+            raise ValueError("design_history has too few dimensions.")
+        batch_shape = torch.Size(design_history.shape[:time_dim])
+        history_length = design_history.shape[time_dim]
+        if (
+            y_history.shape[: len(batch_shape)] != batch_shape
+            or y_history.shape[len(batch_shape)] != history_length
+        ):
             raise ValueError(
-                "design_history must have shape "
-                f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
+                "y_history must match the design history batch and time dimensions."
             )
-
-        batch_shape = torch.Size(design_history.shape[:design_t_dim])
-        T = design_history.shape[design_t_dim]
-        if y_history.shape[: len(batch_shape)] != batch_shape:
-            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
-        if y_history.shape[len(batch_shape)] != T:
-            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
-
-        b_flat = prod(batch_shape) if batch_shape else 1
+        batch_size = prod(batch_shape) if batch_shape else 1
         dim_y = prod(y_history.shape[len(batch_shape) + 1 :])
-        y_flat = y_history.reshape(b_flat, T, dim_y)
-        design_flat = design_history.reshape(b_flat, T, self.dim_design)
-
+        y_flat = y_history.reshape(batch_size, history_length, dim_y)
+        design_flat = design_history.reshape(
+            batch_size, history_length, self.dim_design
+        )
         low = self.design_low.to(device=device, dtype=dtype)
         high = self.design_high.to(device=device, dtype=dtype)
-        denom = torch.where(high > low, high - low, torch.ones_like(high))
-        design_flat = (design_flat - low) / denom
+        denominator = torch.where(high > low, high - low, torch.ones_like(high))
+        design_flat = (design_flat - low) / denominator
         if self._normalize_outcomes:
             y_flat = affine_rescale(
                 y_flat, self.outcome_low, self.outcome_high, 0.0, 1.0
             )
-
         mask_flat = None
         if mask is not None:
             mask = torch.as_tensor(mask, device=device)
-            expected_mask_shape = (*batch_shape, T)
-            if mask.shape != expected_mask_shape:
-                raise ValueError(
-                    "mask must have shape "
-                    f"[*batch_shape, T]; expected {expected_mask_shape}."
-                )
-            mask_flat = mask.reshape(b_flat, T)
-
+            expected_shape = (*batch_shape, history_length)
+            if mask.shape != expected_shape:
+                raise ValueError(f"mask must have shape {expected_shape}.")
+            mask_flat = mask.reshape(batch_size, history_length)
         return batch_shape, y_flat, design_flat, mask_flat
 
     def _distributions(self, logits: Tensor) -> list[Categorical]:
-        if logits.shape != (logits.shape[0], sum(self.nvec)):
+        if logits.ndim != 2 or logits.shape[1] != sum(self.nvec):
             raise ValueError(
-                "actor logits must have shape "
-                f"[batch, {sum(self.nvec)}]; got {tuple(logits.shape)}."
+                f"actor logits must have shape [batch, {sum(self.nvec)}]; "
+                f"got {tuple(logits.shape)}."
             )
         return [
             Categorical(logits=component_logits)
@@ -536,7 +523,6 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         normalize_design_history: bool = False,
         design_history_bounds: tuple[float, float] = (-1.0, 1.0),
         outcome_bounds: tuple[float, float] | None = None,
-        physical_action_log_prob: bool = True,
     ):
         """Initializes the policy network.
 
@@ -550,9 +536,6 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             design_history_bounds: Target bounds for normalized design history.
             outcome_bounds: Optional lower and upper bounds used to affinely map
                 physical outcome histories to [0, 1] before actor evaluation.
-            physical_action_log_prob: Include the affine design-space scale in
-                returned log probabilities. Disable this when reproducing SAC
-                implementations that optimize entropy in normalized action space.
         """
         super().__init__()
 
@@ -566,7 +549,6 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             or self.design_history_bounds[0] >= self.design_history_bounds[1]
         ):
             raise ValueError("design_history_bounds must satisfy low < high.")
-        self.physical_action_log_prob = bool(physical_action_log_prob)
         self.actor = actor or DeepSetGaussianActor(
             dim_design=self.dim_design,
         )
@@ -577,8 +559,8 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             raise ValueError(
                 "TanhGaussianPolicyNet requires finite-width design bounds."
             )
-        self.register_buffer("action_scale", (high - low) / 2.0)
-        self.register_buffer("action_bias", (high + low) / 2.0)
+        self.register_buffer("design_scale", (high - low) / 2.0)
+        self.register_buffer("design_bias", (high + low) / 2.0)
 
         if outcome_bounds is None:
             outcome_low = torch.tensor(float("nan"), dtype=low.dtype)
@@ -594,19 +576,19 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         self._normalize_outcomes = outcome_bounds is not None
 
     def forward(self, y_history, design_history) -> Tensor:
-        """Returns the deterministic bounded action for a history.
+        """Returns the deterministic bounded design for a history.
 
         Args:
             y_history: Outcome history with shape
-                [*batch_shape, T, *event_shape_y].
+                ``[*batch_shape, T, *event_shape_y]``.
             design_history: Design history with shape
-                [*batch_shape, T, *event_shape_design].
+                ``[*batch_shape, T, *event_shape_design]``.
 
         Returns:
             Deterministic bounded design with shape
-            [*batch_shape, *event_shape_design].
+            ``[*batch_shape, *event_shape_design]``.
         """
-        return self.sample(y_history, design_history, deterministic=True).action
+        return self.sample(y_history, design_history, deterministic=True).design
 
     def sample(
         self,
@@ -615,23 +597,27 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         *,
         mask: Tensor | None = None,
         deterministic: bool = False,
+        reparameterize_policy: bool = True,
     ) -> PolicySample:
-        """Samples a tanh-squashed action and computes its log probability.
+        """Samples a tanh-squashed design and computes its log probability.
 
         Args:
             y_history: Outcome history with shape
-                [*batch_shape, T, *event_shape_y].
+                ``[*batch_shape, T, *event_shape_y]``.
             design_history: Design history with shape
-                [*batch_shape, T, *event_shape_design].
+                ``[*batch_shape, T, *event_shape_design]``.
             mask: Optional boolean tensor for padded histories with shape
-                [*batch_shape, T].
+                ``[*batch_shape, T]``.
             deterministic: If True, use the Gaussian mean instead of drawing a
                 reparameterized sample.
+            reparameterize_policy: If False, sample without the
+                reparameterization trick so the log probability's gradient is
+                the pure score.
 
         Returns:
-            A policy sample containing a bounded action, its corrected log
-            probability, the deterministic bounded action, and the unsquashed
-            Gaussian action.
+            A policy sample containing a bounded design, its corrected log
+            probability, the deterministic bounded design, and the unsquashed
+            Gaussian design.
         """
         batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
             y_history,
@@ -644,6 +630,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             design_flat,
             mask_flat,
             deterministic=deterministic,
+            reparameterize_policy=reparameterize_policy,
         )
 
     def _sample_prepared(
@@ -654,6 +641,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         mask_flat: Tensor | None,
         *,
         deterministic: bool,
+        reparameterize_policy: bool = True,
     ) -> PolicySample:
         """Samples from validated histories in actor coordinates."""
         mean, log_std = self.actor(y_flat, design_flat, mask=mask_flat)
@@ -662,47 +650,47 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         normal = Normal(mean, std)
 
         if deterministic:
-            raw_action = mean
+            raw_design = mean
+        elif reparameterize_policy:
+            raw_design = normal.rsample()
         else:
-            raw_action = normal.rsample()
+            raw_design = normal.sample()
 
-        action_flat = self._squash(raw_action)
+        squashed_flat = self._squash(raw_design)
         deterministic_flat = self._squash(mean)
-        log_prob = (normal.log_prob(raw_action) - self._squash_log_det(raw_action)).sum(
+        log_prob = (normal.log_prob(raw_design) - self._squash_log_det(raw_design)).sum(
             dim=-1
         )
 
-        action = action_flat.reshape(*batch_shape, *self.event_shape_design)
-        deterministic_action = deterministic_flat.reshape(
+        design = squashed_flat.reshape(*batch_shape, *self.event_shape_design)
+        deterministic_design = deterministic_flat.reshape(
             *batch_shape, *self.event_shape_design
         )
-        raw_action = raw_action.reshape(*batch_shape, *self.event_shape_design)
+        raw_design = raw_design.reshape(*batch_shape, *self.event_shape_design)
 
         return PolicySample(
-            action=action,
+            design=design,
             log_prob=log_prob.reshape(batch_shape),
-            deterministic_action=deterministic_action,
-            raw_action=raw_action,
+            deterministic_design=deterministic_design,
+            raw_design=raw_design,
         )
 
-    def _squash(self, raw_action: Tensor) -> Tensor:
+    def _squash(self, raw_design: Tensor) -> Tensor:
         """Maps an unsquashed Gaussian sample into the bounded design box."""
-        return self.action_bias + self.action_scale * torch.tanh(raw_action)
+        return self.design_bias + self.design_scale * torch.tanh(raw_design)
 
-    def _squash_log_det(self, raw_action: Tensor) -> Tensor:
+    def _squash_log_det(self, raw_design: Tensor) -> Tensor:
         """Log absolute determinant of the tanh-then-affine squash, per dimension.
 
         Computed in the forward direction to stay finite for any finite
-        ``raw_action``; inverting via ``atanh`` would diverge once ``tanh``
+        ``raw_design``; inverting via ``atanh`` would diverge once ``tanh``
         saturates to +/-1 in floating point.
         """
         # log(1 - tanh(x)^2) in a numerically stable form (SpinUp / Denis Yarats).
         tanh_log_det = 2.0 * (
-            log(2.0) - raw_action - nn.functional.softplus(-2.0 * raw_action)
+            log(2.0) - raw_design - nn.functional.softplus(-2.0 * raw_design)
         )
-        if self.physical_action_log_prob:
-            return torch.log(self.action_scale) + tanh_log_det
-        return tanh_log_det
+        return torch.log(self.design_scale) + tanh_log_det
 
     def _prepare_histories(
         self,
@@ -715,18 +703,18 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
 
         Args:
             y_history: Outcome history with shape
-                [*batch_shape, T, *event_shape_y].
+                ``[*batch_shape, T, *event_shape_y]``.
             design_history: Design history with shape
-                [*batch_shape, T, *event_shape_design].
+                ``[*batch_shape, T, *event_shape_design]``.
             mask: Optional boolean tensor for padded histories with shape
-                [*batch_shape, T].
+                ``[*batch_shape, T]``.
 
         Returns:
             The original batch shape, flattened outcome history, flattened design
             history, and optional flattened mask.
         """
-        dtype = self.action_scale.dtype
-        device = self.action_scale.device
+        dtype = self.design_scale.dtype
+        device = self.design_scale.device
         y_history = torch.as_tensor(y_history, device=device, dtype=dtype)
         design_history = torch.as_tensor(design_history, device=device, dtype=dtype)
 
@@ -751,11 +739,11 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
             )
 
-        if y_history.ndim < len(batch_shape) + 2:
-            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
-        if y_history.shape[: len(batch_shape)] != batch_shape:
-            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
-        if y_history.shape[len(batch_shape)] != T:
+        if (
+            y_history.ndim < len(batch_shape) + 2
+            or y_history.shape[: len(batch_shape)] != batch_shape
+            or y_history.shape[len(batch_shape)] != T
+        ):
             raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
 
         b_flat = prod(batch_shape) if batch_shape else 1
@@ -767,8 +755,8 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             target_low, target_high = self.design_history_bounds
             design_flat = affine_rescale(
                 design_flat,
-                self.action_bias - self.action_scale,
-                self.action_bias + self.action_scale,
+                self.design_bias - self.design_scale,
+                self.design_bias + self.design_scale,
                 target_low,
                 target_high,
             )

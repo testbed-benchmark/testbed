@@ -76,12 +76,12 @@ class SequentialDesigner:
         Propose -> Sample -> Update posterior.
 
         Args:
-            theta_true: [*event_shape_theta] or [1, *event_shape_theta]
+            theta_true: ``[*event_shape_theta]`` or ``[1, *event_shape_theta]``.
                         Leading size-1 batch dims are tolerated and stripped.
 
         Returns:
-            y_history:      [T, *event_shape_y]
-            design_history: [T, *event_shape_design]
+            y_history: ``[T, *event_shape_y]``
+            design_history: ``[T, *event_shape_design]``
         """
         n_event_dims = len(self.task.event_shape_theta)
         n_batch_dims = theta_true.ndim - n_event_dims

@@ -31,11 +31,28 @@ You can install an editable version of the current library as follows:
 ```
 git clone git@github.com:testbed-benchmark/testbed.git
 cd testbed
+pip install -e .[full,dev,docs]
+```
+
+## Installing with conda
+
+If you prefer conda, create and activate an environment first, then install the package into it with pip:
+
+```
+conda create -n testbed python=3.11
+conda activate testbed
+git clone git@github.com:testbed-benchmark/testbed.git
+cd testbed
 pip install -e .[full,dev]
 ```
+
 To do a basic check of your installation, run `pytest`. A more extensive test can be run with `python tests/location_finding.py` (nb: this second test requires the `stepdad` [package](https://github.com/marcelhedman/stepdad/tree/master)).
 
 Check out `notebooks/introduction.ipynb` for a quick overview of the package.
+
+## Docs
+
+You can launch a local version of the documentation with `cd docs && make livehtml`. 
 
 # Contributing
 
@@ -50,13 +67,3 @@ ruff format
 pytest
 ```
 4. Submit a pull request with a clear description of your changes and why they are needed.
-
-# Recipes
-
-> [!WARNING]
-> These recipes are only meant as a guideline/illustration -- you will likely need to modify them for your use case.
-
-While TestBED is intended as a general-purpose library, we have also included some basic recipes to help get you started:
-- `recipes/train.py` provides a basic `Trainer` class for end-to-end training of policy networks
-- `recipes/location_finding/train_lf.py` is an example script that glues together all of the TestBED components
-- `recipes/location_finding/config.yaml` gives some suggested default hyperparameters which will yield a strong baseline

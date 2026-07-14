@@ -5,7 +5,7 @@ from torch import Tensor
 
 
 def squeeze_history(tensor: Tensor, event_shape: torch.Size) -> Tensor:
-    """Ensures tensor has shape [T, *event_shape] by squeezing any leading size-1 dims.
+    """Ensures tensor has shape ``[T, *event_shape]`` by squeezing leading size-1 dims.
 
     Raises ValueError if extra leading dims exist but are not all size 1 (batched
     multi-run data that can't be unambiguously reduced to a single sequence).
@@ -37,7 +37,8 @@ def broadcast_and_flatten(*tensors_with_event_shapes):
     computation genuinely requires it (i.e. a 0-stride expanded dim must be
     reshaped into a different total shape).
 
-    Returns: (list of [b_flat, *event_shape_i] tensors, broadcast batch_shape)
+    Returns:
+        Pair of ``[b_flat, *event_shape_i]`` tensors and broadcast batch shape.
     """
     batch_shapes = []
     for t, e in tensors_with_event_shapes:
@@ -102,3 +103,34 @@ def normal_log_prob(y, loc, scale):
 def normal_cdf(x):
     """Computes the standard normal CDF."""
     return 0.5 * (1 + torch.erf(x / 2**0.5))
+
+
+def sort_by_norm(x: Tensor) -> Tensor:
+    """Sorts tensors according to their norm.
+
+    Args:
+        x: Either
+            ``[batch, n_objects, *object_shape]``, or
+            ``[n_objects, *object_shape]``.
+
+    Returns:
+        Tensor with the same shape as ``x``, with objects sorted by
+        increasing Euclidean norm.
+    """
+    unbatched = x.ndim == 2
+
+    if unbatched:
+        x = x.unsqueeze(0)
+
+    b, n = x.shape[:2]
+
+    norms = torch.linalg.norm(x.flatten(start_dim=2), dim=-1)
+    idx = torch.argsort(norms, dim=1)
+
+    idx = idx.view(b, n, *([1] * (x.ndim - 2))).expand_as(x)
+    x = torch.gather(x, dim=1, index=idx)
+
+    if unbatched:
+        x = x.squeeze(0)
+
+    return x

@@ -16,9 +16,9 @@ def test_destructive_lot_inspection_wraps_with_bed_env():
 
     obs, info = env.reset(seed=123)
     assert info["t"] == 0
-    assert obs["designs"].shape == (4, 2)
-    assert obs["outcomes"].shape == (4, 2, 1)
-    assert env.theta_all.shape == (4, 3, 3)
+    assert obs.designs.shape == (4, 2)
+    assert obs.outcomes.shape == (4, 2, 1)
+    assert env.reward_fn.theta_all.shape == (4, 3, 3)
 
     obs, reward, terminated, truncated, info = env.step(torch.tensor([0, 1, 2, 1]))
 
@@ -28,4 +28,4 @@ def test_destructive_lot_inspection_wraps_with_bed_env():
     assert info["design"].dtype == torch.long
     assert torch.all(info["outcome"] == info["outcome"].round())
     assert torch.all((info["outcome"] >= 0.0) & (info["outcome"] <= task.batch_size))
-    assert obs["mask"].sum().item() == 4
+    assert obs.mask.sum().item() == 4

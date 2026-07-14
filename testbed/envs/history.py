@@ -13,10 +13,10 @@ class History:
     Attributes:
         max_episode_length: Maximum number of timesteps in the history.
         designs: Padded designs with shape
-            [*batch_shape, max_episode_length, *event_shape_design].
+            ``[*batch_shape, max_episode_length, *event_shape_design]``.
         outcomes: Padded outcomes with shape
-            [*batch_shape, max_episode_length, *event_shape_y].
-        mask: Boolean mask with shape [*batch_shape, max_episode_length].
+            ``[*batch_shape, max_episode_length, *event_shape_y]``.
+        mask: Boolean mask with shape ``[*batch_shape, max_episode_length]``.
     """
 
     max_episode_length: int
@@ -94,11 +94,6 @@ class History:
         self.designs.narrow(batch_ndim, t, 1).copy_(design.unsqueeze(batch_ndim))
         self.outcomes.narrow(batch_ndim, t, 1).copy_(outcome.unsqueeze(batch_ndim))
         self.mask[..., t] = True
-
-    def append(self, design: Tensor, outcome: Tensor) -> "History":
-        """Writes the next unfilled timestep and returns self."""
-        self.write(self.T, design, outcome)
-        return self
 
     def prefix(self, t: int) -> "History":
         """Returns a padded history containing only the first t slots."""

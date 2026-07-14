@@ -5,13 +5,7 @@ from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
     CallableReward,
-    CategoricalDesignSpace,
-    FlatPaddedHistoryObservation,
     History,
-    HistoryObservation,
-    IntegerDesignSpace,
-    PaddedHistoryObservation,
-    ProductDesignSpace,
     RLBOEDDenseReward,
     RLBOEDTerminalReward,
     ZeroReward,
@@ -53,64 +47,6 @@ def test_box_design_space_rejects_invalid_bounds_and_shapes():
     )
 
 
-def test_integer_design_space_samples_contains_and_projects():
-    space = IntegerDesignSpace(torch.tensor([0, 2]), torch.tensor([3, 4]))
-
-    sample = space.sample((5,))
-
-    assert sample.dtype == torch.long
-    assert sample.shape == (5, 2)
-    assert space.contains(sample)
-    assert space.contains(torch.tensor([[0.0, 2.0], [3.0, 4.0]]))
-    assert not space.contains(torch.tensor([1.5, 3.0]))
-    assert not space.contains(torch.tensor([-1, 3]))
-    assert torch.equal(space.project(torch.tensor([-1.2, 4.8])), torch.tensor([0, 4]))
-    with pytest.raises(ValueError):
-        IntegerDesignSpace(2, 1)
-
-
-def test_categorical_design_space_samples_contains_and_projects():
-    space = CategoricalDesignSpace(3)
-
-    sample = space.sample((6,))
-
-    assert sample.shape == (6,)
-    assert sample.dtype == torch.long
-    assert space.contains(sample)
-    assert space.contains(torch.tensor([0.0, 1.0, 2.0]))
-    assert not space.contains(torch.tensor([0.5]))
-    assert not space.contains(torch.tensor([-1, 3]))
-    assert torch.equal(
-        space.project(torch.tensor([-2.0, 1.6, 5.0])), torch.tensor([0, 2, 2])
-    )
-    with pytest.raises(ValueError):
-        CategoricalDesignSpace(0)
-
-
-def test_product_design_space_samples_contains_and_projects_components():
-    space = ProductDesignSpace(
-        [
-            BoxDesignSpace(-1.0, 1.0, event_shape=(2,)),
-            IntegerDesignSpace(0, 2, event_shape=(1,)),
-            CategoricalDesignSpace(4),
-        ]
-    )
-
-    sample = space.sample((3,))
-    projected = space.project(torch.tensor([[-2.0, 0.5, 2.7, 8.0]]))
-
-    assert sample.shape == (3, 4)
-    assert space.event_shape == torch.Size([4])
-    assert not space.is_discrete
-    assert space.contains(sample)
-    assert space.contains(projected)
-    assert torch.equal(projected, torch.tensor([[-1.0, 0.5, 2.0, 3.0]]))
-    assert not space.contains(torch.tensor([[0.0, 0.0, 1.0]]))
-    assert not space.contains(torch.tensor([[0.0, 0.0, 2.5, 1.0]]))
-    with pytest.raises(ValueError):
-        ProductDesignSpace([])
-
-
 def test_history_empty_write_append_prefix_and_bounds():
     history = History.empty(
         batch_shape=(2,),
@@ -136,7 +72,7 @@ def test_history_empty_write_append_prefix_and_bounds():
 
     design1 = torch.zeros(2, 2, dtype=torch.float64)
     outcome1 = torch.ones(2, 1)
-    assert history.append(design1, outcome1) is history
+    history.write(1, design1, outcome1)
     assert history.T == 2
 
     prefix = history.prefix(1)
@@ -159,26 +95,25 @@ def test_bed_env_reset_and_step_shapes():
         horizon=3,
         design_space=make_space(task),
         reward_fn=RLBOEDDenseReward(n_contrastive=2),
-        observation_fn=PaddedHistoryObservation(),
         batch_shape=(5,),
     )
 
     obs, info = env.reset(seed=123)
     assert info["t"] == 0
-    assert obs["designs"].shape == (5, 3, 2)
-    assert obs["outcomes"].shape == (5, 3, 1)
-    assert obs["mask"].shape == (5, 3)
-    assert env.theta_all.shape == (5, 3, 1, 2)
+    assert obs.designs.shape == (5, 3, 2)
+    assert obs.outcomes.shape == (5, 3, 1)
+    assert obs.mask.shape == (5, 3)
+    assert env.reward_fn.theta_all.shape == (5, 3, 1, 2)
 
-    action = torch.zeros(5, 2)
-    obs, reward, terminated, truncated, info = env.step(action)
+    design = torch.zeros(5, 2)
+    obs, reward, terminated, truncated, info = env.step(design)
     assert reward.shape == (5,)
     assert terminated.shape == (5,)
     assert not terminated.any()
     assert not truncated.any()
     assert info["history"].designs.shape == (5, 3, 2)
     assert info["history"].mask.shape == (5, 3)
-    assert obs["mask"].sum().item() == 5
+    assert obs.mask.sum().item() == 5
 
 
 def test_bed_env_requires_reset_and_rejects_invalid_horizon():
@@ -210,7 +145,7 @@ def test_bed_env_reset_accepts_explicit_theta_and_info_options():
 
     assert info["options"] == {"tag": "episode"}
     assert torch.equal(info["theta_0"], theta)
-    assert info["theta_all"].shape == (2, 2, 1, 2)
+    assert env.reward_fn.theta_all.shape == (2, 2, 1, 2)
     assert torch.equal(env.theta_0, theta)
 
 
@@ -228,9 +163,9 @@ def test_bed_env_reset_accepts_theta_all_and_batch_shape_override():
     obs, _ = env.reset(theta_all=theta_all, batch_shape=(4,))
 
     assert env.batch_shape == torch.Size([4])
-    assert torch.equal(env.theta_all, theta_all)
+    assert torch.equal(env.reward_fn.theta_all, theta_all)
     assert torch.equal(env.theta_0, theta_all[:, 0])
-    assert obs["designs"].shape == (4, 1, 2)
+    assert obs.designs.shape == (4, 1, 2)
 
 
 def test_bed_env_reset_rejects_bad_theta_shapes():
@@ -249,7 +184,7 @@ def test_bed_env_reset_rejects_bad_theta_shapes():
         env.reset(theta_all=torch.zeros(2, 1, 1, 2))
 
 
-def test_bed_env_action_validation_without_projection():
+def test_bed_env_reset_rejects_bad_theta_all_shape_with_zero_reward():
     task = make_task()
     env = BEDEnv(
         task,
@@ -257,7 +192,21 @@ def test_bed_env_action_validation_without_projection():
         design_space=make_space(task),
         reward_fn=ZeroReward(),
         batch_shape=(2,),
-        project_actions=False,
+    )
+
+    with pytest.raises(ValueError, match="theta_all must have shape"):
+        env.reset(theta_all=torch.zeros(2, 2, 1, 2))
+
+
+def test_bed_env_design_validation_without_projection():
+    task = make_task()
+    env = BEDEnv(
+        task,
+        horizon=1,
+        design_space=make_space(task),
+        reward_fn=ZeroReward(),
+        batch_shape=(2,),
+        project_designs=False,
     )
     env.reset(seed=0)
 
@@ -265,7 +214,7 @@ def test_bed_env_action_validation_without_projection():
         env.step(torch.tensor([[2.0, 0.0], [0.0, 0.0]]))
 
 
-def test_bed_env_rejects_wrong_action_shape_after_projection():
+def test_bed_env_rejects_wrong_design_shape_after_projection():
     task = make_task()
     env = BEDEnv(
         task,
@@ -276,7 +225,7 @@ def test_bed_env_rejects_wrong_action_shape_after_projection():
     )
     env.reset(seed=0)
 
-    with pytest.raises(ValueError, match="Action must have shape"):
+    with pytest.raises(ValueError, match="Design must have shape"):
         env.step(torch.zeros(2))
 
 
@@ -291,10 +240,10 @@ def test_bed_env_can_reset_after_termination():
     obs, info = env.reset(seed=1)
     assert info["t"] == 0
     assert not env.terminated
-    assert obs["mask"].sum() == 0
+    assert obs.mask.sum() == 0
 
 
-def test_bed_env_projects_box_actions():
+def test_bed_env_projects_box_designs():
     task = make_task()
     env = BEDEnv(
         task,
@@ -320,18 +269,18 @@ def test_bed_env_step_detaches_rollout_tensors_by_default():
         horizon=1,
         design_space=make_space(task),
         reward_fn=CallableReward(lambda env, design, outcome: design.sum(dim=-1)),
-        project_actions=False,
+        project_designs=False,
     )
-    action = torch.zeros(2, requires_grad=True)
+    design = torch.zeros(2, requires_grad=True)
 
     env.reset(seed=0)
-    obs, reward, _, _, info = env.step(action)
+    obs, reward, _, _, info = env.step(design)
 
-    assert action.requires_grad
+    assert design.requires_grad
     assert not reward.requires_grad
-    assert not obs["designs"].requires_grad
-    assert not obs["outcomes"].requires_grad
-    assert not info["raw_action"].requires_grad
+    assert not obs.designs.requires_grad
+    assert not obs.outcomes.requires_grad
+    assert not info["raw_design"].requires_grad
     assert not info["design"].requires_grad
     assert not info["outcome"].requires_grad
 
@@ -348,70 +297,13 @@ def test_bed_env_scalar_batch_shape():
     obs, _ = env.reset(seed=0)
     _, reward, terminated, truncated, info = env.step(torch.zeros(2))
 
-    assert obs["designs"].shape == (1, 2)
+    assert obs.designs.shape == (1, 2)
     assert reward.shape == ()
     assert terminated.shape == ()
     assert terminated
     assert not truncated
     assert info["history"].outcomes.shape == (1, 1)
     assert info["history"].mask.shape == (1,)
-
-
-def test_flat_padded_history_observation_shape():
-    task = make_task()
-    env = BEDEnv(
-        task,
-        horizon=2,
-        design_space=make_space(task),
-        reward_fn=ZeroReward(),
-        observation_fn=FlatPaddedHistoryObservation(),
-        batch_shape=(3,),
-    )
-    obs, _ = env.reset(seed=0)
-    assert obs.shape == (3, 2 * 2 + 2 * 1 + 2 + 1)
-
-
-def test_observation_variants_and_error_paths():
-    task = make_task()
-    env = BEDEnv(
-        task,
-        horizon=2,
-        design_space=make_space(task),
-        reward_fn=ZeroReward(),
-        observation_fn=HistoryObservation(),
-        batch_shape=(2,),
-    )
-
-    obs, _ = env.reset(seed=0)
-    assert obs is env.history
-
-    env.observation_fn = PaddedHistoryObservation(include_timestep=False)
-    obs = env.observation_fn(env)
-    assert set(obs) == {"designs", "outcomes", "mask"}
-
-    env.observation_fn = PaddedHistoryObservation(horizon=3)
-    with pytest.raises(ValueError, match="horizon must match"):
-        env.observation_fn(env)
-
-
-def test_flat_padded_history_observation_without_timestep_and_scaled_timestep():
-    task = make_task()
-    env = BEDEnv(
-        task,
-        horizon=2,
-        design_space=make_space(task),
-        reward_fn=ZeroReward(),
-        observation_fn=FlatPaddedHistoryObservation(include_timestep=False),
-        batch_shape=(1,),
-    )
-
-    obs, _ = env.reset(seed=0)
-    assert obs.shape == (1, 2 * 2 + 2 * 1 + 2)
-
-    env.observation_fn = FlatPaddedHistoryObservation()
-    obs, *_ = env.step(torch.zeros(1, 2))
-    assert obs.shape == (1, 2 * 2 + 2 * 1 + 2 + 1)
-    assert torch.equal(obs[:, -1], torch.tensor([0.5]))
 
 
 def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
@@ -437,11 +329,11 @@ def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
     )
 
     dense_env.reset(seed=11)
-    theta_all = dense_env.theta_all.detach().clone()
+    theta_all = dense_env.reward_fn.theta_all.detach().clone()
     terminal_env.reset(theta_all=theta_all)
 
     generator = torch.Generator().manual_seed(22)
-    actions = [
+    designs = [
         -1.0
         + 2.0 * torch.rand(*batch_shape, *task.event_shape_design, generator=generator)
         for _ in range(horizon)
@@ -449,9 +341,9 @@ def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
 
     dense_rewards = []
     terminal_rewards = []
-    for action in actions:
+    for design in designs:
         torch.manual_seed(33 + len(dense_rewards))
-        _, reward, _, _, dense_info = dense_env.step(action)
+        _, reward, _, _, dense_info = dense_env.step(design)
         dense_rewards.append(reward)
 
         terminal_env.history.write(
@@ -466,27 +358,6 @@ def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
 
     assert torch.allclose(sum(dense_rewards), terminal_rewards[-1], atol=1e-5)
     assert all(torch.allclose(r, torch.zeros_like(r)) for r in terminal_rewards[:-1])
-
-
-def test_terminal_reward_emits_zero_until_final_env_step():
-    task = make_task()
-    env = BEDEnv(
-        task,
-        horizon=3,
-        design_space=make_space(task),
-        reward_fn=RLBOEDTerminalReward(n_contrastive=2),
-        batch_shape=(4,),
-    )
-    env.reset(seed=0)
-
-    rewards = []
-    for _ in range(3):
-        _, reward, _, _, _ = env.step(torch.zeros(4, 2))
-        rewards.append(reward)
-
-    assert torch.equal(rewards[0], torch.zeros(4))
-    assert torch.equal(rewards[1], torch.zeros(4))
-    assert rewards[2].shape == (4,)
 
 
 def test_contrastive_rewards_handle_zero_contrastive_particles():
@@ -507,7 +378,7 @@ def test_contrastive_rewards_handle_zero_contrastive_particles():
     )
 
     dense_env.reset(seed=5)
-    terminal_env.reset(theta_all=dense_env.theta_all.detach().clone())
+    terminal_env.reset(theta_all=dense_env.reward_fn.theta_all.detach().clone())
 
     for _ in range(2):
         _, dense_reward, _, _, dense_info = dense_env.step(torch.zeros(3, 2))

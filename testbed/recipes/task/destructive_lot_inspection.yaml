@@ -1,0 +1,3 @@
+_target_: testbed.tasks.DestructiveLotInspection
+num_zones: 16
+batch_size: 4

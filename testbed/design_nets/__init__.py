@@ -1,7 +1,7 @@
 """Policy network exports."""
 
 from .base_design_net import DesignNet
-from .dad_net import DADNet, DADNet_v2, DADNet_v3
+from .deterministic import AttentivePolicyNet, DeepSetPolicyNet, MLPPolicyNet
 from .modules import affine_rescale
 from .rlboed import RLBOEDQNetwork, RLBOEDValueNetwork
 from .stochastic import (
@@ -14,4 +14,4 @@ from .stochastic import (
     StochasticDesignNet,
     TanhGaussianPolicyNet,
 )
-from .transformer import AttentiveDAD, AttentiveDAD_v2, AttentiveDAD_v3, AttentiveDAD_v4
+from .task_specific.htd import HTDDesignNetWrapper

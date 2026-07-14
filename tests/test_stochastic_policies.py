@@ -2,23 +2,12 @@ import pytest
 import torch
 
 from testbed.design_nets import (
-    CategoricalPolicyActor,
-    CategoricalPolicyNet,
     DeepSetGaussianActor,
     GaussianPolicyActor,
     PolicySample,
-    StochasticDesignNet,
     TanhGaussianPolicyNet,
 )
-from testbed.envs import (
-    BEDEnv,
-    BoxDesignSpace,
-    CategoricalDesignSpace,
-    IntegerDesignSpace,
-    PaddedHistoryObservation,
-    ProductDesignSpace,
-    ZeroReward,
-)
+from testbed.envs import BEDEnv, BoxDesignSpace, ZeroReward
 from testbed.tasks import LocationFinding
 
 
@@ -31,8 +20,8 @@ def make_policy():
 
 
 def set_actor_output(policy, mean, log_std):
-    mean = torch.as_tensor(mean, dtype=policy.action_scale.dtype)
-    log_std = torch.as_tensor(log_std, dtype=policy.action_scale.dtype)
+    mean = torch.as_tensor(mean, dtype=policy.design_scale.dtype)
+    log_std = torch.as_tensor(log_std, dtype=policy.design_scale.dtype)
     actor = policy.actor
     scaled_log_std = (
         2 * (log_std - actor.log_std_min) / (actor.log_std_max - actor.log_std_min) - 1
@@ -78,22 +67,7 @@ class BadShapeGaussianActor(GaussianPolicyActor):
         )
 
 
-class RecordingCategoricalActor(CategoricalPolicyActor):
-    def __init__(self, logits):
-        super().__init__()
-        self.register_buffer("logits", torch.as_tensor(logits, dtype=torch.float32))
-        self.y_history = None
-        self.design_history = None
-        self.mask = None
-
-    def forward(self, y_history, design_history, *, mask=None):
-        self.y_history = y_history.detach().clone()
-        self.design_history = design_history.detach().clone()
-        self.mask = mask
-        return self.logits.expand(design_history.shape[0], -1)
-
-
-def test_tanh_gaussian_policy_samples_bounded_actions_and_log_probs():
+def test_tanh_gaussian_policy_samples_bounded_designs_and_log_probs():
     policy = make_policy()
     y_history = torch.randn(5, 3, 1)
     design_history = torch.randn(5, 3, 2)
@@ -101,53 +75,28 @@ def test_tanh_gaussian_policy_samples_bounded_actions_and_log_probs():
     sample = policy.sample(y_history, design_history)
 
     assert isinstance(sample, PolicySample)
-    assert sample.action.shape == (5, 2)
-    assert sample.deterministic_action.shape == (5, 2)
-    assert sample.raw_action.shape == (5, 2)
+    assert sample.design.shape == (5, 2)
+    assert sample.deterministic_design.shape == (5, 2)
+    assert sample.raw_design.shape == (5, 2)
     assert sample.log_prob.shape == (5,)
-    assert make_space().contains(sample.action)
-    assert make_space().contains(sample.deterministic_action)
+    assert make_space().contains(sample.design)
+    assert make_space().contains(sample.deterministic_design)
 
 
-def test_tanh_gaussian_policy_can_report_normalized_action_log_prob():
-    actor = RecordingGaussianActor(mean=[0.2, -0.1], log_std=[-0.5, -0.25])
-    space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
-    physical_policy = TanhGaussianPolicyNet(
-        space,
-        actor=actor,
-        physical_action_log_prob=True,
-    )
-    normalized_policy = TanhGaussianPolicyNet(
-        space,
-        actor=actor,
-        physical_action_log_prob=False,
-    )
-    y_history = torch.empty(1, 0, 1)
-    design_history = torch.empty(1, 0, 2)
+def test_tanh_gaussian_policy_non_reparameterized_sample():
+    torch.manual_seed(0)
+    policy = make_policy()
+    y_history = torch.randn(5, 3, 1)
+    design_history = torch.randn(5, 3, 2)
 
-    physical = physical_policy.sample(
-        y_history,
-        design_history,
-        deterministic=True,
-    )
-    normalized = normalized_policy.sample(
-        y_history,
-        design_history,
-        deterministic=True,
-    )
+    sample = policy.sample(y_history, design_history, reparameterize_policy=False)
 
-    torch.testing.assert_close(physical.action, normalized.action)
-    expected_difference = torch.full_like(
-        physical.log_prob,
-        -2 * torch.log(torch.tensor(4.0)).item(),
-    )
-    torch.testing.assert_close(
-        physical.log_prob - normalized.log_prob,
-        expected_difference,
-    )
+    # Design carries no graph; the log prob is the pure score.
+    assert not sample.design.requires_grad
+    assert sample.log_prob.requires_grad
 
 
-def test_tanh_gaussian_policy_raw_actions_are_approximately_normal():
+def test_tanh_gaussian_policy_raw_designs_are_approximately_normal():
     torch.manual_seed(0)
     policy = make_policy()
     mean = torch.tensor([0.25, -0.5])
@@ -156,10 +105,10 @@ def test_tanh_gaussian_policy_raw_actions_are_approximately_normal():
 
     n = 20_000
     sample = policy.sample(torch.empty(n, 0, 1), torch.empty(n, 0, 2))
-    z = (sample.raw_action - mean) / log_std.exp()
+    z = (sample.raw_design - mean) / log_std.exp()
 
-    assert torch.allclose(sample.raw_action.mean(dim=0), mean, atol=0.03)
-    assert torch.allclose(sample.raw_action.std(dim=0), log_std.exp(), atol=0.03)
+    assert torch.allclose(sample.raw_design.mean(dim=0), mean, atol=0.03)
+    assert torch.allclose(sample.raw_design.std(dim=0), log_std.exp(), atol=0.03)
     assert torch.allclose(
         (z.abs() < 1).float().mean(dim=0),
         torch.full((2,), 0.6827),
@@ -172,7 +121,7 @@ def test_tanh_gaussian_policy_raw_actions_are_approximately_normal():
     )
 
 
-def test_tanh_gaussian_policy_transformed_actions_follow_box_scale_and_shift():
+def test_tanh_gaussian_policy_transformed_designs_follow_box_scale_and_shift():
     torch.manual_seed(0)
     space = BoxDesignSpace(torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]))
     policy = TanhGaussianPolicyNet(space)
@@ -182,19 +131,19 @@ def test_tanh_gaussian_policy_transformed_actions_follow_box_scale_and_shift():
 
     n = 2_000
     sample = policy.sample(torch.empty(n, 0, 1), torch.empty(n, 0, 2))
-    expected_deterministic_action = torch.tanh(mean) * torch.tensor(
+    expected_deterministic_design = torch.tanh(mean) * torch.tensor(
         [3.0, 2.0]
     ) + torch.tensor([1.0, 5.0])
 
-    assert torch.allclose(policy.action_scale, torch.tensor([3.0, 2.0]))
-    assert torch.allclose(policy.action_bias, torch.tensor([1.0, 5.0]))
-    assert space.contains(sample.action)
-    assert space.contains(sample.deterministic_action)
-    assert torch.all(sample.action > space.low)
-    assert torch.all(sample.action < space.high)
+    assert torch.allclose(policy.design_scale, torch.tensor([3.0, 2.0]))
+    assert torch.allclose(policy.design_bias, torch.tensor([1.0, 5.0]))
+    assert space.contains(sample.design)
+    assert space.contains(sample.deterministic_design)
+    assert torch.all(sample.design > space.low)
+    assert torch.all(sample.design < space.high)
     assert torch.allclose(
-        sample.deterministic_action[0],
-        expected_deterministic_action,
+        sample.deterministic_design[0],
+        expected_deterministic_design,
     )
 
 
@@ -221,19 +170,19 @@ def test_tanh_gaussian_policy_normalizes_physical_histories_for_actor():
     )
 
 
-def test_tanh_gaussian_forward_returns_deterministic_action():
+def test_tanh_gaussian_forward_returns_deterministic_design():
     policy = make_policy()
     y_history = torch.randn(4, 2, 1)
     design_history = torch.randn(4, 2, 2)
 
     sample = policy.sample(y_history, design_history, deterministic=True)
-    forward_action = policy(y_history, design_history)
+    forward_design = policy(y_history, design_history)
 
-    assert torch.equal(forward_action, sample.action)
-    assert torch.equal(forward_action, sample.deterministic_action)
+    assert torch.equal(forward_design, sample.design)
+    assert torch.equal(forward_design, sample.deterministic_design)
 
 
-def test_tanh_gaussian_policy_accepts_padded_observation_dict():
+def test_tanh_gaussian_policy_accepts_history_observation():
     task = LocationFinding(n_sources=1, dim_theta=2, noise_scale=0.2)
     space = make_space()
     env = BEDEnv(
@@ -241,7 +190,6 @@ def test_tanh_gaussian_policy_accepts_padded_observation_dict():
         horizon=3,
         design_space=space,
         reward_fn=ZeroReward(),
-        observation_fn=PaddedHistoryObservation(),
         batch_shape=(4,),
     )
     policy = TanhGaussianPolicyNet(space)
@@ -251,26 +199,26 @@ def test_tanh_gaussian_policy_accepts_padded_observation_dict():
     obs, *_ = env.step(torch.zeros(4, 2))
     sample1 = policy.sample_from_observation(obs)
 
-    assert sample0.action.shape == (4, 2)
+    assert sample0.design.shape == (4, 2)
     assert sample0.log_prob.shape == (4,)
-    assert sample1.action.shape == (4, 2)
+    assert sample1.design.shape == (4, 2)
     assert sample1.log_prob.shape == (4,)
-    assert space.contains(sample0.action)
-    assert space.contains(sample1.action)
+    assert space.contains(sample0.design)
+    assert space.contains(sample1.design)
 
 
 def test_tanh_gaussian_policy_supports_scalar_and_multidim_batch_shapes():
     policy = make_policy()
 
     scalar_sample = policy.sample(torch.empty(0, 1), torch.empty(0, 2))
-    assert scalar_sample.action.shape == (2,)
+    assert scalar_sample.design.shape == (2,)
     assert scalar_sample.log_prob.shape == ()
 
     y_history = torch.randn(2, 3, 4, 1)
     design_history = torch.randn(2, 3, 4, 2)
     sample = policy.sample(y_history, design_history)
 
-    assert sample.action.shape == (2, 3, 2)
+    assert sample.design.shape == (2, 3, 2)
     assert sample.log_prob.shape == (2, 3)
 
 
@@ -280,7 +228,7 @@ def test_tanh_gaussian_policy_allows_gradient_flow():
     design_history = torch.randn(6, 2, 2)
 
     sample = policy.sample(y_history, design_history)
-    loss = sample.action.sum() + sample.log_prob.sum()
+    loss = sample.design.sum() + sample.log_prob.sum()
     loss.backward()
 
     grads = [p.grad for p in policy.parameters() if p.requires_grad]
@@ -316,10 +264,10 @@ def test_tanh_gaussian_policy_accepts_custom_actor_and_forwards_mask():
     assert actor.design_shape == (6, 4, 2)
     assert actor.mask.shape == (6, 4)
     assert torch.equal(actor.mask, mask.reshape(6, 4))
-    assert sample.action.shape == (2, 3, 2)
+    assert sample.design.shape == (2, 3, 2)
     assert sample.log_prob.shape == (2, 3)
     assert torch.allclose(
-        sample.action[0, 0],
+        sample.design[0, 0],
         torch.tanh(torch.tensor([0.2, -0.1])),
     )
 
@@ -340,58 +288,3 @@ def test_tanh_gaussian_policy_rejects_invalid_actor_output_shape():
 
     with pytest.raises(ValueError, match="actor mean"):
         policy.sample(torch.randn(2, 3, 1), torch.randn(2, 3, 2))
-
-
-def test_stochastic_design_net_sample_is_abstract_extension():
-    assert issubclass(TanhGaussianPolicyNet, StochasticDesignNet)
-
-
-def test_categorical_policy_samples_scalar_designs_and_log_probs():
-    actor = RecordingCategoricalActor([0.0, 1.0, 2.0])
-    policy = CategoricalPolicyNet(
-        CategoricalDesignSpace(3),
-        actor=actor,
-        outcome_bounds=(0.0, 1.0),
-    )
-    y_history = torch.tensor([[[0.0], [1.0]]])
-    design_history = torch.tensor([[0, 2]])
-
-    sample = policy.sample(y_history, design_history, deterministic=True)
-
-    assert sample.action.shape == (1,)
-    assert sample.action.dtype == torch.long
-    assert sample.action.item() == 2
-    assert CategoricalDesignSpace(3).contains(sample.action)
-    expected = torch.log_softmax(torch.tensor([0.0, 1.0, 2.0]), dim=-1)[2]
-    torch.testing.assert_close(sample.log_prob, expected.unsqueeze(0))
-    torch.testing.assert_close(actor.y_history, torch.tensor([[[0.0], [1.0]]]))
-    torch.testing.assert_close(actor.design_history, torch.tensor([[[0.0], [1.0]]]))
-
-
-def test_categorical_policy_factorizes_integer_and_product_spaces():
-    space = ProductDesignSpace(
-        [
-            IntegerDesignSpace(-1, 1, event_shape=(1,)),
-            CategoricalDesignSpace(2),
-        ]
-    )
-    actor = RecordingCategoricalActor([0.0, 0.0, 3.0, 2.0, 0.0])
-    policy = CategoricalPolicyNet(space, actor=actor, outcome_bounds=(0.0, 1.0))
-
-    sample = policy.sample(
-        torch.empty(4, 0, 1),
-        torch.empty(4, 0, 2),
-        deterministic=True,
-    )
-    log_prob, entropy = policy.evaluate_actions(
-        torch.empty(4, 0, 1),
-        torch.empty(4, 0, 2),
-        sample.action,
-    )
-
-    assert sample.action.shape == (4, 2)
-    assert torch.equal(sample.action[0], torch.tensor([1, 0]))
-    assert space.contains(sample.action)
-    torch.testing.assert_close(log_prob, sample.log_prob)
-    assert entropy.shape == (4,)
-    assert torch.all(entropy > 0)

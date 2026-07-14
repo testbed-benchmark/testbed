@@ -1,0 +1,32 @@
+defaults:
+  - system: default
+  - task: destructive_lot_inspection
+  - wandb: default
+  - hydra_run: default
+  - _self_
+seed: 373693
+torch_deterministic: true
+T: 10
+reward:
+  n_contrastive: 1_000
+  outcome_low: 0.0
+  outcome_high: 4.0
+ppo:
+  num_training_iterations: 2_001
+  num_envs: 100
+  gamma: 0.99
+  learning_rate: 0.00025
+  actor_learning_rate: null
+  critic_learning_rate: null
+  anneal_lr: true
+  gae_lambda: 0.95
+  num_minibatches: 4
+  update_epochs: 4
+  norm_adv: true
+  clip_coef: 0.2
+  clip_vloss: true
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: null
+  log_frequency: 100

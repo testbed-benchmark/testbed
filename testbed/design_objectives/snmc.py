@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..tasks.base_task import Task
-from .base_objective import Objective
+from testbed.design_objectives.base_objective import Objective
+from testbed.tasks.base import Task
 
 
 class SNMC(Objective):
@@ -16,7 +16,7 @@ class SNMC(Objective):
 
     def __init__(self, task: Task, n_contrastive: int):
         """Initializes the SNMC estimator."""
-        super().__init__(task)
+        super().__init__(task, is_expected_log_ratio=True)
         self.n_contrastive = int(n_contrastive)
 
     def __call__(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
@@ -26,10 +26,19 @@ class SNMC(Objective):
     def estimate_gain(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
         """Estimates gain from batched histories.
 
-        y_history:      [b, T, *event_shape_y]
-        design_history: [b, T, *event_shape_design]
-        theta_0:        [b, *event_shape_theta]
+        y_history: ``[b, T, *event_shape_y]``
+        design_history: ``[b, T, *event_shape_design]``
+        theta_0: ``[b, *event_shape_theta]``
         returns:        scalar EIG estimate.
+        """
+        return self.per_sample_gain(y_history, design_history, theta_0).mean()
+
+    def per_sample_gain(
+        self, y_history: Tensor, design_history: Tensor, theta_0: Tensor
+    ):
+        """Estimates per-sample gains from batched histories.
+
+        Shapes as in estimate_gain; returns: [b] per-sample SNMC estimates.
         """
         task = self.task
         n_contrastive = self.n_contrastive
@@ -65,7 +74,7 @@ class SNMC(Objective):
             n_contrastive
         )  # [b,]
 
-        return torch.mean(logp_joint - logp_marginal)
+        return logp_joint - logp_marginal
 
 
 class NMC(Objective):
@@ -89,7 +98,7 @@ class NMC(Objective):
     def estimate_gain(self, design: Tensor):
         """Estimates gain for one fixed design.
 
-        design: [*event_shape_design]  (leading size-1 batch dims are tolerated and stripped)
+        design: ``[*event_shape_design]``. Leading size-1 batch dims are tolerated and stripped.
         returns: scalar NMC estimate.
         """
         n_event_dims = len(self.task.event_shape_design)

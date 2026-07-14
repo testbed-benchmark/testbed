@@ -1,42 +1,61 @@
-"""RL-BOED training with SAC for boxes and PPO for discrete spaces."""
+"""RL-BOED training with Soft Actor-Critic."""
 
 from __future__ import annotations
 
+import copy
 import random
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from math import ceil, log
 
+import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from tensordict import TensorDict
+from omegaconf import OmegaConf
 
+from testbed.core.setup import setup
 from testbed.design_nets import (
-    CategoricalPolicyNet,
     DeepSetGaussianActor,
     RLBOEDQNetwork,
-    RLBOEDValueNetwork,
     TanhGaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner
 from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
-    PaddedHistoryObservation,
-    RewardFunction,
-    RLBOEDDenseReward,
 )
-from testbed.envs.design_spaces import (
-    CategoricalDesignSpace,
-    DesignSpace,
-    IntegerDesignSpace,
-    ProductDesignSpace,
-)
-from testbed.tasks.base_task import Task
+from testbed.envs.design_spaces import DesignSpace
+from testbed.envs.history import History
+from testbed.envs.rewards import RLBOEDDenseReward
+from testbed.tasks.base import Task
 
-from .base import FitResult
+
+@dataclass
+class ReplayBatch:
+    """A batch of transitions sampled from the replay buffer."""
+
+    observation: dict[str, torch.Tensor]
+    next_observation: dict[str, torch.Tensor]
+    design: torch.Tensor
+    reward: torch.Tensor
+    done: torch.Tensor
+
+
+def _to_device(
+    batch: ReplayBatch, device: torch.device, *, non_blocking: bool = False
+) -> ReplayBatch:
+    def move(x: torch.Tensor) -> torch.Tensor:
+        return x.to(device, non_blocking=non_blocking)
+
+    return ReplayBatch(
+        observation={k: move(v) for k, v in batch.observation.items()},
+        next_observation={k: move(v) for k, v in batch.next_observation.items()},
+        design=move(batch.design),
+        reward=move(batch.reward),
+        done=move(batch.done),
+    )
 
 
 class _CompactEpisodeReplayBuffer:
@@ -85,7 +104,7 @@ class _CompactEpisodeReplayBuffer:
             *self.event_shape_y,
             device=self.device,
         )
-        self.actions = torch.zeros(
+        self.policy_designs = torch.zeros(
             self.capacity_episodes,
             self.horizon,
             *self.event_shape_design,
@@ -114,14 +133,14 @@ class _CompactEpisodeReplayBuffer:
         *,
         designs: torch.Tensor,
         outcomes: torch.Tensor,
-        actions: torch.Tensor,
+        policy_designs: torch.Tensor,
         rewards: torch.Tensor,
         dones: torch.Tensor,
     ) -> None:
         """Stores a batch of complete episodes."""
         designs = designs.detach().to(self.device)
         outcomes = outcomes.detach().to(self.device)
-        actions = actions.detach().to(self.device)
+        policy_designs = policy_designs.detach().to(self.device)
         rewards = rewards.detach().to(self.device)
         dones = dones.detach().to(self.device)
 
@@ -138,10 +157,10 @@ class _CompactEpisodeReplayBuffer:
                 f"outcomes must have shape {expected_outcomes}; "
                 f"got {tuple(outcomes.shape)}."
             )
-        if actions.shape != expected_designs:
+        if policy_designs.shape != expected_designs:
             raise ValueError(
-                f"actions must have shape {expected_designs}; "
-                f"got {tuple(actions.shape)}."
+                f"policy_designs must have shape {expected_designs}; "
+                f"got {tuple(policy_designs.shape)}."
             )
         if rewards.shape != (batch_size, self.horizon):
             raise ValueError(
@@ -153,18 +172,24 @@ class _CompactEpisodeReplayBuffer:
                 "dones must have shape "
                 f"{(batch_size, self.horizon)}; got {tuple(dones.shape)}."
             )
+        if batch_size > self.capacity_episodes:
+            raise ValueError(
+                f"batch_size ({batch_size}) exceeds buffer capacity ({self.capacity_episodes} episodes). "
+                "Increase buffer_size or reduce num_envs."
+            )
 
-        for episode_idx in range(batch_size):
-            slot = self._next_episode
-            self.designs[slot].copy_(designs[episode_idx])
-            self.outcomes[slot].copy_(outcomes[episode_idx])
-            self.actions[slot].copy_(actions[episode_idx])
-            self.rewards[slot].copy_(rewards[episode_idx])
-            self.dones[slot].copy_(dones[episode_idx])
-            self._next_episode = (self._next_episode + 1) % self.capacity_episodes
-            self._episodes_written += 1
+        slots = (
+            self._next_episode + torch.arange(batch_size, device=self.device)
+        ) % self.capacity_episodes
+        self.designs[slots] = designs
+        self.outcomes[slots] = outcomes
+        self.policy_designs[slots] = policy_designs
+        self.rewards[slots] = rewards
+        self.dones[slots] = dones
+        self._next_episode = (self._next_episode + batch_size) % self.capacity_episodes
+        self._episodes_written += batch_size
 
-    def sample(self) -> TensorDict:
+    def sample(self) -> ReplayBatch:
         """Samples transitions and reconstructs padded-history observations."""
         n_transitions = len(self)
         if n_transitions < self.batch_size:
@@ -177,30 +202,41 @@ class _CompactEpisodeReplayBuffer:
         timesteps = flat_indices.remainder(self.horizon)
         slots = episode_numbers.remainder(self.capacity_episodes)
 
-        observation = self._build_observation(slots, timesteps)
-        next_observation = self._build_observation(slots, timesteps + 1)
-        data = TensorDict(
-            {
-                "observation": observation,
-                "next_observation": next_observation,
-                "action": self.actions[slots, timesteps],
-                "reward": self.rewards[slots, timesteps],
-                "done": self.dones[slots, timesteps],
-            },
-            batch_size=[self.batch_size],
-            device=self.device,
+        episode_designs = self.designs[slots]
+        episode_outcomes = self.outcomes[slots]
+        observation = self._build_observation(
+            episode_designs, episode_outcomes, timesteps
+        )
+        next_observation = self._build_observation(
+            episode_designs, episode_outcomes, timesteps + 1
+        )
+        data = ReplayBatch(
+            observation=observation,
+            next_observation=next_observation,
+            design=self.policy_designs[slots, timesteps],
+            reward=self.rewards[slots, timesteps],
+            done=self.dones[slots, timesteps],
         )
         if self.pin_memory:
-            data = data.pin_memory()
+            data = ReplayBatch(
+                observation={k: v.pin_memory() for k, v in data.observation.items()},
+                next_observation={
+                    k: v.pin_memory() for k, v in data.next_observation.items()
+                },
+                design=data.design.pin_memory(),
+                reward=data.reward.pin_memory(),
+                done=data.done.pin_memory(),
+            )
         return data
 
     def _build_observation(
         self,
-        slots: torch.Tensor,
+        episode_designs: torch.Tensor,
+        episode_outcomes: torch.Tensor,
         history_lengths: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """Reconstructs padded observations for sampled episode prefixes."""
-        batch_size = slots.shape[0]
+        batch_size = episode_designs.shape[0]
         designs = torch.zeros(
             batch_size,
             self.horizon,
@@ -219,884 +255,694 @@ class _CompactEpisodeReplayBuffer:
             history_lengths.unsqueeze(1)
         )
         if mask.any():
-            designs[mask] = self.designs[slots][mask]
-            outcomes[mask] = self.outcomes[slots][mask]
+            designs[mask] = episode_designs[mask]
+            outcomes[mask] = episode_outcomes[mask]
         return {
             "designs": designs,
             "outcomes": outcomes,
             "mask": mask,
-            "t": history_lengths.to(dtype=torch.long),
         }
+
+
+def _resolve_buffer_device(buffer_device: str) -> torch.device:
+    """Returns the replay storage device requested by the config."""
+    requested = buffer_device.strip().lower()
+    try:
+        resolved = torch.device(requested)
+    except RuntimeError as error:
+        raise ValueError(
+            "buffer_device must be 'cpu', 'cuda', or 'cuda:<index>'."
+        ) from error
+
+    if resolved.type not in {"cpu", "cuda"}:
+        raise ValueError("buffer_device must be 'cpu', 'cuda', or 'cuda:<index>'.")
+    if resolved.type == "cuda":
+        if not torch.cuda.is_available():
+            raise ValueError("buffer_device='cuda' requires CUDA to be available.")
+        if resolved.index is not None and resolved.index >= torch.cuda.device_count():
+            raise ValueError(
+                f"buffer_device='{resolved}' is outside the available "
+                f"CUDA device count ({torch.cuda.device_count()})."
+            )
+    return resolved
+
+
+def _set_seed(seed: int, torch_deterministic: bool) -> None:
+    """Sets random seeds to match the reference script."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.backends.cudnn.deterministic = torch_deterministic
+
+
+def _soft_update(source: torch.nn.Module, target: torch.nn.Module, tau: float) -> None:
+    """Polyak-updates a target network toward a source network."""
+    for param, target_param in zip(source.parameters(), target.parameters()):
+        target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+
+
+def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
+    """Rejects unsupported tasks and invalid settings."""
+    sac = cfg.sac
+    positive_ints = {
+        "sac.num_training_iterations": sac.num_training_iterations,
+        "sac.num_envs": sac.num_envs,
+        "sac.buffer_size": sac.buffer_size,
+        "sac.batch_size": sac.batch_size,
+        "sac.gradient_steps_per_iteration": sac.gradient_steps_per_iteration,
+        "T": cfg.T,
+        "sac.log_frequency": sac.log_frequency,
+        "sac.policy_frequency": sac.policy_frequency,
+        "sac.target_network_frequency": sac.target_network_frequency,
+    }
+    for name, value in positive_ints.items():
+        if value <= 0:
+            raise ValueError(f"{name} must be positive.")
+    if cfg.reward.n_contrastive < 0:
+        raise ValueError("reward.n_contrastive must be non-negative.")
+    if sac.buffer_size < sac.learning_starts:
+        raise ValueError("sac.buffer_size must be at least sac.learning_starts.")
+    if cfg.reward.outcome_low >= cfg.reward.outcome_high:
+        raise ValueError("reward.outcome_low must be less than reward.outcome_high.")
+    if sac.alpha is not None and sac.alpha < 0:
+        raise ValueError("sac.alpha must be non-negative when fixed.")
+    if sac.initial_alpha <= 0:
+        raise ValueError("sac.initial_alpha must be positive.")
+    if sac.learning_starts < 0:
+        raise ValueError("sac.learning_starts must be non-negative.")
+    if sac.entropy_anneal_rate < 0:
+        raise ValueError("sac.entropy_anneal_rate must be non-negative.")
+    if sac.policy_init_std <= 0:
+        raise ValueError("sac.policy_init_std must be positive.")
+    if task.implicit_likelihood:
+        raise ValueError("RLBOED requires a task with an explicit likelihood.")
+    if not isinstance(design_space, BoxDesignSpace):
+        raise TypeError("This RLBOED SAC implementation requires a BoxDesignSpace.")
 
 
 @dataclass
-class RLBOEDConfig:
-    """RL-BOED training hyperparameters."""
-
-    outcome_low: float
-    outcome_high: float
-    seed: int = 373693
-    torch_deterministic: bool = True
-
-    n_contrastive: int = 100_000
-
-    num_training_iterations: int = 2_001
-    num_envs: int = 100
-    buffer_size: int = 10_000_000
-    buffer_device: str = "cpu"
-    gamma: float = 0.99
-    tau: float = 1e-3
-    batch_size: int = 4096
-    learning_starts: int = 100_000
-    gradient_steps_per_iteration: int = 64
-    policy_lr: float = 1e-4
-    q_lr: float = 3e-4
-    policy_init_std: float = 3**-0.5
-    policy_frequency: int = 1
-    target_network_frequency: int = 1
-    alpha: float | None = None
-    initial_alpha: float = 1.0
-    target_entropy: float | None = None
-    entropy_anneal_rate: float = 1 / 1.4e4
-
-    ppo_learning_rate: float = 2.5e-4
-    ppo_actor_learning_rate: float | None = None
-    ppo_critic_learning_rate: float | None = None
-    ppo_anneal_lr: bool = True
-    ppo_gae_lambda: float = 0.95
-    ppo_num_minibatches: int = 4
-    ppo_update_epochs: int = 4
-    ppo_norm_adv: bool = True
-    ppo_clip_coef: float = 0.2
-    ppo_clip_vloss: bool = True
-    ppo_ent_coef: float = 0.01
-    ppo_vf_coef: float = 0.5
-    ppo_max_grad_norm: float = 0.5
-    ppo_target_kl: float | None = None
-
-    log_frequency: int = 100
-    verbose: bool = True
+class _SACNetworks:
+    actor: TanhGaussianPolicyNet
+    qf1: RLBOEDQNetwork
+    qf2: RLBOEDQNetwork
+    qf1_target: RLBOEDQNetwork
+    qf2_target: RLBOEDQNetwork
+    q_optimizer: optim.Adam
+    actor_optimizer: optim.Adam
+    log_alpha: torch.Tensor
+    alpha_optimizer: optim.Adam | None
 
 
-class RLBOED:
-    """Trains a policy using RL-BOED's default or a supplied reward."""
+def make_networks(
+    task: Task,
+    design_space: DesignSpace,
+    cfg,
+    device: torch.device,
+) -> _SACNetworks:
+    """Builds the SAC actor, twin critics, target networks, optimizers, and alpha."""
+    sac = cfg.sac
+    design_low = design_space.low.to(device)
+    design_high = design_space.high.to(device)
+    dim_y = task.event_shape_y.numel()
+    dim_design = task.event_shape_design.numel()
 
-    def __init__(self, config: RLBOEDConfig):
-        """Initializes the method configuration."""
-        self.config = config
+    actor_module = DeepSetGaussianActor(
+        dim_y=dim_y,
+        dim_design=dim_design,
+        init_std=sac.policy_init_std,
+    )
+    actor = TanhGaussianPolicyNet(
+        design_space,
+        actor=actor_module,
+        normalize_design_history=True,
+        design_history_bounds=(0.0, 1.0),
+        outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
+    ).to(device)
 
-    def fit(
-        self,
-        task: Task,
-        *,
-        horizon: int,
-        design_space: DesignSpace,
-        reward_fn: RewardFunction | None = None,
-    ) -> FitResult:
-        """Trains and returns a deployable policy designer."""
-        self._validate(task, horizon, design_space)
-        self._set_seed()
+    critic_kwargs = {
+        "dim_y": dim_y,
+        "dim_design": dim_design,
+        "design_low": design_low,
+        "design_high": design_high,
+        "outcome_low": cfg.reward.outcome_low,
+        "outcome_high": cfg.reward.outcome_high,
+    }
+    qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
+    qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
+    qf1_target = copy.deepcopy(qf1)
+    qf2_target = copy.deepcopy(qf2)
 
-        if isinstance(design_space, BoxDesignSpace):
-            return self._fit_sac(
-                task,
-                horizon=horizon,
-                design_space=design_space,
-                reward_fn=reward_fn,
-            )
-        return self._fit_ppo(
-            task,
-            horizon=horizon,
-            design_space=design_space,
-            reward_fn=reward_fn,
+    q_optimizer = optim.Adam(
+        list(qf1.parameters()) + list(qf2.parameters()),
+        lr=sac.q_lr,
+    )
+    actor_optimizer = optim.Adam(actor.parameters(), lr=sac.policy_lr)
+
+    if sac.alpha is None:
+        log_alpha = torch.tensor(
+            log(sac.initial_alpha),
+            device=device,
+            requires_grad=True,
+        )
+        alpha_optimizer: optim.Adam | None = optim.Adam([log_alpha], lr=sac.policy_lr)
+    else:
+        fixed_log_alpha = float("-inf") if sac.alpha == 0 else log(sac.alpha)
+        log_alpha = torch.tensor(fixed_log_alpha, device=device)
+        alpha_optimizer = None
+
+    return _SACNetworks(
+        actor=actor,
+        qf1=qf1,
+        qf2=qf2,
+        qf1_target=qf1_target,
+        qf2_target=qf2_target,
+        q_optimizer=q_optimizer,
+        actor_optimizer=actor_optimizer,
+        log_alpha=log_alpha,
+        alpha_optimizer=alpha_optimizer,
+    )
+
+
+@dataclass
+class _EpisodeBatch:
+    designs: torch.Tensor
+    outcomes: torch.Tensor
+    policy_designs: torch.Tensor
+    rewards: torch.Tensor
+    dones: torch.Tensor
+    episodic_return: torch.Tensor
+
+
+def collect_episode_batch(
+    env: BEDEnv,
+    actor: TanhGaussianPolicyNet,
+    task: Task,
+    cfg,
+    *,
+    seed: int | None = None,
+) -> _EpisodeBatch:
+    """Rolls out the actor for one episode batch and returns the transitions."""
+    horizon = env.horizon
+    device = task.device
+
+    obs, _ = env.reset(seed=seed)
+
+    episodic_returns = torch.zeros(cfg.sac.num_envs, device=device)
+    episode_policy_designs = []
+    episode_rewards = []
+    episode_dones = []
+
+    for _ in range(horizon):
+        with torch.no_grad():
+            policy_sample = actor.sample_from_observation(obs)
+            designs = policy_sample.design
+        next_obs, rewards, terminations, truncations, _ = env.step(designs)
+
+        dones = terminations | truncations
+        episode_policy_designs.append(designs.detach())
+        episode_rewards.append(rewards.detach())
+        episode_dones.append(dones.detach())
+        episodic_returns += rewards
+        obs = next_obs
+
+    return _EpisodeBatch(
+        designs=env.history.designs,
+        outcomes=env.history.outcomes,
+        policy_designs=torch.stack(episode_policy_designs, dim=1),
+        rewards=torch.stack(episode_rewards, dim=1),
+        dones=torch.stack(episode_dones, dim=1),
+        episodic_return=episodic_returns.mean(),
+    )
+
+
+@dataclass
+class _SACLosses:
+    qf_loss: torch.Tensor
+    actor_loss: torch.Tensor | None
+    alpha_loss: torch.Tensor | None
+    optimization_step: int
+
+
+def sac_update(
+    replay_buffer: _CompactEpisodeReplayBuffer,
+    nets: _SACNetworks,
+    target_entropy: float,
+    device: torch.device,
+    horizon: int,
+    cfg,
+    optimization_step: int,
+) -> _SACLosses:
+    """Performs one SAC gradient step and returns the losses."""
+    data = _to_device(replay_buffer.sample(), device, non_blocking=True)
+    data_obs = History(
+        max_episode_length=horizon,
+        designs=data.observation["designs"],
+        outcomes=data.observation["outcomes"],
+        mask=data.observation["mask"],
+    )
+    data_next_obs = History(
+        max_episode_length=horizon,
+        designs=data.next_observation["designs"],
+        outcomes=data.next_observation["outcomes"],
+        mask=data.next_observation["mask"],
+    )
+    data_designs = data.design
+    data_rewards = data.reward
+    data_dones = data.done
+    alpha = nets.log_alpha.exp().detach()
+
+    with torch.no_grad():
+        next_policy_sample = nets.actor.sample_from_observation(data_next_obs)
+        next_designs = next_policy_sample.design
+        next_log_pi = next_policy_sample.log_prob.unsqueeze(-1)
+        qf1_next_target = nets.qf1_target(data_next_obs, next_designs)
+        qf2_next_target = nets.qf2_target(data_next_obs, next_designs)
+        min_qf_next_target = (
+            torch.min(qf1_next_target, qf2_next_target) - alpha * next_log_pi
+        )
+        next_q_value = data_rewards + (
+            1.0 - data_dones.float()
+        ) * cfg.sac.gamma * min_qf_next_target.view(-1)
+
+    qf1_a_values = nets.qf1(data_obs, data_designs).view(-1)
+    qf2_a_values = nets.qf2(data_obs, data_designs).view(-1)
+    qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
+    qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
+    qf_loss = qf1_loss + qf2_loss
+
+    nets.q_optimizer.zero_grad()
+    qf_loss.backward()
+    nets.q_optimizer.step()
+
+    actor_loss = None
+    alpha_loss = None
+
+    if optimization_step % cfg.sac.policy_frequency == 0:
+        policy_sample = nets.actor.sample_from_observation(data_obs)
+        pi = policy_sample.design
+        log_pi = policy_sample.log_prob.unsqueeze(-1)
+        min_qf_pi = torch.min(nets.qf1(data_obs, pi), nets.qf2(data_obs, pi))
+        actor_loss = (alpha * log_pi - min_qf_pi).mean()
+
+        nets.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        nets.actor_optimizer.step()
+
+        if nets.alpha_optimizer is not None:
+            alpha_loss = -(
+                nets.log_alpha.exp() * (log_pi.detach() + target_entropy)
+            ).mean()
+            nets.alpha_optimizer.zero_grad()
+            alpha_loss.backward()
+            nets.alpha_optimizer.step()
+
+    if optimization_step % cfg.sac.target_network_frequency == 0:
+        _soft_update(nets.qf1, nets.qf1_target, cfg.sac.tau)
+        _soft_update(nets.qf2, nets.qf2_target, cfg.sac.tau)
+
+    return _SACLosses(
+        qf_loss=qf_loss,
+        actor_loss=actor_loss,
+        alpha_loss=alpha_loss,
+        optimization_step=optimization_step + 1,
+    )
+
+
+# ============================================================================
+# Training class
+# ============================================================================
+
+
+class Trainer:
+    """Training class for RL-BOED (SAC) training."""
+
+    def __init__(self, task, designer, env, replay_buffer, nets, cfg, manager=None):
+        """Initializes the trainer."""
+        assert isinstance(designer, PolicyDesigner), (
+            "This Trainer assumes your designer is a PolicyDesigner object."
         )
 
-    def _fit_sac(
-        self,
-        task: Task,
-        *,
-        horizon: int,
-        design_space: BoxDesignSpace,
-        reward_fn: RewardFunction | None = None,
-    ) -> FitResult:
-        """Trains a continuous policy with SAC."""
-        cfg = self.config
-        device = task.device
-        buffer_device = self._resolve_buffer_device()
-        design_low = design_space.low.to(device)
-        design_high = design_space.high.to(device)
-        env = BEDEnv(
-            task,
-            horizon=horizon,
-            design_space=design_space,
-            reward_fn=(
-                reward_fn
-                if reward_fn is not None
-                else RLBOEDDenseReward(cfg.n_contrastive)
-            ),
-            observation_fn=PaddedHistoryObservation(horizon),
-            batch_shape=(cfg.num_envs,),
+        self.task = task
+        self.designer = designer
+        self.env = env
+        self.replay_buffer = replay_buffer
+        self.nets = nets
+        self.cfg = cfg
+        self.manager = manager
+
+        self.device = task.device
+        self.target_entropy = (
+            -float(task.event_shape_design.numel())
+            if cfg.sac.target_entropy is None
+            else float(cfg.sac.target_entropy)
         )
 
-        dim_y = task.event_shape_y.numel()
-        dim_design = task.event_shape_design.numel()
-        actor_module = DeepSetGaussianActor(
-            dim_y=dim_y,
-            dim_design=dim_design,
-            init_std=cfg.policy_init_std,
-        )
-        actor = TanhGaussianPolicyNet(
-            design_space,
-            actor=actor_module,
-            normalize_design_history=True,
-            design_history_bounds=(0.0, 1.0),
-            outcome_bounds=(cfg.outcome_low, cfg.outcome_high),
-            physical_action_log_prob=False,
-        ).to(device)
+        # logging / checkpointing
+        self.metrics: list[dict[str, float]] = []
+        self.best_metric = -torch.inf
 
-        critic_kwargs = {
-            "dim_y": dim_y,
-            "dim_design": dim_design,
-            "design_low": design_low,
-            "design_high": design_high,
-            "outcome_low": cfg.outcome_low,
-            "outcome_high": cfg.outcome_high,
-        }
-        qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf1_target = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf2_target = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf1_target.load_state_dict(qf1.state_dict())
-        qf2_target.load_state_dict(qf2.state_dict())
+        # training counters
+        self.optimization_step = 0
+        self.env_steps = 0
+        self.completed_episodes = 0
+        self._first_collect = True
+        self._start_time = time.time()
 
-        q_optimizer = optim.Adam(
-            list(qf1.parameters()) + list(qf2.parameters()),
-            lr=cfg.q_lr,
-        )
-        actor_optimizer = optim.Adam(actor.parameters(), lr=cfg.policy_lr)
-        if cfg.alpha is None:
-            log_alpha = torch.tensor(
-                log(cfg.initial_alpha),
-                device=device,
-                requires_grad=True,
-            )
-            alpha_optimizer = optim.Adam([log_alpha], lr=cfg.policy_lr)
-        else:
-            fixed_log_alpha = float("-inf") if cfg.alpha == 0 else log(cfg.alpha)
-            log_alpha = torch.tensor(fixed_log_alpha, device=device)
-            alpha_optimizer = None
-        target_entropy = (
-            -float(dim_design)
-            if cfg.target_entropy is None
-            else float(cfg.target_entropy)
-        )
+        # most recent losses, surfaced in the periodic log
+        self._qf_loss = torch.tensor(float("nan"))
+        self._actor_loss = torch.tensor(float("nan"))
+        self._alpha_loss = torch.tensor(float("nan"))
 
-        replay_buffer = _CompactEpisodeReplayBuffer(
-            buffer_size=cfg.buffer_size,
-            batch_size=cfg.batch_size,
-            horizon=horizon,
-            event_shape_design=task.event_shape_design,
-            event_shape_y=task.event_shape_y,
-            device=buffer_device,
-            pin_memory=device.type == "cuda" and buffer_device.type == "cpu",
-        )
+    def train(self):
+        """Full training loop."""
+        self.designer.policy_net.train()
+        self._start_time = time.time()
 
-        metrics: list[dict[str, float]] = []
-        start_time = time.time()
-        completed_episodes = 0
-        env_steps = 0
-        optimization_step = 0
-        actor_loss = torch.tensor(float("nan"))
-        alpha_loss = torch.tensor(float("nan"))
-        qf_loss = torch.tensor(float("nan"))
+        for step in range(self.cfg.sac.num_training_iterations):
+            metrics = self.train_step()
+            metrics["step"] = step
+            self.metrics.append(metrics)
 
-        transitions_per_episode_batch = cfg.num_envs * horizon
-        for training_iteration in range(cfg.num_training_iterations):
-            episode_batches = 1
-            if len(replay_buffer) < cfg.learning_starts:
-                episode_batches = ceil(
-                    (cfg.learning_starts - len(replay_buffer))
-                    / transitions_per_episode_batch
-                )
+            if self.manager and self.manager.metric_logger:
+                self.manager.metric_logger.log(metrics)
 
-            iteration_returns = []
-            for episode_batch in range(episode_batches):
-                seed = (
-                    cfg.seed if training_iteration == 0 and episode_batch == 0 else None
-                )
-                obs, _ = env.reset(seed=seed)
-                episodic_returns = torch.zeros(cfg.num_envs, device=device)
-                episode_actions = []
-                episode_rewards = []
-                episode_dones = []
+            # evaluation
+            if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
+                eval_metrics = self.evaluate()
+                eval_metrics["step"] = step
+                self.metrics.append(eval_metrics)
 
-                for _ in range(horizon):
-                    with torch.no_grad():
-                        policy_sample = actor.sample_from_observation(obs)
-                        designs = policy_sample.action
-                    next_obs, rewards, terminations, truncations, _ = env.step(designs)
-                    dones = terminations | truncations
-                    episode_actions.append(designs.detach())
-                    episode_rewards.append(rewards.detach())
-                    episode_dones.append(dones.detach())
-                    episodic_returns += rewards
-                    env_steps += cfg.num_envs
-                    obs = next_obs
+                if self.manager:
+                    self.manager.event_logger.info(
+                        f"[Eval @ step {step}/{self.cfg.sac.num_training_iterations}]: "
+                        f"spce={eval_metrics['eval/spce']:.4f} "
+                        f"± {eval_metrics['eval/spce_se']:.4f}"
+                    )
+                    if self.manager.metric_logger is not None:
+                        self.manager.metric_logger.log(eval_metrics)
 
-                replay_buffer.extend_episode_batch(
-                    designs=env.history.designs,
-                    outcomes=env.history.outcomes,
-                    actions=torch.stack(episode_actions, dim=1),
-                    rewards=torch.stack(episode_rewards, dim=1),
-                    dones=torch.stack(episode_dones, dim=1),
-                )
-                completed_episodes += cfg.num_envs
-                iteration_returns.append(episodic_returns.mean())
+            # periodic loss logging
+            if step % self.cfg.sac.log_frequency == 0:
+                step_metrics = self._loss_metrics(step)
+                self.metrics.append(step_metrics)
 
-            episode_metrics = {
-                "step": float(training_iteration),
-                "env_steps": float(env_steps),
-                "episodes": float(completed_episodes),
-                "episodic_return": torch.stack(iteration_returns).mean().item(),
-            }
-            metrics.append(episode_metrics)
-
-            if (
-                len(replay_buffer) >= cfg.learning_starts
-                and len(replay_buffer) >= cfg.batch_size
-            ):
-                for _ in range(cfg.gradient_steps_per_iteration):
-                    data = replay_buffer.sample().to(device, non_blocking=True)
-                    data_obs = data["observation"]
-                    data_next_obs = data["next_observation"]
-                    data_actions = data["action"]
-                    data_rewards = data["reward"]
-                    data_dones = data["done"]
-                    alpha = log_alpha.exp().detach()
-
-                    with torch.no_grad():
-                        next_policy_sample = actor.sample_from_observation(
-                            data_next_obs
-                        )
-                        next_actions = next_policy_sample.action
-                        next_log_pi = next_policy_sample.log_prob.unsqueeze(-1)
-                        qf1_next_target = qf1_target(data_next_obs, next_actions)
-                        qf2_next_target = qf2_target(data_next_obs, next_actions)
-                        min_qf_next_target = (
-                            torch.min(qf1_next_target, qf2_next_target)
-                            - alpha * next_log_pi
-                        )
-                        next_q_value = data_rewards + (
-                            1.0 - data_dones.float()
-                        ) * cfg.gamma * min_qf_next_target.view(-1)
-
-                    qf1_a_values = qf1(data_obs, data_actions).view(-1)
-                    qf2_a_values = qf2(data_obs, data_actions).view(-1)
-                    qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
-                    qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
-                    qf_loss = qf1_loss + qf2_loss
-
-                    q_optimizer.zero_grad()
-                    qf_loss.backward()
-                    q_optimizer.step()
-
-                    if optimization_step % cfg.policy_frequency == 0:
-                        policy_sample = actor.sample_from_observation(data_obs)
-                        pi = policy_sample.action
-                        log_pi = policy_sample.log_prob.unsqueeze(-1)
-                        min_qf_pi = torch.min(
-                            qf1(data_obs, pi),
-                            qf2(data_obs, pi),
-                        )
-                        actor_loss = (alpha * log_pi - min_qf_pi).mean()
-
-                        actor_optimizer.zero_grad()
-                        actor_loss.backward()
-                        actor_optimizer.step()
-
-                        if alpha_optimizer is not None:
-                            alpha_loss = -(
-                                log_alpha.exp() * (log_pi.detach() + target_entropy)
-                            ).mean()
-                            alpha_optimizer.zero_grad()
-                            alpha_loss.backward()
-                            alpha_optimizer.step()
-
-                    if optimization_step % cfg.target_network_frequency == 0:
-                        self._soft_update(qf1, qf1_target)
-                        self._soft_update(qf2, qf2_target)
-                    optimization_step += 1
-
-            if cfg.alpha is None:
-                target_entropy -= cfg.entropy_anneal_rate
-
-            if training_iteration % cfg.log_frequency == 0:
-                alpha = log_alpha.exp().item()
-                step_metrics = {
-                    "step": float(training_iteration),
-                    "env_steps": float(env_steps),
-                    "sps": float(int(env_steps / (time.time() - start_time))),
-                    "qf_loss": qf_loss.item() / 2.0,
-                    "actor_loss": actor_loss.item(),
-                    "alpha_loss": alpha_loss.item(),
-                    "alpha": alpha,
-                    "target_entropy": target_entropy,
-                }
-                metrics.append(step_metrics)
-                if cfg.verbose:
-                    print(
-                        f"iteration={training_iteration}, "
-                        f"env_steps={env_steps}, "
-                        f"return={episode_metrics['episodic_return']:.4f}, "
+                if self.manager and self.manager.metric_logger:
+                    self.manager.metric_logger.log(step_metrics)
+                if self.manager:
+                    self.manager.event_logger.info(
+                        f"iteration={step}, env_steps={self.env_steps}, "
+                        f"return={metrics['episodic_return']:.4f}, "
                         f"qf_loss={step_metrics['qf_loss']:.4f}, "
                         f"actor_loss={step_metrics['actor_loss']:.4f}, "
-                        f"alpha={alpha:.4f}"
+                        f"alpha={step_metrics['alpha']:.4f}"
                     )
 
-        actor.eval()
-        designer = PolicyDesigner(task, horizon, actor, deterministic=False)
-        checkpoint = {
-            "config": asdict(cfg),
-            "horizon": horizon,
-            "design_low": design_low.detach().cpu(),
-            "design_high": design_high.detach().cpu(),
-            "outcome_low": torch.as_tensor(cfg.outcome_low),
-            "outcome_high": torch.as_tensor(cfg.outcome_high),
-            # The trained actor is the deployable designer, so its weights are
-            # stored under both keys: "designer" for inference-only loading and
-            # "actor" for resuming SAC training alongside the critic/optimizers.
-            "designer": actor.state_dict(),
-            "actor": actor.state_dict(),
-            "qf1": qf1.state_dict(),
-            "qf2": qf2.state_dict(),
-            "qf1_target": qf1_target.state_dict(),
-            "qf2_target": qf2_target.state_dict(),
-            "actor_optimizer": actor_optimizer.state_dict(),
-            "q_optimizer": q_optimizer.state_dict(),
-            "alpha": log_alpha.exp().detach().cpu(),
-            "log_alpha": log_alpha.detach().cpu(),
-            "alpha_optimizer": (
-                None if alpha_optimizer is None else alpha_optimizer.state_dict()
-            ),
-            "target_entropy": target_entropy,
-            "optimization_step": optimization_step,
-            "env_steps": env_steps,
-            "training_iterations": cfg.num_training_iterations,
-            "global_step": cfg.num_training_iterations,
-        }
-        return FitResult(
-            designer=designer,
-            metrics=metrics,
-            checkpoint=checkpoint,
-        )
+            self._maybe_save_best(step, metrics)
 
-    def _fit_ppo(
-        self,
-        task: Task,
-        *,
-        horizon: int,
-        design_space: DesignSpace,
-        reward_fn: RewardFunction | None = None,
-    ) -> FitResult:
-        """Trains a discrete policy with PPO."""
-        cfg = self.config
-        device = task.device
-        env = BEDEnv(
-            task,
-            horizon=horizon,
-            design_space=design_space,
-            reward_fn=(
-                reward_fn
-                if reward_fn is not None
-                else RLBOEDDenseReward(cfg.n_contrastive)
-            ),
-            observation_fn=PaddedHistoryObservation(horizon),
-            batch_shape=(cfg.num_envs,),
-        )
+        if self.manager is not None:
+            save_path = self.manager.path("final_step.pt")
+            torch.save(self.build_checkpoint(step=step), save_path)
+            if self.manager.metric_logger is not None:
+                self.manager.metric_logger.close()
 
-        dim_y = task.event_shape_y.numel()
-        policy = self._make_ppo_policy(
-            task,
-            design_space,
-        ).to(device)
-        value_net = RLBOEDValueNetwork(
-            dim_y=dim_y,
-            dim_design=task.event_shape_design.numel(),
-            design_low=policy.design_low,
-            design_high=policy.design_high,
-            outcome_low=cfg.outcome_low,
-            outcome_high=cfg.outcome_high,
-        ).to(device)
-        actor_parameters = list(policy.parameters())
-        critic_parameters = list(value_net.parameters())
-        trainable_parameters = actor_parameters + critic_parameters
-        separate_optimizers = (
-            cfg.ppo_actor_learning_rate is not None
-            or cfg.ppo_critic_learning_rate is not None
-        )
-        if separate_optimizers:
-            actor_optimizer = optim.Adam(
-                actor_parameters,
-                lr=cfg.ppo_actor_learning_rate or cfg.ppo_learning_rate,
-                eps=1e-5,
-            )
-            critic_optimizer = optim.Adam(
-                critic_parameters,
-                lr=cfg.ppo_critic_learning_rate or cfg.ppo_learning_rate,
-                eps=1e-5,
-            )
-            optimizer = None
-        else:
-            optimizer = optim.Adam(
-                trainable_parameters,
-                lr=cfg.ppo_learning_rate,
-                eps=1e-5,
-            )
-            actor_optimizer = None
-            critic_optimizer = None
+    def train_step(self):
+        """Takes a single training iteration (collect + gradient steps)."""
+        cfg = self.cfg
+        sac = cfg.sac
+        horizon = self.env.horizon
+        transitions_per_episode_batch = sac.num_envs * horizon
 
-        batch_size = cfg.num_envs * horizon
-        minibatch_size = batch_size // cfg.ppo_num_minibatches
-        metrics: list[dict[str, float]] = []
-        start_time = time.time()
-        env_steps = 0
-        completed_episodes = 0
-        value_loss = torch.tensor(float("nan"))
-        policy_loss = torch.tensor(float("nan"))
-        entropy_loss = torch.tensor(float("nan"))
-        old_approx_kl = torch.tensor(float("nan"))
-        approx_kl = torch.tensor(float("nan"))
-        clipfrac = float("nan")
-        explained_var = float("nan")
-        actor_grad_norm = float("nan")
-        critic_grad_norm = float("nan")
-
-        for training_iteration in range(cfg.num_training_iterations):
-            if cfg.ppo_anneal_lr:
-                frac = 1.0 - training_iteration / cfg.num_training_iterations
-                if separate_optimizers:
-                    actor_optimizer.param_groups[0]["lr"] = frac * (
-                        cfg.ppo_actor_learning_rate or cfg.ppo_learning_rate
-                    )
-                    critic_optimizer.param_groups[0]["lr"] = frac * (
-                        cfg.ppo_critic_learning_rate or cfg.ppo_learning_rate
-                    )
-                else:
-                    optimizer.param_groups[0]["lr"] = frac * cfg.ppo_learning_rate
-
-            obs, _ = env.reset(seed=cfg.seed if training_iteration == 0 else None)
-            next_done = torch.zeros(cfg.num_envs, device=device)
-            rollout_obs = []
-            actions = []
-            logprobs = []
-            rewards = torch.zeros(horizon, cfg.num_envs, device=device)
-            dones = torch.zeros(horizon, cfg.num_envs, device=device)
-            values = torch.zeros(horizon, cfg.num_envs, device=device)
-            episodic_returns = torch.zeros(cfg.num_envs, device=device)
-
-            for step in range(horizon):
-                rollout_obs.append(self._clone_observation(obs))
-                dones[step] = next_done
-                with torch.no_grad():
-                    sample = policy.sample_from_observation(obs)
-                    value = value_net(obs).flatten()
-                actions.append(sample.action.detach())
-                logprobs.append(sample.log_prob.detach())
-                values[step] = value
-
-                obs, reward, terminations, truncations, _ = env.step(sample.action)
-                next_done = (terminations | truncations).float()
-                rewards[step] = reward
-                episodic_returns += reward
-                env_steps += cfg.num_envs
-
-            with torch.no_grad():
-                next_value = value_net(obs).flatten()
-                advantages = torch.zeros_like(rewards)
-                lastgaelam = 0
-                for step in reversed(range(horizon)):
-                    if step == horizon - 1:
-                        nextnonterminal = 1.0 - next_done
-                        nextvalues = next_value
-                    else:
-                        nextnonterminal = 1.0 - dones[step + 1]
-                        nextvalues = values[step + 1]
-                    delta = (
-                        rewards[step]
-                        + cfg.gamma * nextvalues * nextnonterminal
-                        - values[step]
-                    )
-                    advantages[step] = lastgaelam = (
-                        delta
-                        + cfg.gamma
-                        * cfg.ppo_gae_lambda
-                        * nextnonterminal
-                        * lastgaelam
-                    )
-                returns = advantages + values
-
-            b_obs = self._flatten_rollout_observations(rollout_obs)
-            b_actions = torch.stack(actions).reshape(
-                batch_size,
-                *task.event_shape_design,
-            )
-            b_logprobs = torch.stack(logprobs).reshape(-1)
-            b_advantages = advantages.reshape(-1)
-            b_returns = returns.reshape(-1)
-            b_values = values.reshape(-1)
-
-            b_inds = np.arange(batch_size)
-            clipfracs = []
-            for _ in range(cfg.ppo_update_epochs):
-                np.random.shuffle(b_inds)
-                for start in range(0, batch_size, minibatch_size):
-                    mb_inds = torch.as_tensor(
-                        b_inds[start : start + minibatch_size],
-                        device=device,
-                    )
-                    mb_obs = self._index_observation(b_obs, mb_inds)
-                    newlogprob, entropy = policy.evaluate_actions_from_observation(
-                        mb_obs,
-                        b_actions[mb_inds],
-                    )
-                    newvalue = value_net(mb_obs).view(-1)
-                    logratio = newlogprob - b_logprobs[mb_inds]
-                    ratio = logratio.exp()
-
-                    with torch.no_grad():
-                        old_approx_kl = (-logratio).mean()
-                        approx_kl = ((ratio - 1) - logratio).mean()
-                        clipfracs.append(
-                            ((ratio - 1.0).abs() > cfg.ppo_clip_coef)
-                            .float()
-                            .mean()
-                            .item()
-                        )
-
-                    mb_advantages = b_advantages[mb_inds]
-                    if cfg.ppo_norm_adv:
-                        mb_advantages = (mb_advantages - mb_advantages.mean()) / (
-                            mb_advantages.std(unbiased=False) + 1e-8
-                        )
-
-                    pg_loss1 = -mb_advantages * ratio
-                    pg_loss2 = -mb_advantages * torch.clamp(
-                        ratio,
-                        1 - cfg.ppo_clip_coef,
-                        1 + cfg.ppo_clip_coef,
-                    )
-                    policy_loss = torch.max(pg_loss1, pg_loss2).mean()
-
-                    if cfg.ppo_clip_vloss:
-                        v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                        v_clipped = b_values[mb_inds] + torch.clamp(
-                            newvalue - b_values[mb_inds],
-                            -cfg.ppo_clip_coef,
-                            cfg.ppo_clip_coef,
-                        )
-                        v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                        value_loss = 0.5 * torch.max(
-                            v_loss_unclipped,
-                            v_loss_clipped,
-                        ).mean()
-                    else:
-                        value_loss = 0.5 * (
-                            (newvalue - b_returns[mb_inds]) ** 2
-                        ).mean()
-
-                    entropy_loss = entropy.mean()
-                    loss = (
-                        policy_loss
-                        - cfg.ppo_ent_coef * entropy_loss
-                        + cfg.ppo_vf_coef * value_loss
-                    )
-
-                    if separate_optimizers:
-                        actor_optimizer.zero_grad()
-                        (policy_loss - cfg.ppo_ent_coef * entropy_loss).backward()
-                        actor_grad_norm = torch.nn.utils.clip_grad_norm_(
-                            actor_parameters,
-                            cfg.ppo_max_grad_norm,
-                        ).item()
-                        actor_optimizer.step()
-
-                        critic_optimizer.zero_grad()
-                        (cfg.ppo_vf_coef * value_loss).backward()
-                        critic_grad_norm = torch.nn.utils.clip_grad_norm_(
-                            critic_parameters,
-                            cfg.ppo_max_grad_norm,
-                        ).item()
-                        critic_optimizer.step()
-                    else:
-                        optimizer.zero_grad()
-                        loss.backward()
-                        torch.nn.utils.clip_grad_norm_(
-                            trainable_parameters,
-                            cfg.ppo_max_grad_norm,
-                        )
-                        optimizer.step()
-
-                if cfg.ppo_target_kl is not None and approx_kl > cfg.ppo_target_kl:
-                    break
-
-            y_pred = b_values.detach().cpu().numpy()
-            y_true = b_returns.detach().cpu().numpy()
-            var_y = np.var(y_true)
-            explained_var = (
-                np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
-            )
-            clipfrac = float(np.mean(clipfracs)) if clipfracs else float("nan")
-            completed_episodes += cfg.num_envs
-
-            episode_metrics = {
-                "step": float(training_iteration),
-                "env_steps": float(env_steps),
-                "episodes": float(completed_episodes),
-                "episodic_return": episodic_returns.mean().item(),
-            }
-            metrics.append(episode_metrics)
-
-            if training_iteration % cfg.log_frequency == 0:
-                step_metrics = {
-                    "step": float(training_iteration),
-                    "env_steps": float(env_steps),
-                    "sps": float(int(env_steps / (time.time() - start_time))),
-                    "value_loss": value_loss.item(),
-                    "policy_loss": policy_loss.item(),
-                    "entropy": entropy_loss.item(),
-                    "old_approx_kl": old_approx_kl.item(),
-                    "approx_kl": approx_kl.item(),
-                    "clipfrac": clipfrac,
-                    "actor_grad_norm": actor_grad_norm,
-                    "critic_grad_norm": critic_grad_norm,
-                    "explained_variance": float(explained_var),
-                }
-                step_metrics.update(self._ppo_policy_metrics(policy, b_obs))
-                metrics.append(step_metrics)
-                if cfg.verbose:
-                    policy_diagnostics = ""
-                    if "suspicious_zone_mass" in step_metrics:
-                        policy_diagnostics = (
-                            ", suspicious_zone_mass="
-                            f"{step_metrics['suspicious_zone_mass']:.4f}"
-                        )
-                    print(
-                        f"iteration={training_iteration}, "
-                        f"env_steps={env_steps}, "
-                        f"return={episode_metrics['episodic_return']:.4f}, "
-                        f"value_loss={step_metrics['value_loss']:.4f}, "
-                        f"policy_loss={step_metrics['policy_loss']:.4f}, "
-                        f"entropy={step_metrics['entropy']:.4f}, "
-                        f"approx_kl={step_metrics['approx_kl']:.4f}, "
-                        f"clipfrac={step_metrics['clipfrac']:.4f}, "
-                        f"actor_grad_norm={step_metrics['actor_grad_norm']:.4f}, "
-                        f"critic_grad_norm={step_metrics['critic_grad_norm']:.4f}"
-                        f"{policy_diagnostics}"
-                    )
-
-        policy.eval()
-        designer = PolicyDesigner(task, horizon, policy, deterministic=False)
-        checkpoint = {
-            "algorithm": "ppo",
-            "config": asdict(cfg),
-            "horizon": horizon,
-            "design_low": policy.design_low.detach().cpu(),
-            "design_high": policy.design_high.detach().cpu(),
-            "outcome_low": torch.as_tensor(cfg.outcome_low),
-            "outcome_high": torch.as_tensor(cfg.outcome_high),
-            "designer": policy.state_dict(),
-            "policy": policy.state_dict(),
-            "value_net": value_net.state_dict(),
-            "optimizer": None if optimizer is None else optimizer.state_dict(),
-            "actor_optimizer": (
-                None if actor_optimizer is None else actor_optimizer.state_dict()
-            ),
-            "critic_optimizer": (
-                None if critic_optimizer is None else critic_optimizer.state_dict()
-            ),
-            "env_steps": env_steps,
-            "training_iterations": cfg.num_training_iterations,
-            "global_step": env_steps,
-        }
-        return FitResult(
-            designer=designer,
-            metrics=metrics,
-            checkpoint=checkpoint,
-        )
-
-    def _make_ppo_policy(
-        self,
-        task: Task,
-        design_space: DesignSpace,
-    ) -> CategoricalPolicyNet:
-        """Builds the categorical policy used by the shared PPO update."""
-        return CategoricalPolicyNet(
-            design_space,
-            dim_y=task.event_shape_y.numel(),
-            outcome_bounds=(self.config.outcome_low, self.config.outcome_high),
-        )
-
-    def _ppo_policy_metrics(
-        self,
-        policy: CategoricalPolicyNet,
-        observation: dict[str, torch.Tensor],
-    ) -> dict[str, float]:
-        """Returns optional policy-specific PPO diagnostics."""
-        return {}
-
-    def _soft_update(self, source, target) -> None:
-        """Polyak-updates a target Q network."""
-        for param, target_param in zip(source.parameters(), target.parameters()):
-            target_param.data.copy_(
-                self.config.tau * param.data
-                + (1.0 - self.config.tau) * target_param.data
+        # During warm-up, collect enough episode batches to reach learning_starts.
+        episode_batches = 1
+        if len(self.replay_buffer) < sac.learning_starts:
+            episode_batches = ceil(
+                (sac.learning_starts - len(self.replay_buffer))
+                / transitions_per_episode_batch
             )
 
-    @staticmethod
-    def _clone_observation(obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Copies a padded-history observation before BEDEnv mutates it."""
-        return {key: value.detach().clone() for key, value in obs.items()}
+        iteration_returns = []
+        for _ in range(episode_batches):
+            seed = cfg.seed if self._first_collect else None
+            self._first_collect = False
+            batch = collect_episode_batch(
+                self.env, self.nets.actor, self.task, cfg, seed=seed
+            )
+            self.replay_buffer.extend_episode_batch(
+                designs=batch.designs,
+                outcomes=batch.outcomes,
+                policy_designs=batch.policy_designs,
+                rewards=batch.rewards,
+                dones=batch.dones,
+            )
+            self.completed_episodes += sac.num_envs
+            self.env_steps += sac.num_envs * horizon
+            iteration_returns.append(batch.episodic_return)
 
-    @staticmethod
-    def _flatten_rollout_observations(
-        observations: list[dict[str, torch.Tensor]],
-    ) -> dict[str, torch.Tensor]:
-        """Flattens [time, env] rollout observations into one batch axis."""
-        stacked = {
-            key: torch.stack([obs[key] for obs in observations])
-            for key in observations[0]
-        }
-        return {
-            key: value.reshape(value.shape[0] * value.shape[1], *value.shape[2:])
-            for key, value in stacked.items()
-        }
-
-    @staticmethod
-    def _index_observation(
-        obs: dict[str, torch.Tensor],
-        indices: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        """Indexes each tensor in an observation dictionary."""
-        return {key: value[indices] for key, value in obs.items()}
-
-    def _resolve_buffer_device(self) -> torch.device:
-        """Returns the replay storage device requested by the config."""
-        requested = self.config.buffer_device.strip().lower()
-        try:
-            buffer_device = torch.device(requested)
-        except RuntimeError as error:
-            raise ValueError(
-                "buffer_device must be 'cpu', 'cuda', or 'cuda:<index>'."
-            ) from error
-
-        if buffer_device.type not in {"cpu", "cuda"}:
-            raise ValueError("buffer_device must be 'cpu', 'cuda', or 'cuda:<index>'.")
-        if buffer_device.type == "cuda":
-            if not torch.cuda.is_available():
-                raise ValueError("buffer_device='cuda' requires CUDA to be available.")
-            if (
-                buffer_device.index is not None
-                and buffer_device.index >= torch.cuda.device_count()
-            ):
-                raise ValueError(
-                    f"buffer_device='{buffer_device}' is outside the available "
-                    f"CUDA device count ({torch.cuda.device_count()})."
+        if (
+            len(self.replay_buffer) >= sac.learning_starts
+            and len(self.replay_buffer) >= sac.batch_size
+        ):
+            for _ in range(sac.gradient_steps_per_iteration):
+                losses = sac_update(
+                    self.replay_buffer,
+                    self.nets,
+                    self.target_entropy,
+                    self.device,
+                    horizon,
+                    cfg,
+                    self.optimization_step,
                 )
-        return buffer_device
+                self._qf_loss = losses.qf_loss
+                if losses.actor_loss is not None:
+                    self._actor_loss = losses.actor_loss
+                if losses.alpha_loss is not None:
+                    self._alpha_loss = losses.alpha_loss
+                self.optimization_step = losses.optimization_step
 
-    def _set_seed(self) -> None:
-        """Sets random seeds to match the reference script."""
-        cfg = self.config
-        random.seed(cfg.seed)
-        np.random.seed(cfg.seed)
-        torch.manual_seed(cfg.seed)
-        torch.backends.cudnn.deterministic = cfg.torch_deterministic
+        if sac.alpha is None:
+            self.target_entropy -= sac.entropy_anneal_rate
 
-    def _validate(
-        self,
-        task: Task,
-        horizon: int,
-        design_space: DesignSpace,
-    ) -> None:
-        """Rejects unsupported tasks and invalid settings."""
-        cfg = self.config
-        positive_ints = {
-            "num_training_iterations": cfg.num_training_iterations,
-            "num_envs": cfg.num_envs,
-            "buffer_size": cfg.buffer_size,
-            "batch_size": cfg.batch_size,
-            "gradient_steps_per_iteration": cfg.gradient_steps_per_iteration,
-            "horizon": horizon,
-            "log_frequency": cfg.log_frequency,
-            "policy_frequency": cfg.policy_frequency,
-            "target_network_frequency": cfg.target_network_frequency,
-            "ppo_num_minibatches": cfg.ppo_num_minibatches,
-            "ppo_update_epochs": cfg.ppo_update_epochs,
+        return {
+            "env_steps": float(self.env_steps),
+            "episodes": float(self.completed_episodes),
+            "episodic_return": torch.stack(iteration_returns).mean().item(),
         }
-        for name, value in positive_ints.items():
-            if value <= 0:
-                raise ValueError(f"{name} must be positive.")
-        if cfg.n_contrastive < 0:
-            raise ValueError("n_contrastive must be non-negative.")
-        if cfg.outcome_low >= cfg.outcome_high:
-            raise ValueError("outcome_low must be less than outcome_high.")
-        if task.likelihood_type != "explicit":
-            raise ValueError("RLBOED requires a task with an explicit likelihood.")
 
-        if isinstance(design_space, BoxDesignSpace):
-            if cfg.buffer_size < cfg.learning_starts:
-                raise ValueError("buffer_size must be at least learning_starts.")
-            if cfg.alpha is not None and cfg.alpha < 0:
-                raise ValueError("alpha must be non-negative when fixed.")
-            if cfg.initial_alpha <= 0:
-                raise ValueError("initial_alpha must be positive.")
-            if cfg.learning_starts < 0:
-                raise ValueError("learning_starts must be non-negative.")
-            if cfg.entropy_anneal_rate < 0:
-                raise ValueError("entropy_anneal_rate must be non-negative.")
-            if cfg.policy_init_std <= 0:
-                raise ValueError("policy_init_std must be positive.")
+    @torch.no_grad()
+    def evaluate(self):
+        """Estimates the policy-mean SPCE of the deterministic policy."""
+        was_training = self.designer.policy_net.training
+        cpu_rng_state = torch.get_rng_state()
+        cuda_rng_state = (
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        )
+        self.designer.policy_net.eval()
+
+        eval_env = build_env(
+            self.cfg,
+            self.task,
+            self.env.design_space,
+            n_contrastive=self.cfg.eval_n_contrastive,
+        )
+        obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
+        returns = torch.zeros(self.cfg.sac.num_envs, device=self.device)
+        for _ in range(self.env.horizon):
+            designs = self.designer.policy_net.sample_from_observation(
+                obs, deterministic=True
+            ).design
+            obs, rewards, _, _, _ = eval_env.step(designs)
+            returns += rewards
+
+        self.designer.policy_net.train(was_training)
+        torch.set_rng_state(cpu_rng_state)
+        if cuda_rng_state is not None:
+            torch.cuda.set_rng_state_all(cuda_rng_state)
+
+        mean = returns.mean().item()
+        standard_error = (
+            returns.std(unbiased=True).div(self.cfg.sac.num_envs**0.5).item()
+        )
+        return {"eval/spce": mean, "eval/spce_se": standard_error}
+
+    def _loss_metrics(self, step):
+        """Builds the periodic loss metrics dict."""
+        elapsed = max(time.time() - self._start_time, 1e-12)
+        return {
+            "step": step,
+            "env_steps": float(self.env_steps),
+            "sps": float(int(self.env_steps / elapsed)),
+            "qf_loss": self._qf_loss.item() / 2.0,
+            "actor_loss": self._actor_loss.item(),
+            "alpha_loss": self._alpha_loss.item(),
+            "alpha": self.nets.log_alpha.exp().item(),
+            "target_entropy": self.target_entropy,
+        }
+
+    def _maybe_save_best(self, step, metrics, min_step=0):
+        # Saves a checkpoint of the model if it's the highest episodic return seen.
+        # NB: our objective is maximizing the episodic return (an MI bound).
+
+        # min_step controls how long we wait before saving; useful for avoiding a
+        # ton of i/o at the start.
+        if step < min_step:
             return
 
-        if not self._is_supported_discrete_space(design_space):
-            raise TypeError(
-                "RLBOED PPO requires CategoricalDesignSpace, IntegerDesignSpace, "
-                "or an all-discrete ProductDesignSpace."
-            )
-        ppo_batch_size = cfg.num_envs * horizon
-        if ppo_batch_size % cfg.ppo_num_minibatches != 0:
-            raise ValueError(
-                "num_envs * horizon must be divisible by ppo_num_minibatches."
-            )
-        if not 0.0 <= cfg.ppo_gae_lambda <= 1.0:
-            raise ValueError("ppo_gae_lambda must be between 0 and 1.")
-        if cfg.ppo_learning_rate <= 0:
-            raise ValueError("ppo_learning_rate must be positive.")
-        if (
-            cfg.ppo_actor_learning_rate is not None
-            and cfg.ppo_actor_learning_rate <= 0
-        ):
-            raise ValueError("ppo_actor_learning_rate must be positive when set.")
-        if (
-            cfg.ppo_critic_learning_rate is not None
-            and cfg.ppo_critic_learning_rate <= 0
-        ):
-            raise ValueError("ppo_critic_learning_rate must be positive when set.")
-        if cfg.ppo_clip_coef <= 0:
-            raise ValueError("ppo_clip_coef must be positive.")
-        if cfg.ppo_ent_coef < 0:
-            raise ValueError("ppo_ent_coef must be non-negative.")
-        if cfg.ppo_vf_coef < 0:
-            raise ValueError("ppo_vf_coef must be non-negative.")
-        if cfg.ppo_max_grad_norm <= 0:
-            raise ValueError("ppo_max_grad_norm must be positive.")
-        if cfg.ppo_target_kl is not None and cfg.ppo_target_kl <= 0:
-            raise ValueError("ppo_target_kl must be positive when set.")
+        if self.manager is None:
+            return
 
-    def _is_supported_discrete_space(self, design_space: DesignSpace) -> bool:
-        """Returns whether PPO can factorize the discrete design space."""
-        if isinstance(design_space, (CategoricalDesignSpace, IntegerDesignSpace)):
-            return True
-        if isinstance(design_space, ProductDesignSpace):
-            return all(self._is_supported_discrete_space(s) for s in design_space.spaces)
-        return False
+        metric_val = metrics["episodic_return"]
+        is_better = metric_val > self.best_metric
+
+        if is_better:
+            self.best_metric = metric_val
+
+            chkpt_path = self.manager.path("best.pt")
+            torch.save(
+                self.build_checkpoint(step=step, metric=metric_val),
+                chkpt_path,
+            )
+
+            self.manager.event_logger.info(
+                f"Saving new best checkpoint : "
+                f"episodic_return={metric_val} @ step={step}"
+            )
+
+    def build_checkpoint(self, step=None, metric=None):
+        """Builds the checkpoint dict holding weights and training state."""
+        design_space = self.env.design_space
+        # The trained actor is the deployable designer, so its weights are stored
+        # under both keys: "designer" for inference-only loading and "actor" for
+        # resuming SAC training alongside the critic/optimizers.
+        actor_state_dict = self.nets.actor.state_dict()
+        checkpoint = {
+            "config": OmegaConf.to_container(
+                self.cfg, resolve=True, throw_on_missing=False
+            ),
+            "horizon": self.env.horizon,
+            "design_low": design_space.low.detach().cpu(),
+            "design_high": design_space.high.detach().cpu(),
+            "outcome_low": torch.as_tensor(self.cfg.reward.outcome_low),
+            "outcome_high": torch.as_tensor(self.cfg.reward.outcome_high),
+            "designer": actor_state_dict,
+            "actor": actor_state_dict,
+            "qf1": self.nets.qf1.state_dict(),
+            "qf2": self.nets.qf2.state_dict(),
+            "qf1_target": self.nets.qf1_target.state_dict(),
+            "qf2_target": self.nets.qf2_target.state_dict(),
+            "actor_optimizer": self.nets.actor_optimizer.state_dict(),
+            "q_optimizer": self.nets.q_optimizer.state_dict(),
+            "alpha": self.nets.log_alpha.exp().detach().cpu(),
+            "log_alpha": self.nets.log_alpha.detach().cpu(),
+            "alpha_optimizer": (
+                None
+                if self.nets.alpha_optimizer is None
+                else self.nets.alpha_optimizer.state_dict()
+            ),
+            "target_entropy": self.target_entropy,
+            "optimization_step": self.optimization_step,
+            "env_steps": self.env_steps,
+            "training_iterations": self.cfg.sac.num_training_iterations,
+            "global_step": self.cfg.sac.num_training_iterations,
+        }
+        if step is not None:
+            checkpoint["step"] = step
+        if metric is not None:
+            checkpoint["metric"] = metric
+        return checkpoint
+
+
+# ============================================================================
+# Helper + factory functions
+# ============================================================================
+
+
+def build_design_space(cfg, task):
+    """Instantiates the box design space for the task."""
+    return BoxDesignSpace(
+        cfg.design_space.low,
+        cfg.design_space.high,
+        event_shape=task.event_shape_design,
+    )
+
+
+def build_env(cfg, task, design_space, *, n_contrastive=None):
+    """Instantiates the BED environment with the RL-BOED dense reward.
+
+    ``n_contrastive`` overrides ``cfg.reward.n_contrastive`` for the reward's
+    contrastive-sample count; evaluation passes ``cfg.eval_n_contrastive`` to
+    score the policy with more contrastive samples than training.
+    """
+    if n_contrastive is None:
+        n_contrastive = cfg.reward.n_contrastive
+    return BEDEnv(
+        task,
+        horizon=cfg.T,
+        design_space=design_space,
+        reward_fn=RLBOEDDenseReward(n_contrastive),
+        batch_shape=(cfg.sac.num_envs,),
+    )
+
+
+def build_replay_buffer(cfg, task):
+    """Instantiates the compact episode replay buffer."""
+    buffer_device = _resolve_buffer_device(cfg.sac.buffer_device)
+    return _CompactEpisodeReplayBuffer(
+        buffer_size=cfg.sac.buffer_size,
+        batch_size=cfg.sac.batch_size,
+        horizon=cfg.T,
+        event_shape_design=task.event_shape_design,
+        event_shape_y=task.event_shape_y,
+        device=buffer_device,
+        pin_memory=task.device.type == "cuda" and buffer_device.type == "cpu",
+    )
+
+
+# ============================================================================
+# Entry point
+# ============================================================================
+
+
+@hydra.main(version_base="1.3", config_path="../recipes", config_name="rlboed")
+def main(cfg):
+    """Entry point for RL-BOED (SAC) training.
+
+    Args:
+        cfg: Composed Hydra configuration for the training run.
+
+    Run with ``python testbed/methods/rlboed.py [overrides...]``.
+    """
+    manager, task = setup(cfg)
+
+    design_space = build_design_space(cfg, task)
+    validate_config(task, cfg, design_space)
+
+    # Seed immediately before network construction (mirrors the original
+    # fit_rlboed ordering) so weight initialization is reproducible.
+    _set_seed(cfg.seed, cfg.torch_deterministic)
+    nets = make_networks(task, design_space, cfg, task.device)
+
+    env = build_env(cfg, task, design_space)
+    replay_buffer = build_replay_buffer(cfg, task)
+    designer = PolicyDesigner(task, cfg.T, nets.actor, deterministic=False)
+
+    trainer = Trainer(
+        task=task,
+        designer=designer,
+        env=env,
+        replay_buffer=replay_buffer,
+        nets=nets,
+        cfg=cfg,
+        manager=manager,
+    )
+
+    trainer.train()
+
+    eval_metrics = trainer.evaluate()
+    manager.event_logger.info(
+        f"policy-mean SPCE with {cfg.eval_n_contrastive} contrastive samples: "
+        f"{eval_metrics['eval/spce']:.4f} ± {eval_metrics['eval/spce_se']:.4f}"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,42 @@
+# @package _global_
+
+defaults:
+  - /actionbed
+  - override /task: location_finding_2src
+  - override /net@action_net: null
+  - _self_
+
+# Hyperparameter settings for reproducing ActionBED on the 2D, 2 source LF problem
+# See: ActionBED (Rossa et al., 2026), Table 13.
+
+seed: 42
+T: 30
+# loss
+loss:
+  _target_: testbed.design_objectives.PermutationInvariantMSELoss
+# training
+n_train_iter: 150_000
+n_action_warmup_iter: 50_000
+n_outer: 2_000
+
+# optimizer
+lr: 5e-4
+betas: [0.8, 0.998]
+grad_clip: null
+lr_gamma: 0.95
+lr_period: 2000
+# policy networks
+design_net:
+  _target_: testbed.design_nets.AttentivePolicyNet
+  encoder_dim_h: [64]
+  dim_emb: 64
+  num_heads: 4
+  num_blocks: 2
+action_net:
+  _target_: testbed.design_nets.MLPPolicyNet
+  # input dim: T * (dim_y + n_sources * dim_theta)
+  # output dim: dim_theta
+  dims: [90, 512, 256, 128, 4]
+  activation:
+    _target_: torch.nn.GELU
+    _partial_: true

@@ -22,7 +22,7 @@ class DesignSpace(ABC):
 
     @abstractmethod
     def sample(self, batch_shape=(), *, device=None) -> Tensor:
-        """Samples random designs with shape [*batch_shape, *event_shape]."""
+        """Samples random designs with shape ``[*batch_shape, *event_shape]``."""
         ...
 
     @abstractmethod
@@ -156,10 +156,7 @@ class CategoricalDesignSpace(DesignSpace):
 
 
 class ProductDesignSpace(DesignSpace):
-    """Flattened product of design spaces.
-
-    Samples and projections concatenate flattened components into one vector.
-    """
+    """Flattened product of design spaces."""
 
     def __init__(self, spaces: Sequence[DesignSpace]):
         """Initializes a product space."""
