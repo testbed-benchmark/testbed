@@ -5,6 +5,7 @@ from torch.nn import MSELoss
 
 from .loss import (
     LogMSELoss,
+    LotDecisionLoss,
     PermutationInvariantMSELoss,
     SortedLogMSELoss,
     SortedMSELoss,
@@ -20,6 +21,7 @@ __all__ = [
     "SPCE",
     "MSELoss",
     "LogMSELoss",
+    "LotDecisionLoss",
     "Reinforce",
     "SortedMSELoss",
     "SortedLogMSELoss",

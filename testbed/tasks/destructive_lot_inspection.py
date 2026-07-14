@@ -201,6 +201,7 @@ class DestructiveLotInspection(Task):
             discrete_design=True,
             design_space=CategoricalDesignSpace(num_zones),
         )
+        self.event_shape_action = torch.Size([1])
 
         dtype = torch.get_default_dtype()
         self.register_buffer("length_scale", torch.as_tensor(length_scale, dtype=dtype))

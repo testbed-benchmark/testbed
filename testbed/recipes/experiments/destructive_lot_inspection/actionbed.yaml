@@ -1,0 +1,43 @@
+# @package _global_
+
+defaults:
+  - /actionbed
+  - override /task: destructive_lot_inspection
+  - override /net@design_net: null
+  - override /net@action_net: null
+  - _self_
+
+seed: 42
+T: 30
+
+task:
+  batch_size: 8
+
+loss:
+  _target_: testbed.design_objectives.LotDecisionLoss
+  false_accept_cost: 1.0
+  false_reject_cost: 1.0
+  reduction: none
+
+n_train_iter: 50_000
+n_action_warmup_iter: 0
+n_outer: 2_048
+
+eval_every: 500
+n_outer_eval: 16_384
+
+lr: 5e-4
+betas: [0.9, 0.999]
+grad_clip: 1.0
+
+design_net:
+  _target_: testbed.design_nets.CategoricalPolicyNet
+  dim_y: 1
+  outcome_bounds: [0.0, 8.0]
+
+action_net:
+  _target_: testbed.design_nets.MLPPolicyNet
+  dims: [60, 256, 128, 1]
+  activation:
+    _target_: torch.nn.GELU
+    _partial_: true

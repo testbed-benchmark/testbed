@@ -7,11 +7,11 @@ import pytest
 import torch
 
 from testbed.core.manager import Manager
-from testbed.design_nets import DeepSetPolicyNet
-from testbed.design_objectives import MSELoss, SortedMSELoss
+from testbed.design_nets import CategoricalPolicyNet, DeepSetPolicyNet, MLPPolicyNet
+from testbed.design_objectives import LotDecisionLoss, MSELoss, SortedMSELoss
 from testbed.designers import PolicyDesigner
 from testbed.methods.actionbed import Trainer, resolve_event_shape_action
-from testbed.tasks import LocationFinding
+from testbed.tasks import DestructiveLotInspection, LocationFinding
 
 
 def _make_task():
@@ -69,6 +69,45 @@ def test_train_step_returns_loss_key():
 
 def test_train_step_updates_both_networks():
     trainer, policy_net, action_net = _make_trainer()
+    params_before_design = [p.clone() for p in policy_net.parameters()]
+    params_before_action = [p.clone() for p in action_net.parameters()]
+
+    trainer.train_step()
+
+    assert any(
+        not torch.equal(before, after)
+        for before, after in zip(params_before_design, policy_net.parameters())
+    )
+    assert any(
+        not torch.equal(before, after)
+        for before, after in zip(params_before_action, action_net.parameters())
+    )
+
+
+def test_train_step_updates_categorical_design_and_action_networks():
+    task = DestructiveLotInspection(num_zones=3)
+    cfg = SimpleNamespace(n_outer=32, n_outer_eval=32, grad_clip=None)
+    policy_net = CategoricalPolicyNet(
+        task.design_space, dim_y=1, outcome_bounds=(0.0, 4.0)
+    )
+    action_net = MLPPolicyNet(
+        event_shape_y=task.event_shape_y,
+        event_shape_design=task.event_shape_design,
+        event_shape_out=task.event_shape_action,
+        dims=[6, 16, 1],
+    )
+    designer = PolicyDesigner(task, T=3, policy_net=policy_net)
+    optimizer = torch.optim.Adam(
+        list(policy_net.parameters()) + list(action_net.parameters()), lr=1e-3
+    )
+    trainer = Trainer(
+        task,
+        designer,
+        action_net,
+        LotDecisionLoss(reduction="none"),
+        optimizer,
+        cfg,
+    )
     params_before_design = [p.clone() for p in policy_net.parameters()]
     params_before_action = [p.clone() for p in action_net.parameters()]
 

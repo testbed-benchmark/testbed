@@ -52,6 +52,68 @@ def _check_reduction(reduction: str) -> str:
     return reduction
 
 
+class LotDecisionLoss(nn.Module):
+    """Asymmetric accept/reject loss for lot inspection.
+
+    The input is an acceptance logit and the target is a latent lot parameter
+    vector whose first component indicates whether the lot is good. Its forward
+    value is the terminal decision loss used by the destructive lot inspection
+    PPO example. A cost-sensitive binary-cross-entropy surrogate supplies the
+    gradient with respect to the acceptance logit.
+
+    Args:
+        false_accept_cost: Loss for accepting a bad lot.
+        false_reject_cost: Loss for rejecting a good lot.
+        reduction: One of ``"sum"``, ``"mean"``, or ``"none"``.
+    """
+
+    def __init__(
+        self,
+        false_accept_cost: float = 1.0,
+        false_reject_cost: float = 1.0,
+        reduction: str = "mean",
+    ) -> None:
+        """Initializes the loss."""
+        super().__init__()
+        if false_accept_cost < 0.0 or false_reject_cost < 0.0:
+            raise ValueError("decision loss costs must be non-negative.")
+        self.false_accept_cost = float(false_accept_cost)
+        self.false_reject_cost = float(false_reject_cost)
+        self.reduction = _check_reduction(reduction)
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        """Computes expected terminal decision loss for each lot."""
+        if input.shape != (*target.shape[:-1], 1):
+            raise ValueError(
+                "input must have one acceptance logit per target; got "
+                f"{tuple(input.shape)} and {tuple(target.shape)}."
+            )
+
+        good = target[..., 0].bool()
+        acceptance_logit = input.squeeze(-1)
+        accepted = acceptance_logit >= 0.0
+        decision_loss = self.false_accept_cost * (accepted & ~good).to(target.dtype)
+        decision_loss += self.false_reject_cost * (~accepted & good).to(target.dtype)
+
+        surrogate = (
+            self.false_accept_cost
+            * (~good).to(target.dtype)
+            * F.softplus(acceptance_logit)
+        )
+        surrogate += (
+            self.false_reject_cost
+            * good.to(target.dtype)
+            * F.softplus(-acceptance_logit)
+        )
+        loss = surrogate + (decision_loss - surrogate).detach()
+
+        if self.reduction == "sum":
+            return loss.sum()
+        if self.reduction == "mean":
+            return loss.mean()
+        return loss
+
+
 def _elementwise_log_mse(
     input: Tensor, target: Tensor, epsilon: float, reduction: str
 ) -> Tensor:

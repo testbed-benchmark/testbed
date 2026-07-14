@@ -23,6 +23,7 @@ ENTRY_POINT_RECIPES = [
     "ppo",
     "rlboed",
     "experiments/location_finding_2src/actionbed",
+    "experiments/destructive_lot_inspection/actionbed",
 ]
 
 
@@ -94,3 +95,22 @@ def test_two_source_actionbed_preserves_grad_clip_default():
     assert cfg.n_outer_eval == 2_048
     assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
     assert "encoder_dim_h" not in cfg.action_net
+
+
+def test_destructive_lot_actionbed_uses_categorical_policy():
+    cfg = _compose("experiments/destructive_lot_inspection/actionbed")
+    assert cfg.task._target_ == "testbed.tasks.DestructiveLotInspection"
+    assert cfg.task.batch_size == 8
+    assert cfg.T == 30
+    assert cfg.design_net._target_ == "testbed.design_nets.CategoricalPolicyNet"
+    assert cfg.design_net.outcome_bounds == [0.0, 8.0]
+    assert cfg.action_net.dims == [60, 256, 128, 1]
+    assert cfg.loss._target_ == "testbed.design_objectives.LotDecisionLoss"
+    assert cfg.loss.false_accept_cost == 1.0
+    assert cfg.loss.false_reject_cost == 1.0
+    assert cfg.loss.reduction == "none"
+    assert cfg.n_action_warmup_iter == 0
+    assert cfg.n_train_iter == 50_000
+    assert cfg.n_outer == 2_048
+    assert cfg.n_outer_eval == 16_384
+    assert cfg.eval_every == 500

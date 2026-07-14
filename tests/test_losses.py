@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from testbed.core.util import sort_by_norm
 from testbed.design_objectives import (
     LogMSELoss,
+    LotDecisionLoss,
     PermutationInvariantMSELoss,
     SortedLogMSELoss,
     SortedMSELoss,
@@ -18,6 +19,26 @@ LOSS_CLASSES = [
     SortedLogMSELoss,
     PermutationInvariantMSELoss,
 ]
+
+
+def test_lot_decision_loss_matches_asymmetric_terminal_cost():
+    logits = torch.zeros(2, 1, requires_grad=True)
+    theta = torch.tensor([[0.0, 3.0, 0.2], [1.0, 7.0, 0.08]])
+
+    loss = LotDecisionLoss(
+        false_accept_cost=4.0,
+        false_reject_cost=1.0,
+        reduction="none",
+    )(logits, theta)
+
+    torch.testing.assert_close(loss, torch.tensor([4.0, 0.0]))
+    loss.mean().backward()
+    assert logits.grad is not None
+
+
+def test_lot_decision_loss_rejects_invalid_action_shape():
+    with pytest.raises(ValueError, match="one acceptance logit"):
+        LotDecisionLoss()(torch.zeros(2, 3), torch.zeros(2, 3))
 
 
 def _brute_force_permutation_mse(input, target):

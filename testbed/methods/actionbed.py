@@ -6,6 +6,7 @@ from hydra.utils import instantiate
 
 from testbed.core.distributions import TorchDistribution
 from testbed.core.setup import setup
+from testbed.design_objectives.reinforce import leave_one_out_baseline
 from testbed.designers import PolicyDesigner, RandomDesigner
 
 # ============================================================================
@@ -144,10 +145,28 @@ class Trainer:
         cfg = self.cfg
 
         theta = self.task.sample_prior(cfg.n_outer)
-        y_obs, design_obs = self.designer.rollout(theta)
+        if self.designer.reinforce_requires_policy_log_probs:
+            y_obs, design_obs, policy_log_probs = self.designer.rollout(
+                theta, return_policy_log_probs=True
+            )
+        else:
+            y_obs, design_obs = self.designer.rollout(theta)
 
         action = self.action_net(y_obs, design_obs)
         loss = self.loss_fn(action, theta)
+        if self.designer.reinforce_requires_policy_log_probs:
+            if loss.ndim == 0 or loss.shape[0] != theta.shape[0]:
+                raise ValueError(
+                    "Discrete ActionBED policies require an unreduced loss with "
+                    "one leading batch dimension."
+                )
+            loss_per_rollout = loss.reshape(loss.shape[0], -1).mean(dim=1)
+            baseline = leave_one_out_baseline(loss_per_rollout.detach())
+            score = policy_log_probs.sum(dim=-1)
+            score_loss = (
+                (loss_per_rollout.detach() - baseline) * (score - score.detach())
+            ).mean()
+            loss = loss_per_rollout.mean() + score_loss
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -202,6 +221,8 @@ class Trainer:
             y_obs, design_obs = self.designer.rollout(theta)
             action = self.action_net(y_obs, design_obs)
             loss = self.loss_fn(action, theta)
+            if loss.ndim > 0:
+                loss = loss.mean()
 
         self.designer.policy_net.train(policy_was_training)
         self.action_net.train(action_was_training)
@@ -267,12 +288,15 @@ def resolve_event_shape_action(task, manager):
 
 def build_policy_nets(cfg, task, manager):
     """Instantiates design and action policy networks."""
-    design_net = instantiate(
-        cfg.design_net,
-        event_shape_y=task.event_shape_y,
-        event_shape_design=task.event_shape_design,
-        event_shape_out=task.event_shape_design,
-    )
+    if task.discrete_design:
+        design_net = instantiate(cfg.design_net, design_space=task.design_space)
+    else:
+        design_net = instantiate(
+            cfg.design_net,
+            event_shape_y=task.event_shape_y,
+            event_shape_design=task.event_shape_design,
+            event_shape_out=task.event_shape_design,
+        )
 
     action_net = instantiate(
         cfg.action_net,
