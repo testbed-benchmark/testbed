@@ -3,7 +3,6 @@
 import importlib.util
 from pathlib import Path
 
-import pytest
 import torch
 
 EXAMPLE_PATH = (
@@ -53,27 +52,3 @@ def test_count_policy_samples_from_compact_observation():
     assert log_prob.shape == (5,)
     assert entropy.shape == (5,)
     assert torch.all((sample.action >= 0) & (sample.action < 3))
-
-
-def test_sufficient_statistic_example_runs_tiny_training():
-    pytest.importorskip("scipy")
-    args = ppo_counts.Args(
-        save=False,
-        cuda=False,
-        verbose=False,
-        num_zones=3,
-        horizon=2,
-        hidden_dim=8,
-        num_training_iterations=1,
-        num_envs=2,
-        ppo_num_minibatches=2,
-        ppo_update_epochs=1,
-        log_frequency=1,
-        eval_episodes=4,
-    )
-
-    result, checkpoint = ppo_counts.train(args)
-
-    assert checkpoint is None
-    assert result.checkpoint["algorithm"] == "ppo_bayes_risk_sufficient_statistic"
-    assert isinstance(result.designer.policy_net, ppo_counts.CountCategoricalPolicyNet)

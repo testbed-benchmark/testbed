@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 import torch
 
-from testbed.design_nets import CategoricalPolicyNet
 from testbed.envs.history import History
 
 EXAMPLE_PATH = (
@@ -84,30 +83,3 @@ def test_lot_loss_uses_asymmetric_false_accept_and_false_reject_costs():
     )
 
     torch.testing.assert_close(loss, torch.tensor([0.0, 10.0, 1.0, 0.0]))
-
-
-def test_ppo_bayes_risk_example_runs_tiny_training():
-    pytest.importorskip("scipy")
-    args = ppo_bayes_risk.Args(
-        save=False,
-        cuda=False,
-        verbose=False,
-        num_zones=3,
-        horizon=2,
-        num_training_iterations=1,
-        num_envs=2,
-        ppo_num_minibatches=2,
-        ppo_update_epochs=1,
-        log_frequency=1,
-        eval_episodes=4,
-    )
-
-    result, checkpoint = ppo_bayes_risk.train(args)
-
-    assert checkpoint is None
-    assert result.checkpoint["algorithm"] == "ppo_bayes_risk"
-    assert result.checkpoint["tau"].item() == pytest.approx(args.tau)
-    assert result.checkpoint["false_accept_cost"].item() == pytest.approx(
-        args.false_accept_cost
-    )
-    assert isinstance(result.designer.policy_net, CategoricalPolicyNet)

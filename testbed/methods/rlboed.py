@@ -25,6 +25,7 @@ from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
     PaddedHistoryObservation,
+    RewardFunction,
     RLBOEDDenseReward,
 )
 from testbed.envs.design_spaces import (
@@ -259,6 +260,8 @@ class RLBOEDConfig:
     entropy_anneal_rate: float = 1 / 1.4e4
 
     ppo_learning_rate: float = 2.5e-4
+    ppo_actor_learning_rate: float | None = None
+    ppo_critic_learning_rate: float | None = None
     ppo_anneal_lr: bool = True
     ppo_gae_lambda: float = 0.95
     ppo_num_minibatches: int = 4
@@ -276,7 +279,7 @@ class RLBOEDConfig:
 
 
 class RLBOED:
-    """Trains a policy using RL-BOED's dense reward."""
+    """Trains a policy using RL-BOED's default or a supplied reward."""
 
     def __init__(self, config: RLBOEDConfig):
         """Initializes the method configuration."""
@@ -288,14 +291,25 @@ class RLBOED:
         *,
         horizon: int,
         design_space: DesignSpace,
+        reward_fn: RewardFunction | None = None,
     ) -> FitResult:
         """Trains and returns a deployable policy designer."""
         self._validate(task, horizon, design_space)
         self._set_seed()
 
         if isinstance(design_space, BoxDesignSpace):
-            return self._fit_sac(task, horizon=horizon, design_space=design_space)
-        return self._fit_ppo(task, horizon=horizon, design_space=design_space)
+            return self._fit_sac(
+                task,
+                horizon=horizon,
+                design_space=design_space,
+                reward_fn=reward_fn,
+            )
+        return self._fit_ppo(
+            task,
+            horizon=horizon,
+            design_space=design_space,
+            reward_fn=reward_fn,
+        )
 
     def _fit_sac(
         self,
@@ -303,6 +317,7 @@ class RLBOED:
         *,
         horizon: int,
         design_space: BoxDesignSpace,
+        reward_fn: RewardFunction | None = None,
     ) -> FitResult:
         """Trains a continuous policy with SAC."""
         cfg = self.config
@@ -314,7 +329,11 @@ class RLBOED:
             task,
             horizon=horizon,
             design_space=design_space,
-            reward_fn=RLBOEDDenseReward(cfg.n_contrastive),
+            reward_fn=(
+                reward_fn
+                if reward_fn is not None
+                else RLBOEDDenseReward(cfg.n_contrastive)
+            ),
             observation_fn=PaddedHistoryObservation(horizon),
             batch_shape=(cfg.num_envs,),
         )
@@ -577,6 +596,7 @@ class RLBOED:
         *,
         horizon: int,
         design_space: DesignSpace,
+        reward_fn: RewardFunction | None = None,
     ) -> FitResult:
         """Trains a discrete policy with PPO."""
         cfg = self.config
@@ -585,16 +605,19 @@ class RLBOED:
             task,
             horizon=horizon,
             design_space=design_space,
-            reward_fn=RLBOEDDenseReward(cfg.n_contrastive),
+            reward_fn=(
+                reward_fn
+                if reward_fn is not None
+                else RLBOEDDenseReward(cfg.n_contrastive)
+            ),
             observation_fn=PaddedHistoryObservation(horizon),
             batch_shape=(cfg.num_envs,),
         )
 
         dim_y = task.event_shape_y.numel()
-        policy = CategoricalPolicyNet(
+        policy = self._make_ppo_policy(
+            task,
             design_space,
-            dim_y=dim_y,
-            outcome_bounds=(cfg.outcome_low, cfg.outcome_high),
         ).to(device)
         value_net = RLBOEDValueNetwork(
             dim_y=dim_y,
@@ -604,12 +627,33 @@ class RLBOED:
             outcome_low=cfg.outcome_low,
             outcome_high=cfg.outcome_high,
         ).to(device)
-        trainable_parameters = list(policy.parameters()) + list(value_net.parameters())
-        optimizer = optim.Adam(
-            trainable_parameters,
-            lr=cfg.ppo_learning_rate,
-            eps=1e-5,
+        actor_parameters = list(policy.parameters())
+        critic_parameters = list(value_net.parameters())
+        trainable_parameters = actor_parameters + critic_parameters
+        separate_optimizers = (
+            cfg.ppo_actor_learning_rate is not None
+            or cfg.ppo_critic_learning_rate is not None
         )
+        if separate_optimizers:
+            actor_optimizer = optim.Adam(
+                actor_parameters,
+                lr=cfg.ppo_actor_learning_rate or cfg.ppo_learning_rate,
+                eps=1e-5,
+            )
+            critic_optimizer = optim.Adam(
+                critic_parameters,
+                lr=cfg.ppo_critic_learning_rate or cfg.ppo_learning_rate,
+                eps=1e-5,
+            )
+            optimizer = None
+        else:
+            optimizer = optim.Adam(
+                trainable_parameters,
+                lr=cfg.ppo_learning_rate,
+                eps=1e-5,
+            )
+            actor_optimizer = None
+            critic_optimizer = None
 
         batch_size = cfg.num_envs * horizon
         minibatch_size = batch_size // cfg.ppo_num_minibatches
@@ -624,11 +668,21 @@ class RLBOED:
         approx_kl = torch.tensor(float("nan"))
         clipfrac = float("nan")
         explained_var = float("nan")
+        actor_grad_norm = float("nan")
+        critic_grad_norm = float("nan")
 
         for training_iteration in range(cfg.num_training_iterations):
             if cfg.ppo_anneal_lr:
                 frac = 1.0 - training_iteration / cfg.num_training_iterations
-                optimizer.param_groups[0]["lr"] = frac * cfg.ppo_learning_rate
+                if separate_optimizers:
+                    actor_optimizer.param_groups[0]["lr"] = frac * (
+                        cfg.ppo_actor_learning_rate or cfg.ppo_learning_rate
+                    )
+                    critic_optimizer.param_groups[0]["lr"] = frac * (
+                        cfg.ppo_critic_learning_rate or cfg.ppo_learning_rate
+                    )
+                else:
+                    optimizer.param_groups[0]["lr"] = frac * cfg.ppo_learning_rate
 
             obs, _ = env.reset(seed=cfg.seed if training_iteration == 0 else None)
             next_done = torch.zeros(cfg.num_envs, device=device)
@@ -757,13 +811,30 @@ class RLBOED:
                         + cfg.ppo_vf_coef * value_loss
                     )
 
-                    optimizer.zero_grad()
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(
-                        trainable_parameters,
-                        cfg.ppo_max_grad_norm,
-                    )
-                    optimizer.step()
+                    if separate_optimizers:
+                        actor_optimizer.zero_grad()
+                        (policy_loss - cfg.ppo_ent_coef * entropy_loss).backward()
+                        actor_grad_norm = torch.nn.utils.clip_grad_norm_(
+                            actor_parameters,
+                            cfg.ppo_max_grad_norm,
+                        ).item()
+                        actor_optimizer.step()
+
+                        critic_optimizer.zero_grad()
+                        (cfg.ppo_vf_coef * value_loss).backward()
+                        critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+                            critic_parameters,
+                            cfg.ppo_max_grad_norm,
+                        ).item()
+                        critic_optimizer.step()
+                    else:
+                        optimizer.zero_grad()
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(
+                            trainable_parameters,
+                            cfg.ppo_max_grad_norm,
+                        )
+                        optimizer.step()
 
                 if cfg.ppo_target_kl is not None and approx_kl > cfg.ppo_target_kl:
                     break
@@ -796,17 +867,31 @@ class RLBOED:
                     "old_approx_kl": old_approx_kl.item(),
                     "approx_kl": approx_kl.item(),
                     "clipfrac": clipfrac,
+                    "actor_grad_norm": actor_grad_norm,
+                    "critic_grad_norm": critic_grad_norm,
                     "explained_variance": float(explained_var),
                 }
+                step_metrics.update(self._ppo_policy_metrics(policy, b_obs))
                 metrics.append(step_metrics)
                 if cfg.verbose:
+                    policy_diagnostics = ""
+                    if "suspicious_zone_mass" in step_metrics:
+                        policy_diagnostics = (
+                            ", suspicious_zone_mass="
+                            f"{step_metrics['suspicious_zone_mass']:.4f}"
+                        )
                     print(
                         f"iteration={training_iteration}, "
                         f"env_steps={env_steps}, "
                         f"return={episode_metrics['episodic_return']:.4f}, "
                         f"value_loss={step_metrics['value_loss']:.4f}, "
                         f"policy_loss={step_metrics['policy_loss']:.4f}, "
-                        f"entropy={step_metrics['entropy']:.4f}"
+                        f"entropy={step_metrics['entropy']:.4f}, "
+                        f"approx_kl={step_metrics['approx_kl']:.4f}, "
+                        f"clipfrac={step_metrics['clipfrac']:.4f}, "
+                        f"actor_grad_norm={step_metrics['actor_grad_norm']:.4f}, "
+                        f"critic_grad_norm={step_metrics['critic_grad_norm']:.4f}"
+                        f"{policy_diagnostics}"
                     )
 
         policy.eval()
@@ -822,7 +907,13 @@ class RLBOED:
             "designer": policy.state_dict(),
             "policy": policy.state_dict(),
             "value_net": value_net.state_dict(),
-            "optimizer": optimizer.state_dict(),
+            "optimizer": None if optimizer is None else optimizer.state_dict(),
+            "actor_optimizer": (
+                None if actor_optimizer is None else actor_optimizer.state_dict()
+            ),
+            "critic_optimizer": (
+                None if critic_optimizer is None else critic_optimizer.state_dict()
+            ),
             "env_steps": env_steps,
             "training_iterations": cfg.num_training_iterations,
             "global_step": env_steps,
@@ -832,6 +923,26 @@ class RLBOED:
             metrics=metrics,
             checkpoint=checkpoint,
         )
+
+    def _make_ppo_policy(
+        self,
+        task: Task,
+        design_space: DesignSpace,
+    ) -> CategoricalPolicyNet:
+        """Builds the categorical policy used by the shared PPO update."""
+        return CategoricalPolicyNet(
+            design_space,
+            dim_y=task.event_shape_y.numel(),
+            outcome_bounds=(self.config.outcome_low, self.config.outcome_high),
+        )
+
+    def _ppo_policy_metrics(
+        self,
+        policy: CategoricalPolicyNet,
+        observation: dict[str, torch.Tensor],
+    ) -> dict[str, float]:
+        """Returns optional policy-specific PPO diagnostics."""
+        return {}
 
     def _soft_update(self, source, target) -> None:
         """Polyak-updates a target Q network."""
@@ -961,6 +1072,16 @@ class RLBOED:
             raise ValueError("ppo_gae_lambda must be between 0 and 1.")
         if cfg.ppo_learning_rate <= 0:
             raise ValueError("ppo_learning_rate must be positive.")
+        if (
+            cfg.ppo_actor_learning_rate is not None
+            and cfg.ppo_actor_learning_rate <= 0
+        ):
+            raise ValueError("ppo_actor_learning_rate must be positive when set.")
+        if (
+            cfg.ppo_critic_learning_rate is not None
+            and cfg.ppo_critic_learning_rate <= 0
+        ):
+            raise ValueError("ppo_critic_learning_rate must be positive when set.")
         if cfg.ppo_clip_coef <= 0:
             raise ValueError("ppo_clip_coef must be positive.")
         if cfg.ppo_ent_coef < 0:

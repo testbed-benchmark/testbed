@@ -3,19 +3,23 @@
 import importlib.util
 from math import sqrt
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
 from testbed.design_nets import CategoricalPolicyNet, RLBOEDValueNetwork
 from testbed.designers import PolicyDesigner
 from testbed.envs import CategoricalDesignSpace
+from testbed.envs.history import History
 from testbed.methods import RLBOED, FitResult, RLBOEDConfig
 from testbed.tasks import DestructiveLotInspection
 
 EXAMPLE_PATH = (
     Path(__file__).parents[1] / "examples" / "ppo_destructive_lot_inspection.py"
 )
-SPEC = importlib.util.spec_from_file_location("ppo_destructive_lot_inspection", EXAMPLE_PATH)
+SPEC = importlib.util.spec_from_file_location(
+    "ppo_destructive_lot_inspection", EXAMPLE_PATH
+)
 assert SPEC is not None
 assert SPEC.loader is not None
 ppo_destructive_lot_inspection = importlib.util.module_from_spec(SPEC)
@@ -106,13 +110,105 @@ def test_rlboed_fit_dispatches_discrete_design_spaces_to_ppo(tmp_path):
     assert checkpoint["algorithm"] == "ppo"
 
 
-def test_ppo_destructive_lot_example_runs_tiny_training():
+def test_ppo_supports_separate_actor_and_critic_optimizers():
+    task = DestructiveLotInspection(num_zones=3)
+    config = tiny_config(
+        ppo_actor_learning_rate=1e-2,
+        ppo_critic_learning_rate=2.5e-4,
+    )
+
+    result = RLBOED(config).fit(task, horizon=2, design_space=task.design_space)
+
+    assert result.checkpoint["optimizer"] is None
+    assert result.checkpoint["actor_optimizer"] is not None
+    assert result.checkpoint["critic_optimizer"] is not None
+    step_metrics = next(metrics for metrics in result.metrics if "approx_kl" in metrics)
+    assert torch.isfinite(torch.tensor(step_metrics["actor_grad_norm"]))
+    assert torch.isfinite(torch.tensor(step_metrics["critic_grad_norm"]))
+
+
+def test_conservative_rule_uses_decision_maker_prior_and_evidence():
     args = ppo_destructive_lot_inspection.Args(
-        save=False,
+        cuda=False,
+        num_zones=3,
+        batch_size=4,
+        dm_good_probability=0.4,
+        dm_suspicious_zones="0",
+        dm_rho_grid_size=8,
+    )
+    task = ppo_destructive_lot_inspection.make_task(args, torch.device("cpu"))
+    rule = ppo_destructive_lot_inspection.make_decision_rule(args, task)
+    history = History(
+        max_episode_length=4,
+        designs=torch.zeros(2, 4),
+        outcomes=torch.tensor(
+            [
+                [[0.0], [0.0], [0.0], [0.0]],
+                [[4.0], [4.0], [4.0], [4.0]],
+            ]
+        ),
+        mask=torch.ones(2, 4, dtype=torch.bool),
+    )
+
+    posterior_good = rule.posterior_good_probability(history)
+
+    assert posterior_good[0] > args.dm_good_probability
+    assert posterior_good[1] < args.dm_good_probability
+    assert rule.threshold == 0.8
+
+
+def test_default_conservative_rule_can_accept_favorable_history():
+    args = ppo_destructive_lot_inspection.Args(cuda=False)
+    task = ppo_destructive_lot_inspection.make_task(args, torch.device("cpu"))
+    rule = ppo_destructive_lot_inspection.make_decision_rule(args, task)
+    history = History(
+        max_episode_length=args.horizon,
+        designs=(torch.arange(args.horizon) % args.num_zones).unsqueeze(0),
+        outcomes=torch.zeros(1, args.horizon, 1),
+        mask=torch.ones(1, args.horizon, dtype=torch.bool),
+    )
+
+    assert rule(history).item()
+
+
+def test_fixed_rule_evaluation_samples_stochastic_policy():
+    class RecordingPolicy:
+        def __init__(self):
+            self.deterministic = None
+
+        def eval(self):
+            pass
+
+        def sample_from_observation(self, observation, *, deterministic):
+            self.deterministic = deterministic
+            return SimpleNamespace(action=torch.zeros(observation["mask"].shape[0]))
+
+    args = ppo_destructive_lot_inspection.Args(
         cuda=False,
         num_zones=3,
         horizon=2,
-        n_contrastive=1,
+        batch_size=2,
+        dm_suspicious_zones="0",
+        dm_rho_grid_size=4,
+        eval_episodes=32,
+    )
+    policy = RecordingPolicy()
+
+    ppo_destructive_lot_inspection.evaluate_policy_mean_risk(args, policy)
+
+    assert policy.deterministic is False
+
+
+def test_ppo_destructive_lot_example_trains_for_fixed_rule():
+    args = ppo_destructive_lot_inspection.Args(
+        save=False,
+        cuda=False,
+        verbose=False,
+        num_zones=3,
+        batch_size=2,
+        horizon=2,
+        dm_suspicious_zones="0",
+        dm_rho_grid_size=4,
         num_training_iterations=1,
         num_envs=2,
         ppo_num_minibatches=2,
@@ -124,3 +220,7 @@ def test_ppo_destructive_lot_example_runs_tiny_training():
 
     assert checkpoint is None
     assert isinstance(result.designer.policy_net, CategoricalPolicyNet)
+    assert result.checkpoint["algorithm"] == "ppo_fixed_conservative_dm"
+    torch.testing.assert_close(
+        result.checkpoint["dm_acceptance_threshold"], torch.tensor(0.8)
+    )
