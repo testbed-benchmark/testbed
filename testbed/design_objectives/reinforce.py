@@ -122,9 +122,9 @@ class Reinforce(Objective):
     ):
         """Builds the REINFORCE surrogate from batched histories.
 
-        y_history:      [b, T, *event_shape_y]
-        design_history: [b, T, *event_shape_design]
-        theta_0:        [b, *event_shape_theta]  -- true theta used to generate the history
+        y_history:      [b, T, \*event_shape_y]
+        design_history: [b, T, \*event_shape_design]
+        theta_0:        [b, \*event_shape_theta] -- true theta used to generate the history
         policy_log_probs: [b, T] per-step policy log probs, required by the score-function form
         returns: scalar whose value is mean(V) and whose gradient is the estimate.
         """
