@@ -2,7 +2,7 @@
 orphan: true
 ---
 
-# Weights & Biases logging
+# Weights & Biases Logging
 
 Every run managed by {py:class}`~testbed.core.manager.Manager` writes metrics to a
 `metrics.jsonl` file in the run directory by default. You can *additionally* mirror
