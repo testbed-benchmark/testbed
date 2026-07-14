@@ -17,7 +17,7 @@ from omegaconf import OmegaConf
 
 RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
 
-ENTRY_POINT_RECIPES = ["dad", "actionbed", "rlboed"]
+ENTRY_POINT_RECIPES = ["dad", "actionbed", "rlboed", "experiments/location_finding_2src/actionbed"]
 
 
 def _compose(recipe):
@@ -74,5 +74,10 @@ def test_temporal_discounting_dad_preserves_objective_defaults():
 
 
 def test_two_source_actionbed_preserves_grad_clip_default():
-    cfg = _compose("location_finding_2src/actionbed")
+    cfg = _compose("experiments/location_finding_2src/actionbed")
+    assert cfg.task.n_sources == 2
     assert cfg.grad_clip is None
+    assert cfg.eval_every == 100
+    assert cfg.n_outer_eval == 2_048
+    assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
+    assert "encoder_dim_h" not in cfg.action_net

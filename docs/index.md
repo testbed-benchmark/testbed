@@ -4,6 +4,7 @@ TestBED is a PyTorch library for Bayesian Experimental Design (BED).
 
 ## Guides
 
+- [Configuration recipes](configuration.md)
 - [Weights & Biases logging](wandb.md)
 
 ```{toctree}
