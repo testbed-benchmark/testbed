@@ -1,19 +1,16 @@
 # @package _global_
 
+defaults:
+  - /dad
+  - override /task: temporal_discounting
+  - override /net@design_net: null
+  - _self_
+
 # DAD on hyperbolic temporal discounting, trained with the REINFORCE gradient
 # estimator (DAD paper Eq. 16). Architecture and hyperparameters follow the
 # DAD paper HTD experiment (Foster et al. 2021, Appendix D.2).
 
-# system
-device: cuda
 seed: 0
-save_dir: ???
-# task
-task:
-  _target_: testbed.tasks.HyperbolicTemporalDiscounting
-  epsilon: 0.01
-  exponent: 1.0
-  temperature: 0.0  # true discrete sampling; REINFORCE handles the gradient
 T: 20
 # objective
 objective:

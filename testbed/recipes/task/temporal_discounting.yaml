@@ -1,0 +1,4 @@
+_target_: testbed.tasks.HyperbolicTemporalDiscounting
+epsilon: 0.01
+exponent: 1.0
+temperature: 0.0  # true discrete sampling; REINFORCE handles the gradient

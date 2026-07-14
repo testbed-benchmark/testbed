@@ -73,7 +73,8 @@ def test_rlboed_recipe_overrides_shared_task():
 
 
 def test_temporal_discounting_dad_preserves_objective_defaults():
-    cfg = _compose("temporal_discounting/dad")
+    cfg = _compose("experiments/temporal_discounting/dad")
+    assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
     assert cfg.objective.reparameterize_policy is False
     assert cfg.objective.requires_policy_log_probs is False
 
