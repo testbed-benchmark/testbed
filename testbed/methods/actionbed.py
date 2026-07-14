@@ -8,6 +8,7 @@ from testbed.core.distributions import TorchDistribution
 from testbed.core.setup import setup
 from testbed.design_objectives.reinforce import leave_one_out_baseline
 from testbed.designers import PolicyDesigner, RandomDesigner
+from testbed.envs.design_spaces import CategoricalDesignSpace
 
 # ============================================================================
 # Training class
@@ -26,6 +27,7 @@ class Trainer:
         optimizer,
         cfg,
         scheduler=None,
+        action_optimizer=None,
         random_designer=None,
         manager=None,
     ):
@@ -38,7 +40,9 @@ class Trainer:
         self.designer = designer
         self.action_net = action_net
         self.loss_fn = loss_fn
-        self.optimizer = optimizer
+        self.design_optimizer = optimizer
+        self.action_optimizer = action_optimizer or optimizer
+        self.separate_optimizers = action_optimizer is not None
         self.scheduler = scheduler
         self.cfg = cfg
 
@@ -126,17 +130,19 @@ class Trainer:
 
         action = self.action_net(y_obs, design_obs)
         loss = self.loss_fn(action, theta)
+        if loss.ndim > 0:
+            loss = loss.mean()
 
-        self.optimizer.zero_grad()
+        self.action_optimizer.zero_grad()
         loss.backward()
 
-        if cfg.grad_clip is not None:
-            all_params = list(self.designer.policy_net.parameters()) + list(
-                self.action_net.parameters()
+        action_grad_clip = getattr(cfg, "action_grad_clip", cfg.grad_clip)
+        if action_grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(
+                self.action_net.parameters(), action_grad_clip
             )
-            torch.nn.utils.clip_grad_norm_(all_params, cfg.grad_clip)
 
-        self.optimizer.step()
+        self.action_optimizer.step()
 
         return {"action_warmup/loss": loss.item()}
 
@@ -154,6 +160,7 @@ class Trainer:
 
         action = self.action_net(y_obs, design_obs)
         loss = self.loss_fn(action, theta)
+        entropy = None
         if self.designer.reinforce_requires_policy_log_probs:
             if loss.ndim == 0 or loss.shape[0] != theta.shape[0]:
                 raise ValueError(
@@ -168,22 +175,53 @@ class Trainer:
             ).mean()
             loss = loss_per_rollout.mean() + score_loss
 
-        self.optimizer.zero_grad()
+            entropy_coef = getattr(cfg, "entropy_coef", 0.0)
+            if entropy_coef != 0.0:
+                entropies = []
+                for t in range(design_obs.shape[1]):
+                    _, step_entropy = self.designer.policy_net.evaluate_designs(
+                        y_obs[:, :t], design_obs[:, :t], design_obs[:, t]
+                    )
+                    entropies.append(step_entropy)
+                entropy = torch.stack(entropies, dim=1).mean()
+                loss = loss - entropy_coef * entropy
+
+        self.design_optimizer.zero_grad()
+        if self.separate_optimizers:
+            self.action_optimizer.zero_grad()
         loss.backward()
 
-        if cfg.grad_clip is not None:
+        if self.separate_optimizers:
+            design_grad_clip = getattr(cfg, "design_grad_clip", cfg.grad_clip)
+            action_grad_clip = getattr(cfg, "action_grad_clip", cfg.grad_clip)
+            if design_grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    self.designer.policy_net.parameters(), design_grad_clip
+                )
+            if action_grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    self.action_net.parameters(), action_grad_clip
+                )
+        elif cfg.grad_clip is not None:
             all_params = list(self.designer.policy_net.parameters()) + list(
                 self.action_net.parameters()
             )
             torch.nn.utils.clip_grad_norm_(all_params, cfg.grad_clip)
 
-        self.optimizer.step()
+        self.design_optimizer.step()
+        if self.separate_optimizers:
+            self.action_optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
 
-        return {
-            "loss": loss.item(),
+        metrics = {
+            "loss": loss_per_rollout.mean().item()
+            if entropy is not None
+            else loss.item()
         }
+        if entropy is not None:
+            metrics["entropy"] = entropy.item()
+        return metrics
 
     def evaluate_warmup(self):
         """Evalutes warmup with a fresh batch of rollouts."""
@@ -199,6 +237,8 @@ class Trainer:
             y_obs, design_obs = self.random_designer.rollout(theta)
             action = self.action_net(y_obs, design_obs)
             loss = self.loss_fn(action, theta)
+            if loss.ndim > 0:
+                loss = loss.mean()
 
         self.designer.policy_net.train(policy_was_training)
         self.action_net.train(action_was_training)
@@ -335,25 +375,40 @@ def main(cfg):
     # Setup for action-warmup
     random_designer = None
     if cfg.n_action_warmup_iter > 0:
-        manager.event_logger.warning(
-            "Assuming a Gaussian design prior for action warmup. Also assumes that task.event_shape_design is flat."
-        )
-        design_dist = TorchDistribution(
-            torch.distributions.MultivariateNormal(
-                torch.zeros(task.event_shape_design, device=cfg.device),
-                torch.eye(task.event_shape_design.numel(), device=cfg.device),
+        if isinstance(task.design_space, CategoricalDesignSpace):
+            design_dist = TorchDistribution(
+                torch.distributions.Categorical(
+                    logits=torch.zeros(task.design_space.n, device=cfg.device)
+                )
             )
-        )
+        else:
+            manager.event_logger.warning(
+                "Assuming a Gaussian design prior for action warmup. Also assumes that task.event_shape_design is flat."
+            )
+            design_dist = TorchDistribution(
+                torch.distributions.MultivariateNormal(
+                    torch.zeros(task.event_shape_design, device=cfg.device),
+                    torch.eye(task.event_shape_design.numel(), device=cfg.device),
+                )
+            )
         random_designer = RandomDesigner(task, cfg.T, design_dist)
 
-    # Create optimizer + LR scheduler
-    all_policy_params = list(design_net.parameters()) + list(action_net.parameters())
-    optimizer = torch.optim.Adam(all_policy_params, lr=cfg.lr, betas=cfg.betas)
+    # Create separate optimizers so policy clipping cannot suppress action updates.
+    design_optimizer = torch.optim.Adam(
+        design_net.parameters(),
+        lr=getattr(cfg, "design_lr", cfg.lr),
+        betas=cfg.betas,
+    )
+    action_optimizer = torch.optim.Adam(
+        action_net.parameters(),
+        lr=getattr(cfg, "action_lr", cfg.lr),
+        betas=cfg.betas,
+    )
 
     scheduler = None
     if cfg.lr_period is not None:
         scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma
+            design_optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma
         )
 
     loss_fn = instantiate(cfg.loss)
@@ -363,9 +418,10 @@ def main(cfg):
         designer=designer,
         action_net=action_net,
         loss_fn=loss_fn,
-        optimizer=optimizer,
+        optimizer=design_optimizer,
         cfg=cfg,
         scheduler=scheduler,
+        action_optimizer=action_optimizer,
         random_designer=random_designer,
         manager=manager,
     )

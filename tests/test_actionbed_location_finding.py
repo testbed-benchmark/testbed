@@ -6,10 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
+from testbed.core.distributions import TorchDistribution
 from testbed.core.manager import Manager
 from testbed.design_nets import CategoricalPolicyNet, DeepSetPolicyNet, MLPPolicyNet
 from testbed.design_objectives import LotDecisionLoss, MSELoss, SortedMSELoss
-from testbed.designers import PolicyDesigner
+from testbed.designers import PolicyDesigner, RandomDesigner
 from testbed.methods.actionbed import Trainer, resolve_event_shape_action
 from testbed.tasks import DestructiveLotInspection, LocationFinding
 
@@ -121,6 +122,83 @@ def test_train_step_updates_categorical_design_and_action_networks():
         not torch.equal(before, after)
         for before, after in zip(params_before_action, action_net.parameters())
     )
+
+
+def test_categorical_train_step_with_separate_optimizers_and_entropy():
+    task = DestructiveLotInspection(num_zones=3)
+    cfg = SimpleNamespace(
+        n_outer=32,
+        n_outer_eval=32,
+        grad_clip=None,
+        design_grad_clip=0.5,
+        action_grad_clip=1.0,
+        entropy_coef=1e-3,
+    )
+    policy_net = CategoricalPolicyNet(
+        task.design_space, dim_y=1, outcome_bounds=(0.0, 4.0)
+    )
+    action_net = MLPPolicyNet(
+        event_shape_y=task.event_shape_y,
+        event_shape_design=task.event_shape_design,
+        event_shape_out=task.event_shape_action,
+        dims=[6, 16, 1],
+    )
+    designer = PolicyDesigner(task, T=3, policy_net=policy_net)
+    trainer = Trainer(
+        task,
+        designer,
+        action_net,
+        LotDecisionLoss(reduction="none"),
+        torch.optim.Adam(policy_net.parameters(), lr=1e-3),
+        cfg,
+        action_optimizer=torch.optim.Adam(action_net.parameters(), lr=1e-3),
+    )
+
+    metrics = trainer.train_step()
+
+    assert metrics["entropy"] > 0.0
+    assert 0.0 <= metrics["loss"] <= 1.0
+
+
+def test_categorical_action_warmup_uses_unreduced_loss():
+    task = DestructiveLotInspection(num_zones=3)
+    cfg = SimpleNamespace(
+        n_outer=32,
+        n_outer_eval=32,
+        grad_clip=None,
+        action_grad_clip=1.0,
+    )
+    policy_net = CategoricalPolicyNet(
+        task.design_space, dim_y=1, outcome_bounds=(0.0, 4.0)
+    )
+    action_net = MLPPolicyNet(
+        event_shape_y=task.event_shape_y,
+        event_shape_design=task.event_shape_design,
+        event_shape_out=task.event_shape_action,
+        dims=[6, 16, 1],
+    )
+    designer = PolicyDesigner(task, T=3, policy_net=policy_net)
+    uniform = TorchDistribution(
+        torch.distributions.Categorical(logits=torch.zeros(task.num_zones))
+    )
+    random_designer = RandomDesigner(task, T=3, dist=uniform)
+    trainer = Trainer(
+        task,
+        designer,
+        action_net,
+        LotDecisionLoss(reduction="none"),
+        torch.optim.Adam(policy_net.parameters(), lr=1e-3),
+        cfg,
+        action_optimizer=torch.optim.Adam(action_net.parameters(), lr=1e-3),
+        random_designer=random_designer,
+    )
+    design_params_before = [parameter.clone() for parameter in policy_net.parameters()]
+
+    metrics = trainer.action_warmup_step()
+
+    assert isinstance(metrics["action_warmup/loss"], float)
+    for before, after in zip(design_params_before, policy_net.parameters()):
+        torch.testing.assert_close(before, after)
 
 
 def test_train_step_with_grad_clip():
