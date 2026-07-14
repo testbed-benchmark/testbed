@@ -134,3 +134,10 @@ def sort_by_norm(x: Tensor) -> Tensor:
         x = x.squeeze(0)
 
     return x
+
+
+def shape_as_str(x: Tensor | None) -> str:
+    """Returns a tensor's shape as a string; for nice printing."""
+    if x is None:
+        return "None"
+    return str(tuple(x.shape))
