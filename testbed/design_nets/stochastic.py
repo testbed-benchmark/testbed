@@ -8,9 +8,9 @@ import torch.nn as nn
 from torch import Tensor
 from torch.distributions import Normal
 
+from testbed.core.design_spaces import BoxDesignSpace
 from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
-from testbed.envs.design_spaces import BoxDesignSpace
 
 
 @dataclass
