@@ -792,6 +792,22 @@ class LotInspectionPPOTrainer(PPOTrainer):
         }
 
 
+def print_training_progress(metrics: dict[str, float]) -> None:
+    """Prints one standalone training-progress line."""
+    print(
+        f"iteration={metrics['step']:.0f}, "
+        f"env_steps={metrics['env_steps']:.0f}, "
+        f"train_expected_loss={-metrics['episodic_return']:.4f}, "
+        f"suspicious_zone_mass={metrics['suspicious_zone_mass']:.4f}, "
+        f"entropy={metrics['entropy']:.4f}, "
+        f"approx_kl={metrics['approx_kl']:.4f}, "
+        f"clipfrac={metrics['clipfrac']:.4f}, "
+        f"value_loss={metrics['value_loss']:.4f}, "
+        f"policy_loss={metrics['policy_loss']:.4f}",
+        flush=True,
+    )
+
+
 def train(args: Args):
     """Trains the design policy against the fixed decision rule."""
     _validate_args(args)
@@ -853,7 +869,17 @@ def train(args: Args):
         config,
         suspicious_zones=suspicious_zones,
     )
-    trainer.train()
+    policy.train()
+    value_net.train()
+    trainer._start_time = time.time()
+    for step in range(args.num_training_iterations):
+        metrics = trainer.train_step(step)
+        trainer.metrics.extend(metrics)
+        if args.verbose and (
+            step % args.log_frequency == 0 or step == args.num_training_iterations - 1
+        ):
+            print_training_progress(metrics[-1])
+
     policy.eval()
     checkpoint = trainer.build_checkpoint(step=args.num_training_iterations - 1)
     checkpoint.update(
