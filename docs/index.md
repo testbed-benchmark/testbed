@@ -67,6 +67,7 @@ maxdepth: 1
 
 examples/location_finding
 examples/constrained_designs
+examples/using_hooks
 ```
 
 

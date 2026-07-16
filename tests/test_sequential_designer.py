@@ -2,6 +2,7 @@
 composition reproduces the pre-refactor behavior (propose -> sample -> infer
 -> update_prior, inline, every step)."""
 
+import pytest
 import torch
 
 from testbed.design_objectives import NMC, PCE
@@ -135,6 +136,54 @@ def test_transform_designs_false_opts_out():
     torch.testing.assert_close(
         rollout.extra["raw_design_history"], rollout.design_history
     )
+
+
+def test_store_posterior_history_off_by_default():
+    task = _make_task()
+    objective = NMC(task, n_outer=4, n_inner=4)
+    designer = SequentialDesigner(task, T=2, objective=objective, lr=1e-2, n_step_opt=3)
+
+    rollout = designer.rollout(task.sample_prior(1))
+
+    assert "posterior_history" not in rollout.extra
+
+
+def test_store_posterior_history_tracks_one_per_step():
+    T = 3
+    task = _make_task()
+    objective = NMC(task, n_outer=4, n_inner=4)
+    designer = SequentialDesigner(
+        task,
+        T=T,
+        objective=objective,
+        lr=1e-2,
+        n_step_opt=3,
+        store_posterior_history=True,
+    )
+
+    rollout = designer.rollout(task.sample_prior(1))
+
+    history = rollout.extra["posterior_history"]
+    assert len(history) == T
+    # The last entry in the history is the same posterior surfaced as
+    # extra["posterior"] (the final task.current_prior).
+    assert history[-1] is rollout.extra["posterior"]
+
+
+def test_store_posterior_history_requires_update_posterior():
+    task = _make_task()
+    objective = NMC(task, n_outer=4, n_inner=4)
+
+    with pytest.raises(ValueError, match="update_posterior"):
+        SequentialDesigner(
+            task,
+            T=2,
+            objective=objective,
+            lr=1e-2,
+            n_step_opt=3,
+            update_posterior=False,
+            store_posterior_history=True,
+        )
 
 
 def test_transform_designs_false_current_prior_init_is_identity():

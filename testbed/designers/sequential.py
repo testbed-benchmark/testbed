@@ -39,6 +39,7 @@ class SequentialDesigner(Designer):
         *,
         update_posterior: bool = True,
         inference_fn=run_importance_sampling,
+        store_posterior_history: bool = False,
         extra_hooks: Sequence[RolloutHook] = (),
         expose_raw_design: bool = False,
         transform_designs: bool = True,
@@ -61,6 +62,11 @@ class SequentialDesigner(Designer):
             every step using inference_fn/inference_kwargs, updating
             task.current_prior. Set False to manage posterior updates
             yourself (e.g. via extra_hooks).
+        store_posterior_history: if True, the PosteriorUpdateHook also keeps
+            the posterior computed after each step, exposed on the rollout
+            as extra["posterior_history"] (a list of Distribution, one per
+            step) alongside the usual extra["posterior"] for the final one.
+            Off by default -- only meaningful when update_posterior is True.
         extra_hooks: additional hooks to run alongside the posterior update
             (after it, so they see the up-to-date posterior).
         expose_raw_design: if True, rollout() reports the raw (pre-transform)
@@ -85,7 +91,19 @@ class SequentialDesigner(Designer):
 
         hooks = list(extra_hooks)
         if update_posterior:
-            hooks = [PosteriorUpdateHook(inference_fn, **inference_kwargs), *hooks]
+            hooks = [
+                PosteriorUpdateHook(
+                    inference_fn,
+                    store_history=store_posterior_history,
+                    **inference_kwargs,
+                ),
+                *hooks,
+            ]
+        elif store_posterior_history:
+            raise ValueError(
+                "store_posterior_history=True requires update_posterior=True "
+                "(there's no PosteriorUpdateHook to track history on)."
+            )
         super().__init__(
             task,
             T,
