@@ -14,7 +14,7 @@ from testbed.design_nets import (
     TanhGaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner
-from testbed.envs import BoxDesignSpace
+from testbed.envs import BoxDesignSpace, CategoricalDesignSpace
 from testbed.envs.history import History
 from testbed.methods.rlboed import (
     Trainer,
@@ -27,7 +27,7 @@ from testbed.methods.rlboed import (
     make_networks,
     validate_config,
 )
-from testbed.tasks import LocationFinding
+from testbed.tasks import LocationFinding, PreyPopulation
 
 SoftQNetwork = RLBOEDQNetwork
 
@@ -396,6 +396,25 @@ def test_validate_config_requires_box_design_space():
 
     with pytest.raises(TypeError, match="BoxDesignSpace"):
         validate_config(task, cfg, object())
+
+
+def test_validate_config_rejects_categorical_design_space():
+    cfg = _tiny_cfg()
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    design_space = CategoricalDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]]))
+
+    with pytest.raises(TypeError, match="continuous BoxDesignSpace"):
+        validate_config(task, cfg, design_space)
+
+
+def test_rlboed_uses_and_rejects_a_tasks_categorical_design_space():
+    cfg = _tiny_cfg()
+    task = PreyPopulation()
+    design_space = build_design_space(cfg, task)
+
+    assert design_space is task.design_space
+    with pytest.raises(TypeError, match="continuous BoxDesignSpace"):
+        validate_config(task, cfg, design_space)
 
 
 def test_validate_config_rejects_inverted_outcome_bounds():

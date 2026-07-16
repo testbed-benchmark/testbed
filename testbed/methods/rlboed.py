@@ -336,8 +336,10 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.policy_init_std must be positive.")
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
-    if not isinstance(design_space, BoxDesignSpace):
-        raise TypeError("This RLBOED SAC implementation requires a BoxDesignSpace.")
+    if not isinstance(design_space, BoxDesignSpace) or design_space.is_discrete:
+        raise TypeError(
+            "This RLBOED SAC implementation requires a continuous BoxDesignSpace."
+        )
 
 
 @dataclass
@@ -857,7 +859,9 @@ class Trainer:
 
 
 def build_design_space(cfg, task):
-    """Instantiates the box design space for the task."""
+    """Returns the task's declared space or configures a continuous box."""
+    if task.design_space is not None:
+        return task.design_space
     return BoxDesignSpace(
         cfg.design_space.low,
         cfg.design_space.high,
