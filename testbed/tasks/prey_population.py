@@ -133,11 +133,7 @@ class PreyPopulation(Task):
         """
         attack_rate, handling_time = theta[:, 0:1], theta[:, 1:2]
         quadratic = attack_rate * handling_time
-        linear = (
-            attack_rate * self.duration
-            - quadratic * design
-            + design.reciprocal()
-        )
+        linear = attack_rate * self.duration - quadratic * design + design.reciprocal()
         discriminant = linear.square() + 4 * quadratic
         root = discriminant.sqrt()
         return torch.where(

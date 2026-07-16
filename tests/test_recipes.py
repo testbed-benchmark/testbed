@@ -22,6 +22,7 @@ ENTRY_POINT_RECIPES = [
     "actionbed",
     "rlboed",
     "experiments/location_finding_2src/actionbed",
+    "experiments/prey_population/rlboed",
 ]
 
 
@@ -42,7 +43,10 @@ def test_recipe_composes(recipe):
     assert cfg.save_dir
 
     # Shared task/wandb groups land under their expected keys.
-    assert cfg.task._target_ == "testbed.tasks.LocationFinding"
+    assert cfg.task._target_ in {
+        "testbed.tasks.LocationFinding",
+        "testbed.tasks.PreyPopulation",
+    }
     assert cfg.wandb.enabled is False
 
 
@@ -70,6 +74,16 @@ def test_rlboed_recipe_overrides_shared_task():
     # The recipe overrides the shared 1-source task group to the 2-source variant.
     assert cfg.task.n_sources == 2
     assert cfg.sac.num_envs > 0
+
+
+def test_prey_rlboed_recipe_uses_discrete_sac_defaults():
+    cfg = _compose("experiments/prey_population/rlboed")
+    assert cfg.task._target_ == "testbed.tasks.PreyPopulation"
+    assert cfg.T == 10
+    assert (cfg.reward.outcome_low, cfg.reward.outcome_high) == (0.0, 300.0)
+    assert cfg.sac.num_training_iterations == 1_000
+    assert cfg.sac.gamma == 1.0
+    assert cfg.sac.tau == 0.005
 
 
 def test_temporal_discounting_dad_preserves_objective_defaults():

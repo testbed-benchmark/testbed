@@ -1,0 +1,23 @@
+# @package _global_
+
+defaults:
+  - /rlboed
+  - override /task: prey_population
+  - _self_
+
+# Discrete SAC settings for the prey-population experiment.
+seed: 0
+T: 10
+reward:
+  outcome_low: 0.0
+  outcome_high: 300.0
+sac:
+  num_training_iterations: 1_000
+  num_envs: 100
+  buffer_size: 1_000_000
+  learning_starts: 100_000
+  gradient_steps_per_iteration: 64
+  gamma: 1.0
+  tau: 0.005
+  policy_lr: 0.0003
+  q_lr: 0.0003

@@ -55,7 +55,9 @@ def test_population_solver_handles_tail_parameters():
 
     assert torch.allclose(final_population, torch.tensor([[0.0421881]]), atol=1e-6)
     assert torch.allclose(probability, torch.tensor([[0.9998594]]), atol=1e-6)
-    assert torch.isfinite(task.outcome_logp(torch.tensor([[299.0]]), theta, design)).all()
+    assert torch.isfinite(
+        task.outcome_logp(torch.tensor([[299.0]]), theta, design)
+    ).all()
 
 
 def test_consumption_probability_and_log_prob_match_binomial():

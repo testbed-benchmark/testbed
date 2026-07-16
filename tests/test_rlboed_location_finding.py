@@ -1,6 +1,7 @@
 """Tests for the RL-BOED (SAC) training components."""
 
 import json
+from math import log
 
 import pytest
 import torch
@@ -9,7 +10,10 @@ from torch import nn
 
 from testbed.core.manager import Manager
 from testbed.design_nets import (
+    CategoricalPolicyNet,
+    DeepSetCategoricalActor,
     DeepSetGaussianActor,
+    RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
     TanhGaussianPolicyNet,
 )
@@ -186,6 +190,56 @@ def test_deployable_policy_maps_raw_history_to_physical_designs():
     torch.testing.assert_close(actual, expected)
     assert torch.all(actual >= -4.0)
     assert torch.all(actual <= 4.0)
+
+
+def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
+    design_space = CategoricalDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
+    actor = DeepSetCategoricalActor(dim_y=1, dim_design=1, n_actions=3)
+    policy = CategoricalPolicyNet(
+        design_space,
+        actor=actor,
+        normalize_design_history=True,
+        outcome_bounds=(0.0, 10.0),
+    )
+    with torch.no_grad():
+        actor.logits_head.bias.copy_(torch.tensor([0.0, -1.0, 2.0]))
+    outcomes = torch.zeros(4, 0, 1)
+    designs = torch.zeros(4, 0, 1)
+
+    sampled = policy.sample(outcomes, designs)
+    greedy = policy.sample(outcomes, designs, deterministic=True)
+
+    assert design_space.contains(sampled.design)
+    torch.testing.assert_close(greedy.design, torch.full((4, 1), 10.0))
+    expected_log_prob = torch.log_softmax(actor.logits_head.bias, dim=0)[2]
+    torch.testing.assert_close(greedy.log_prob, expected_log_prob.expand(4))
+
+
+def test_discrete_q_network_is_masked_and_permutation_invariant():
+    critic = RLBOEDDiscreteQNetwork(
+        dim_y=1,
+        dim_design=1,
+        n_actions=3,
+        design_low=1.0,
+        design_high=10.0,
+        outcome_low=0.0,
+        outcome_high=10.0,
+    )
+    designs = torch.tensor([[[1.0], [5.0], [10.0]], [[5.0], [1.0], [10.0]]])
+    outcomes = torch.tensor([[[1.0], [2.0], [1000.0]], [[3.0], [4.0], [1000.0]]])
+    mask = torch.tensor([[True, True, False], [True, True, False]])
+    observation = History(3, designs=designs, outcomes=outcomes, mask=mask)
+    permuted = History(
+        3,
+        designs=designs[:, [1, 0, 2]],
+        outcomes=outcomes[:, [1, 0, 2]],
+        mask=mask[:, [1, 0, 2]],
+    )
+
+    values = critic(observation)
+
+    assert values.shape == (2, 3)
+    torch.testing.assert_close(values, critic(permuted))
 
 
 # ============================================================================
@@ -398,23 +452,21 @@ def test_validate_config_requires_box_design_space():
         validate_config(task, cfg, object())
 
 
-def test_validate_config_rejects_categorical_design_space():
+def test_validate_config_accepts_categorical_design_space():
     cfg = _tiny_cfg()
     task = LocationFinding(n_sources=1, dim_theta=2)
     design_space = CategoricalDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]]))
 
-    with pytest.raises(TypeError, match="continuous BoxDesignSpace"):
-        validate_config(task, cfg, design_space)
+    validate_config(task, cfg, design_space)
 
 
-def test_rlboed_uses_and_rejects_a_tasks_categorical_design_space():
+def test_rlboed_uses_a_tasks_categorical_design_space():
     cfg = _tiny_cfg()
     task = PreyPopulation()
     design_space = build_design_space(cfg, task)
 
     assert design_space is task.design_space
-    with pytest.raises(TypeError, match="continuous BoxDesignSpace"):
-        validate_config(task, cfg, design_space)
+    validate_config(task, cfg, design_space)
 
 
 def test_validate_config_rejects_inverted_outcome_bounds():
@@ -437,6 +489,68 @@ def test_train_step_updates_actor_parameters():
     assert any(
         not torch.equal(b, a) for b, a in zip(before, trainer.nets.actor.parameters())
     )
+
+
+def test_categorical_train_step_updates_networks_with_finite_losses():
+    cfg = _tiny_cfg()
+    cfg.reward.outcome_low = 0.0
+    cfg.reward.outcome_high = 300.0
+    task = PreyPopulation().to(cfg.device)
+    design_space = build_design_space(cfg, task)
+    validate_config(task, cfg, design_space)
+    _set_seed(cfg.seed, cfg.torch_deterministic)
+    nets = make_networks(task, design_space, cfg, task.device)
+    trainer = Trainer(
+        task,
+        PolicyDesigner(task, cfg.T, nets.actor, deterministic=False),
+        build_env(cfg, task, design_space),
+        build_replay_buffer(cfg, task),
+        nets,
+        cfg,
+    )
+    actor_before = [parameter.clone() for parameter in trainer.nets.actor.parameters()]
+    critic_before = [parameter.clone() for parameter in trainer.nets.qf1.parameters()]
+
+    trainer.train_step()
+
+    assert isinstance(trainer.nets.actor, CategoricalPolicyNet)
+    assert torch.isfinite(trainer._qf_loss)
+    assert torch.isfinite(trainer._actor_loss)
+    assert any(
+        not torch.equal(before, after)
+        for before, after in zip(actor_before, trainer.nets.actor.parameters())
+    )
+    assert any(
+        not torch.equal(before, after)
+        for before, after in zip(critic_before, trainer.nets.qf1.parameters())
+    )
+
+
+def test_categorical_temperature_increases_when_entropy_is_below_target():
+    cfg = _tiny_cfg()
+    cfg.reward.outcome_low = 0.0
+    cfg.reward.outcome_high = 300.0
+    task = PreyPopulation().to(cfg.device)
+    design_space = build_design_space(cfg, task)
+    nets = make_networks(task, design_space, cfg, task.device)
+    with torch.no_grad():
+        for parameter in nets.actor.parameters():
+            parameter.zero_()
+        nets.actor.actor.logits_head.bias[0] = 10.0
+    trainer = Trainer(
+        task,
+        PolicyDesigner(task, cfg.T, nets.actor, deterministic=False),
+        build_env(cfg, task, design_space),
+        build_replay_buffer(cfg, task),
+        nets,
+        cfg,
+    )
+    alpha_before = trainer.nets.log_alpha.exp().item()
+    assert trainer.target_entropy == pytest.approx(0.98 * log(design_space.n_actions))
+
+    trainer.train_step()
+
+    assert trainer.nets.log_alpha.exp().item() > alpha_before
 
 
 def test_train_is_reproducible_with_fixed_seed():
