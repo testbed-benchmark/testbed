@@ -28,6 +28,7 @@ class Designer(ABC, nn.Module):
         hooks: Sequence[RolloutHook] = (),
         use_raw_history: bool = True,
         expose_raw_design: bool = False,
+        transform_designs: bool = True,
     ):
         """Stores the task, horizon, and the hooks this designer always runs.
 
@@ -42,14 +43,26 @@ class Designer(ABC, nn.Module):
         task's raw<->design transform has a large dynamic range. No-op for
         designers that never produce a raw design (e.g. StaticDesigner,
         SequentialDesigner, RandomDesigner).
-        expose_raw_design: if True, a designer that computes a raw design as
-        part of choosing its (constrained) design reports it in the returned
-        Rollout (rollout.extra["raw_design_history"]), for inspection/debugging. False
-        by default -- most callers don't need it, and subclasses that support
-        this (StaticDesigner, SequentialDesigner) compute the raw design
-        either way, so this only gates whether it's surfaced, not computed.
-        PolicyDesigner subclasses always expose it unconditionally instead,
-        since there it's already needed for use_raw_history and free to report.
+        expose_raw_design: should we return the raw designs?
+        transform_designs: if True (default), a raw value a designer
+        produces (a learned parameter, an optimized tensor, or a
+        design_net's output) is mapped into a valid design via
+        task.design_space.to_design/.to_raw. A Task only ever consumes and
+        validates already-constrained designs (Task._check_design) -- it
+        never performs this mapping itself, so it's a designer-layer policy
+        choice, not a task concern. Set False if your design_net/parameter
+        already produces valid, constrained designs and you don't want them
+        remapped -- raw and design then coincide exactly (self._to_design/
+        self._to_raw become the identity). This is an assumption you are
+        making, not something enforced here: Task._check_design still
+        validates the final design downstream when task.validate_designs is
+        True, so an invalid passthrough design still raises there. Only
+        meaningful for designers that compute a raw value via a pointwise
+        transform (StaticDesigner, SequentialDesigner,
+        DeterministicPolicyDesigner) -- unused by StochasticPolicyDesigner,
+        whose net owns its own squash transform because it must enter the
+        sampled log-prob (see TanhGaussianPolicyNet), and unused by
+        RandomDesigner, which never produces a raw value.
         """
         super().__init__()
 
@@ -58,6 +71,26 @@ class Designer(ABC, nn.Module):
         self.hooks = list(hooks)
         self.use_raw_history = bool(use_raw_history)
         self.expose_raw_design = bool(expose_raw_design)
+        self.transform_designs = bool(transform_designs)
+
+    def _to_design(self, raw_design):
+        """Maps a raw value into a valid design via task.design_space.to_design.
+
+        Identity when self.transform_designs is False.
+        """
+        if not self.transform_designs:
+            return raw_design
+        return self.task.design_space.to_design(raw_design)
+
+    def _to_raw(self, design):
+        """Inverse of _to_design, via task.design_space.to_raw.
+
+        Identity when self.transform_designs is False -- always exactly
+        consistent with _to_design, since both are gated by the same flag.
+        """
+        if not self.transform_designs:
+            return design
+        return self.task.design_space.to_raw(design)
 
     @abstractmethod
     def propose_design(self, y_history, design_history, *, mask=None):
@@ -161,7 +194,7 @@ class Designer(ABC, nn.Module):
             policy_log_probs = torch.stack(policy_log_prob_list, dim=1)  # [b, T]
 
         extra = {}
-        if state.raw_design_history is not None:
+        if state.raw_design_history is not None and self.expose_raw_design:
             extra["raw_design_history"] = state.raw_design_history
         if policy_log_probs is not None:
             extra["policy_log_probs"] = policy_log_probs

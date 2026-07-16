@@ -192,12 +192,6 @@ def test_htd_design_space_transform():
     assert space.contains(design)
 
 
-def test_htd_design_space_to_raw_not_supported():
-    space = HTDDesignSpace(log_k_mean=-3.125)
-    with pytest.raises(NotImplementedError):
-        space.to_raw(torch.tensor([[20.0, 50.0]]))
-
-
 def test_htd_design_space_keeps_gradients():
     # Near-zero raw outputs saturate the task likelihood directly (zero gradient);
     # the transform maps them to non-saturating (D_1, R_0), keeping gradients alive.
@@ -228,7 +222,7 @@ def _invalid_design(b=4):
 def test_sample_outcome_rejects_invalid_design():
     task = _make_task()
     theta = task.sample_prior(4)
-    with pytest.raises(ValueError, match="design lies outside"):
+    with pytest.raises(ValueError, match="Design lies outside"):
         task.sample_outcome(theta, _invalid_design())
 
 
@@ -236,7 +230,7 @@ def test_outcome_logp_rejects_invalid_design():
     task = _make_task()
     theta = task.sample_prior(4)
     y = torch.ones(4, 1)
-    with pytest.raises(ValueError, match="design lies outside"):
+    with pytest.raises(ValueError, match="Design lies outside"):
         task.outcome_logp(y, theta, _invalid_design())
 
 
@@ -247,13 +241,13 @@ def test_history_logp_rejects_invalid_design_at_any_step():
     # Step 0 valid, step 1 invalid -- the whole history should still be rejected.
     valid = torch.tensor([20.0, 50.0]).expand(4, 2)
     design_history = torch.stack([valid, _invalid_design()], dim=1)
-    with pytest.raises(ValueError, match="design lies outside"):
+    with pytest.raises(ValueError, match="Design lies outside"):
         task.history_logp(y_history, design_history, theta)
 
 
 def test_sample_joint_rejects_invalid_design():
     task = _make_task()
-    with pytest.raises(ValueError, match="design lies outside"):
+    with pytest.raises(ValueError, match="Design lies outside"):
         task.sample_joint(_invalid_design())
 
 

@@ -109,3 +109,57 @@ def test_expose_raw_design_matches_forward_transform():
     torch.testing.assert_close(
         task.design_space.to_design(raw_design_history), rollout.design_history
     )
+
+
+def test_transform_designs_false_opts_out():
+    task = HyperbolicTemporalDiscounting()
+    # With transform_designs=False, the raw optimized tensor (init ~N(0,1))
+    # is used directly as the design, which won't satisfy HTDDesignSpace's
+    # real domain constraints (D1 > 0, 0 < R0 < 100) -- disable validation
+    # since this test is only about the designer-level opt-out.
+    task.validate_designs = False
+    objective = PCE(task, n_outer=4, n_inner=4)
+    designer = SequentialDesigner(
+        task,
+        T=2,
+        objective=objective,
+        lr=1e-2,
+        n_step_opt=3,
+        expose_raw_design=True,
+        transform_designs=False,
+    )
+
+    rollout = designer.rollout(task.sample_prior(1))
+
+    # No transform applied: raw and constrained designs coincide exactly.
+    torch.testing.assert_close(
+        rollout.extra["raw_design_history"], rollout.design_history
+    )
+
+
+def test_transform_designs_false_current_prior_init_is_identity():
+    # initialize_design()'s "current_prior" branch inverts a constrained
+    # sample through self._to_raw before optimizing; with transform_designs
+    # =False that inverse is the identity, so the raw init must equal the
+    # constrained sample unchanged -- no separate override needed to keep
+    # the forward/inverse pair consistent.
+    task = _make_task()
+    objective = NMC(task, n_outer=4, n_inner=4)
+    designer = SequentialDesigner(
+        task,
+        T=1,
+        objective=objective,
+        lr=1e-2,
+        n_step_opt=1,
+        init_design_dist="current_prior",
+        update_posterior=False,
+        transform_designs=False,
+    )
+
+    torch.manual_seed(0)
+    design_constrained = task.sample_current_prior().to(task.device)
+
+    torch.manual_seed(0)
+    design_raw = designer.initialize_design()
+
+    torch.testing.assert_close(design_raw.detach(), design_constrained)

@@ -31,6 +31,10 @@ extensions = [
 
 nb_execution_mode = "cache"
 
+myst_enable_extensions = [
+    "dollarmath",
+]
+
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
 }

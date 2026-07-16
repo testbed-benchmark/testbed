@@ -173,10 +173,8 @@ class Task(ABC, nn.Module):
             return
         if not self.design_space.contains(design):
             raise ValueError(
-                f"design lies outside {type(self.design_space).__name__} "
-                f"(shape {tuple(design.shape)}). Pass validate_designs=False to "
-                "disable this check, or map the design through "
-                "task.design_space.to_design(...)/.project(...) first."
+                f"Design lies outside {type(self.design_space).__name__}. "
+                f"Got design: {design}"
             )
 
     def outcome_logp(self, y, theta, design):

@@ -26,10 +26,20 @@ class StaticDesigner(Designer):
         *,
         hooks: Sequence[RolloutHook] = (),
         expose_raw_design: bool = False,
+        transform_designs: bool = True,
     ):
-        """Initializes learnable static designs."""
+        """Initializes learnable static designs.
+
+        transform_designs: see Designer.__init__. Default True: self.raw_design
+        is mapped through task.design_space.to_design before use.
+        """
         Designer.__init__(
-            self, task, T, hooks=hooks, expose_raw_design=expose_raw_design
+            self,
+            task,
+            T,
+            hooks=hooks,
+            expose_raw_design=expose_raw_design,
+            transform_designs=transform_designs,
         )
         self.raw_design = nn.Parameter(
             torch.randn(T, *task.event_shape_design, device=task.device)
@@ -44,15 +54,16 @@ class StaticDesigner(Designer):
         """Returns (constrained_design, raw_design) for the current step.
 
         self.raw_design is a raw/latent parameter -- legitimately Gaussian-shaped
-        by construction -- transformed through task.design_space on the way
-        out, so it can never produce an out-of-domain design regardless of
-        where gradient descent takes it.
+        by construction -- transformed through self._to_design (task.design_space
+        by default) on the way out, so it can never produce an out-of-domain
+        design regardless of where gradient descent takes it, unless
+        transform_designs=False opted out of that guarantee.
         """
         # y_history: [b, t, *event_shape_y]; t is the current step index
         t = y_history.shape[1]
         b = y_history.shape[0]
         raw = self.raw_design[t].unsqueeze(0).expand(b, *self.task.event_shape_design)
-        design = self.task.design_space.to_design(raw)
+        design = self._to_design(raw)
         return design, raw
 
     def propose_design(self, y_history, design_history, *, mask=None):
@@ -61,9 +72,13 @@ class StaticDesigner(Designer):
         return design
 
     def _step_design(self, y_history, design_history):
-        """Proposes the next design, returning (design, raw_design, policy_log_prob=None)."""
+        """Proposes the next design, returning (design, raw_design, policy_log_prob=None).
+
+        raw_design is always the actual raw value; Designer.rollout() gates
+        whether it's surfaced in rollout.extra based on self.expose_raw_design.
+        """
         design, raw = self._propose(y_history)
-        return design, (raw if self.expose_raw_design else None), None
+        return design, raw, None
 
     def rollout(self, theta) -> Rollout:
         """Runs the static design sequence.
@@ -75,9 +90,7 @@ class StaticDesigner(Designer):
             return super().rollout(theta)
 
         b = theta.shape[0]
-        design = self.task.design_space.to_design(
-            self.raw_design
-        )  # [T, *event_shape_design]
+        design = self._to_design(self.raw_design)  # [T, *event_shape_design]
 
         y_history = self.task.sample_outcome(theta.unsqueeze(1), design.unsqueeze(0))
         design_history = design.unsqueeze(0).expand(

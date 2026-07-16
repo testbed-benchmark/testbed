@@ -20,10 +20,6 @@ class HTDDesignSpace(DesignSpace):
     D_1 = exp(x_d - log_k_mean), R_0 = 100 * sigmoid(x_r). log_k_mean shifts
     D_1 so k * D_1 ~ O(1) at a raw value near zero, keeping gradients from
     vanishing for an untrained policy. Typically pass prior.k_loc + 0.5 * prior.k_scale**2.
-
-    to_raw is deliberately not a working inverse: designs are a function of a
-    raw value, never the reverse -- sample or optimize a raw value and call
-    to_design() on it, rather than inverting an existing design.
     """
 
     event_shape = torch.Size([2])
@@ -34,7 +30,8 @@ class HTDDesignSpace(DesignSpace):
         self.log_k_mean = float(log_k_mean)
 
     def sample(self, batch_shape=(), *, device=None) -> Tensor:
-        """Samples a raw value and maps it forward -- never inverts."""
+        """Samples a raw value and maps it forward."""
+        # TODO clean-up and match signatures to other sampling methods
         batch_shape = torch.Size(batch_shape)
         raw = torch.randn(*batch_shape, *self.event_shape, device=device)
         return self.to_design(raw)
@@ -62,12 +59,15 @@ class HTDDesignSpace(DesignSpace):
         return torch.cat((D1, R0), dim=-1)
 
     def to_raw(self, design: Tensor) -> Tensor:
-        """Not supported, see class docstring."""
-        raise NotImplementedError(
-            "HTDDesignSpace's transform is not meant to be inverted -- designs "
-            "are a function of a raw value, never the reverse. Sample or "
-            "optimize a raw value and call to_design() on it instead."
-        )
+        """Recovers raw designs from design.
+
+        This is the inverse of to_design.
+        """
+        D1 = design[..., 0:1]
+        R0 = design[..., 1:2]
+        D_raw = torch.log(D1.clamp(min=1e-30)) + self.log_k_mean
+        R_raw = torch.logit(R0 / 100, eps=1e-6)
+        return torch.cat((D_raw, R_raw), dim=-1)
 
 
 class HTDPrior(Distribution):

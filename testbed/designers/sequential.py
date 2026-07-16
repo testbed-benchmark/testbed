@@ -41,6 +41,7 @@ class SequentialDesigner(Designer):
         inference_fn=run_importance_sampling,
         extra_hooks: Sequence[RolloutHook] = (),
         expose_raw_design: bool = False,
+        transform_designs: bool = True,
         **inference_kwargs,
     ):
         """Initializes the sequential designer.
@@ -66,6 +67,12 @@ class SequentialDesigner(Designer):
             optimized design in rollout.extra["raw_design_history"], for
             inspection/debugging. False by default; the raw design is always
             computed either way, this only gates whether it's surfaced.
+        transform_designs: see Designer.__init__. Default True: the raw design
+            optimized by Adam is mapped through task.design_space.to_design on
+            every iteration, and initialize_design's "current_prior" branch
+            inverts through task.design_space.to_raw. Both directions are
+            gated by this single flag, so they stay consistent with each
+            other automatically.
         """
         if not isinstance(objective, DesignObjective):
             raise TypeError(
@@ -79,7 +86,13 @@ class SequentialDesigner(Designer):
         hooks = list(extra_hooks)
         if update_posterior:
             hooks = [PosteriorUpdateHook(inference_fn, **inference_kwargs), *hooks]
-        super().__init__(task, T, hooks=hooks, expose_raw_design=expose_raw_design)
+        super().__init__(
+            task,
+            T,
+            hooks=hooks,
+            expose_raw_design=expose_raw_design,
+            transform_designs=transform_designs,
+        )
 
         self.objective = objective
         self.lr = lr
@@ -99,8 +112,8 @@ class SequentialDesigner(Designer):
 
         Returns [*event_shape_design] with requires_grad=True, in raw
         coordinates -- propose_design's Adam loop maps this through
-        task.design_space.to_design() on every iteration. Override this
-        method for custom initialization logic.
+        self._to_design() on every iteration (task.design_space.to_design by
+        default). Override this method for custom initialization logic.
         """
         dist = self.init_design_dist
         if dist is None:
@@ -112,7 +125,7 @@ class SequentialDesigner(Designer):
             # real source location); convert to raw so every branch returns
             # the same (raw) coordinates for the optimizer.
             design_constrained = self.task.sample_current_prior().to(self.task.device)
-            design_raw = self.task.design_space.to_raw(design_constrained)
+            design_raw = self._to_raw(design_constrained)
         else:
             design_raw = (
                 dist.sample(1)
@@ -133,7 +146,7 @@ class SequentialDesigner(Designer):
 
         for _ in range(self.n_step_opt):
             optimizer.zero_grad()
-            design = self.task.design_space.to_design(design_raw)
+            design = self._to_design(design_raw)
             gain = self.objective.estimate_gain(design)
             loss = -gain
             loss.backward()
@@ -142,7 +155,7 @@ class SequentialDesigner(Designer):
         # Recompute after the final optimizer.step()
         # Required as the current design is one step stale
         design_raw = design_raw.detach()
-        design = self.task.design_space.to_design(design_raw)
+        design = self._to_design(design_raw)
         return design.unsqueeze(0), design_raw.unsqueeze(0)
 
     def propose_design(self, y_history, design_history, *, mask=None):
@@ -153,9 +166,13 @@ class SequentialDesigner(Designer):
         return design
 
     def _step_design(self, y_history, design_history):
-        """Proposes the next design, returning (design, raw_design, policy_log_prob=None)."""
+        """Proposes the next design, returning (design, raw_design, policy_log_prob=None).
+
+        raw_design is always the actual raw value; Designer.rollout() gates
+        whether it's surfaced in rollout.extra based on self.expose_raw_design.
+        """
         design, raw_design = self._propose(y_history)
-        return design, (raw_design if self.expose_raw_design else None), None
+        return design, raw_design, None
 
     def rollout(self, theta) -> Rollout:
         """Runs the full sequential experimental design procedure for a single theta.

@@ -1,4 +1,4 @@
-"""Tests for StaticDesigner, including the expose_raw_design flag."""
+"""Tests for StaticDesigner, including the expose_raw_design and transform_designs flags."""
 
 import torch
 
@@ -64,3 +64,59 @@ def test_expose_raw_design_agrees_between_vectorized_and_per_step_paths():
         vectorized.extra["raw_design_history"], per_step.extra["raw_design_history"]
     )
     assert torch.allclose(vectorized.design_history, per_step.design_history)
+
+
+def test_default_transform_designs_matches_task_design_space():
+    task = HyperbolicTemporalDiscounting()
+    designer = StaticDesigner(task, T=3, expose_raw_design=True)
+    theta = task.sample_prior(4)
+
+    rollout = designer.rollout(theta)
+
+    raw_design_history = rollout.extra["raw_design_history"]
+    assert torch.allclose(
+        task.design_space.to_design(raw_design_history), rollout.design_history
+    )
+    # HTDDesignSpace.to_design is a real (non-identity) transform, so raw and
+    # design must actually differ here.
+    assert not torch.allclose(raw_design_history, rollout.design_history)
+
+
+def test_transform_designs_false_opts_out():
+    task = HyperbolicTemporalDiscounting()
+    # With transform_designs=False, the raw learnable parameter (~N(0,1)) is
+    # used directly as the design, which won't satisfy HTDDesignSpace's real
+    # domain constraints (D1 > 0, 0 < R0 < 100) -- disable validation since
+    # this test is only about the designer-level opt-out, not design validity.
+    task.validate_designs = False
+    designer = StaticDesigner(
+        task, T=3, expose_raw_design=True, transform_designs=False
+    )
+    theta = task.sample_prior(4)
+
+    rollout = designer.rollout(theta)
+
+    # No transform applied: raw and constrained designs coincide exactly.
+    assert torch.equal(rollout.extra["raw_design_history"], rollout.design_history)
+
+
+def test_transform_designs_false_agrees_between_vectorized_and_per_step_paths():
+    task = HyperbolicTemporalDiscounting()
+    task.validate_designs = False
+    designer = StaticDesigner(
+        task, T=3, expose_raw_design=True, transform_designs=False
+    )
+    theta = task.sample_prior(4)
+
+    vectorized = designer.rollout(theta)
+
+    designer.hooks.append(RolloutHook())
+    per_step = designer.rollout(theta)
+
+    assert torch.allclose(
+        vectorized.extra["raw_design_history"], per_step.extra["raw_design_history"]
+    )
+    assert torch.allclose(vectorized.design_history, per_step.design_history)
+    assert torch.equal(
+        vectorized.design_history, vectorized.extra["raw_design_history"]
+    )
