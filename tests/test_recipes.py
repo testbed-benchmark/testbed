@@ -22,6 +22,7 @@ ENTRY_POINT_RECIPES = [
     "actionbed",
     "rlboed",
     "experiments/location_finding_2src/actionbed",
+    "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
 ]
 
@@ -69,11 +70,18 @@ def test_actionbed_recipe_wires_design_and_action_nets():
     )
 
 
-def test_rlboed_recipe_overrides_shared_task():
+def test_rlboed_recipe_uses_default_location_finding_task():
     cfg = _compose("rlboed")
-    # The recipe overrides the shared 1-source task group to the 2-source variant.
-    assert cfg.task.n_sources == 2
+    assert cfg.task.n_sources == 1
     assert cfg.sac.num_envs > 0
+
+
+def test_two_source_rlboed_recipe_uses_two_source_task():
+    cfg = _compose("experiments/location_finding_2src/rlboed")
+    assert cfg.task.n_sources == 2
+    assert cfg.T == 30
+    assert (cfg.design_space.low, cfg.design_space.high) == (-4.0, 4.0)
+    assert (cfg.reward.outcome_low, cfg.reward.outcome_high) == (-3.0, 10.0)
 
 
 def test_prey_rlboed_recipe_uses_discrete_sac_defaults():

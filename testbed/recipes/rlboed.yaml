@@ -7,9 +7,6 @@ defaults:
 # system (device/save_dir come from the system group)
 seed: 373693
 torch_deterministic: true
-# override the shared task group to the 2-source variant
-task:
-  n_sources: 2
 T: 30
 # design space
 design_space:
