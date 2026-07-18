@@ -20,6 +20,10 @@ class PreyPopulationPrior(Distribution):
     Args:
         loc: Mean of both latent log-parameters.
         scale: Standard deviation of both latent log-parameters.
+
+    Attributes:
+        loc: Mean of each latent log-parameter.
+        scale: Standard deviation of each latent log-parameter.
     """
 
     def __init__(self, loc: float = -1.4, scale: float = 1.35) -> None:
@@ -83,6 +87,11 @@ class PreyPopulation(Task):
     Args:
         duration: Length of each experiment in hours (default: 24).
         prior: Prior over ``(a, T_h)``. Defaults to :class:`PreyPopulationPrior`.
+
+    Attributes:
+        duration: Length of each experiment in hours.
+        design_space: Categorical space of initial populations from 1 through
+            300 prey.
     """
 
     def __init__(

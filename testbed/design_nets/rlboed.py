@@ -86,7 +86,18 @@ class RLBOEDQNetwork(nn.Module):
 
 
 class RLBOEDDiscreteQNetwork(nn.Module):
-    """DeepSets critic that returns one Q-value for each categorical action."""
+    """DeepSets critic that returns one Q-value for each categorical action.
+
+    Attributes:
+        dim_y: Flattened outcome dimension.
+        dim_design: Flattened design dimension.
+        n_actions: Number of categorical actions.
+        dim_emb: History-summary dimension.
+        design_low: Per-coordinate lower bounds for design normalization.
+        design_high: Per-coordinate upper bounds for design normalization.
+        outcome_low: Lower bound for outcome normalization.
+        outcome_high: Upper bound for outcome normalization.
+    """
 
     def __init__(
         self,
@@ -101,7 +112,19 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         dim_h=[128, 128],
         dim_emb: int = 64,
     ):
-        """Initializes the discrete critic."""
+        """Initializes the discrete critic.
+
+        Args:
+            dim_y: Flattened outcome dimension.
+            dim_design: Flattened design dimension.
+            n_actions: Number of categorical actions.
+            design_low: Per-coordinate lower bounds for design normalization.
+            design_high: Per-coordinate upper bounds for design normalization.
+            outcome_low: Lower bound for outcome normalization.
+            outcome_high: Upper bound for outcome normalization.
+            dim_h: Hidden layer widths; an integer specifies one layer.
+            dim_emb: History-summary dimension.
+        """
         super().__init__()
         self.dim_y = int(dim_y)
         self.dim_design = int(dim_design)
@@ -122,7 +145,15 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
 
     def forward(self, observation: History) -> Tensor:
-        """Estimates all action Q-values from a permutation-invariant history."""
+        """Estimates all action Q-values from a permutation-invariant history.
+
+        Args:
+            observation: History containing designs, outcomes, and an optional
+                padding mask.
+
+        Returns:
+            Q-values with shape ``[batch, n_actions]``.
+        """
         designs = observation.designs
         outcomes = observation.outcomes
         batch_size, history_length = designs.shape[:2]

@@ -198,7 +198,14 @@ class DeepSetGaussianActor(GaussianPolicyActor):
 
 
 class DeepSetCategoricalActor(nn.Module):
-    """DeepSets actor that returns categorical action logits."""
+    """DeepSets actor that returns categorical action logits.
+
+    Attributes:
+        dim_design: Flattened design dimension.
+        dim_y: Flattened outcome dimension.
+        n_actions: Number of categorical actions.
+        dim_emb: History-summary dimension.
+    """
 
     def __init__(
         self,
@@ -235,7 +242,16 @@ class DeepSetCategoricalActor(nn.Module):
     def forward(
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
     ) -> Tensor:
-        """Computes action logits from flattened histories."""
+        """Computes action logits from flattened histories.
+
+        Args:
+            y_history: Outcomes with shape ``[batch, T, dim_y]``.
+            design_history: Designs with shape ``[batch, T, dim_design]``.
+            mask: Optional padding mask with shape ``[batch, T]``.
+
+        Returns:
+            Action logits with shape ``[batch, n_actions]``.
+        """
         batch_size, history_length, _ = design_history.shape
         if history_length == 0:
             summary = torch.zeros(
@@ -538,7 +554,17 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
 
 
 class CategoricalPolicyNet(StochasticDesignNet):
-    """Categorical policy that maps action indices to physical designs."""
+    """Categorical policy that maps action indices to physical designs.
+
+    Attributes:
+        design_space: Finite set of physical designs.
+        event_shape_design: Shape of one physical design.
+        dim_design: Flattened design dimension.
+        normalize_design_history: Whether design histories are normalized.
+        design_history_bounds: Target bounds for normalized design histories.
+        actor: Module that produces one logit per categorical action.
+        design_values: Physical designs indexed by categorical action.
+    """
 
     def __init__(
         self,
@@ -593,7 +619,18 @@ class CategoricalPolicyNet(StochasticDesignNet):
         self._normalize_outcomes = outcome_bounds is not None
 
     def forward(self, y_history, design_history) -> Tensor:
-        """Returns the highest-probability physical design."""
+        """Returns the highest-probability physical design.
+
+        Args:
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``.
+
+        Returns:
+            Most probable designs with shape
+            ``[*batch_shape, *event_shape_design]``.
+        """
         return self.sample(y_history, design_history, deterministic=True).design
 
     def sample(
@@ -605,7 +642,22 @@ class CategoricalPolicyNet(StochasticDesignNet):
         deterministic: bool = False,
         reparameterize_policy: bool = True,
     ) -> PolicySample:
-        """Samples a physical design and its selected-action log probability."""
+        """Samples a physical design and its selected-action log probability.
+
+        Args:
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional padding mask with shape ``[*batch_shape, T]``.
+            deterministic: If True, selects the highest-probability action.
+            reparameterize_policy: Accepted for compatibility; categorical
+                samples are not reparameterized.
+
+        Returns:
+            Sampled design, selected-action log probability, deterministic
+            design, and selected action index.
+        """
         del reparameterize_policy
         batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
             y_history, design_history, mask=mask
@@ -636,18 +688,44 @@ class CategoricalPolicyNet(StochasticDesignNet):
     def logits(
         self, y_history, design_history, *, mask: Tensor | None = None
     ) -> Tensor:
-        """Returns one action logit per categorical design."""
+        """Returns one action logit per categorical design.
+
+        Args:
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional padding mask with shape ``[*batch_shape, T]``.
+
+        Returns:
+            Logits with shape ``[batch, n_actions]`` after flattening batches.
+        """
         _, y_flat, design_flat, mask_flat = self._prepare_histories(
             y_history, design_history, mask=mask
         )
         return self.actor(y_flat, design_flat, mask=mask_flat)
 
     def logits_from_observation(self, obs) -> Tensor:
-        """Returns categorical logits for a ``History`` observation."""
+        """Returns categorical logits for a ``History`` observation.
+
+        Args:
+            obs: History containing outcomes, designs, and an optional mask.
+
+        Returns:
+            Logits with shape ``[batch, n_actions]``.
+        """
         return self.logits(obs.outcomes, obs.designs, mask=obs.mask)
 
     def action_probabilities_from_observation(self, obs) -> tuple[Tensor, Tensor]:
-        """Returns exact categorical probabilities and log probabilities."""
+        """Returns exact categorical probabilities and log probabilities.
+
+        Args:
+            obs: History containing outcomes, designs, and an optional mask.
+
+        Returns:
+            A ``(probabilities, log_probabilities)`` tuple, each with shape
+            ``[batch, n_actions]``.
+        """
         log_probs = torch.log_softmax(self.logits_from_observation(obs), dim=-1)
         return log_probs.exp(), log_probs
 
