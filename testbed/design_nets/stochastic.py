@@ -23,8 +23,9 @@ class PolicySample:
         log_prob: Summed design log probability with shape ``[*batch_shape]``.
         deterministic_design: Bounded deterministic design, typically the squashed
             policy mean, with shape ``[*batch_shape, *event_shape_design]``.
-        raw_design: Optional unsquashed Gaussian design with shape
-            ``[*batch_shape, *event_shape_design]``.
+        raw_design: Optional underlying design representation: an unsquashed
+            Gaussian design with shape ``[*batch_shape, *event_shape_design]``
+            or a categorical design index with shape ``[*batch_shape]``.
     """
 
     design: Tensor
@@ -205,6 +206,9 @@ class DeepSetCategoricalActor(nn.Module):
         dim_y: Flattened outcome dimension.
         n_designs: Number of categorical designs.
         dim_emb: History-summary dimension.
+        encoder_net: Module that embeds each design-outcome pair.
+        actor_net: Module that transforms the history summary.
+        logits_head: Linear layer that produces categorical design logits.
     """
 
     def __init__(
@@ -564,6 +568,10 @@ class CategoricalPolicyNet(StochasticDesignNet):
         design_history_bounds: Target bounds for normalized design histories.
         actor: Module that produces one logit per categorical design.
         design_values: Physical designs indexed by categorical design.
+        design_low: Per-coordinate minimum physical design values.
+        design_high: Per-coordinate maximum physical design values.
+        outcome_low: Lower bound used to normalize outcome histories.
+        outcome_high: Upper bound used to normalize outcome histories.
     """
 
     def __init__(
@@ -583,6 +591,10 @@ class CategoricalPolicyNet(StochasticDesignNet):
             normalize_design_history: Whether to rescale design histories.
             design_history_bounds: Bounds used when design histories are rescaled.
             outcome_bounds: Optional bounds used to rescale outcomes to [0, 1].
+
+        Raises:
+            ValueError: If history or outcome bounds are invalid, or the actor
+                has a different number of actions than ``design_space``.
         """
         super().__init__()
         self.design_space = design_space
@@ -732,7 +744,22 @@ class CategoricalPolicyNet(StochasticDesignNet):
     def _prepare_histories(
         self, y_history, design_history, *, mask: Tensor | None = None
     ) -> tuple[torch.Size, Tensor, Tensor, Tensor | None]:
-        """Validates, flattens, and optionally normalizes histories."""
+        """Validates, flattens, and optionally normalizes histories.
+
+        Args:
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional padding mask with shape ``[*batch_shape, T]``.
+
+        Returns:
+            The batch shape, flattened outcome history, flattened design
+            history, and flattened mask.
+
+        Raises:
+            ValueError: If a history or mask has an incompatible shape.
+        """
         dtype = self.design_low.dtype
         device = self.design_low.device
         y_history = torch.as_tensor(y_history, device=device, dtype=dtype)

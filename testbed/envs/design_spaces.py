@@ -88,7 +88,6 @@ class CategoricalDesignSpace(DesignSpace):
         values: Physical designs with shape ``[n_designs, *event_shape]``.
         event_shape: Shape of one physical design.
         is_discrete: Always ``True`` for categorical spaces.
-        n_designs: Number of valid physical designs.
     """
 
     is_discrete = True

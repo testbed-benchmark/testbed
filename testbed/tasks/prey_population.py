@@ -90,6 +90,11 @@ class PreyPopulation(Task):
 
     Attributes:
         duration: Length of each experiment in hours.
+        prior: Prior distribution over attack rate and handling time.
+        event_shape_y: Shape of one prey-consumption observation.
+        event_shape_theta: Shape of one parameter sample.
+        event_shape_design: Shape of one initial-population design.
+        discrete_y: Whether prey-consumption observations are discrete.
         design_space: Categorical space of initial populations from 1 through
             300 prey.
     """
@@ -165,14 +170,31 @@ class PreyPopulation(Task):
         return ((design - final_population) / design).clamp(0.0, 1.0)
 
     def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
-        """Evaluates the binomial observation log probability."""
+        """Evaluates the binomial observation log probability.
+
+        Args:
+            y: Numbers of prey consumed with shape ``[b, 1]``.
+            theta: Parameters with shape ``[b, 2]`` and columns ``(a, T_h)``.
+            design: Initial populations with shape ``[b, 1]``.
+
+        Returns:
+            Observation log probabilities with shape ``[b]``.
+        """
         probability = self.make_consumption_probability(theta, design).squeeze(-1)
         return Binomial(total_count=design.squeeze(-1), probs=probability).log_prob(
             y.squeeze(-1)
         )
 
     def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
-        """Samples the number of prey consumed after the experiment."""
+        """Samples the number of prey consumed after the experiment.
+
+        Args:
+            theta: Parameters with shape ``[b, 2]`` and columns ``(a, T_h)``.
+            design: Initial populations with shape ``[b, 1]``.
+
+        Returns:
+            Numbers of prey consumed with shape ``[b, 1]``.
+        """
         probability = self.make_consumption_probability(theta, design).squeeze(-1)
         return (
             Binomial(total_count=design.squeeze(-1), probs=probability)

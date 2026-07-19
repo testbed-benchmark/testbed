@@ -97,6 +97,8 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         design_high: Per-coordinate upper bounds for design normalization.
         outcome_low: Lower bound for outcome normalization.
         outcome_high: Upper bound for outcome normalization.
+        encoder_net: Module that embeds each design-outcome pair.
+        emitter_net: Module that maps a history embedding to Q-values.
     """
 
     def __init__(
