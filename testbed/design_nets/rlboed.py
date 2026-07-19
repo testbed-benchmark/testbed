@@ -86,12 +86,12 @@ class RLBOEDQNetwork(nn.Module):
 
 
 class RLBOEDDiscreteQNetwork(nn.Module):
-    """DeepSets critic that returns one Q-value for each categorical action.
+    """DeepSets critic that returns one Q-value for each categorical design.
 
     Attributes:
         dim_y: Flattened outcome dimension.
         dim_design: Flattened design dimension.
-        n_actions: Number of categorical actions.
+        n_designs: Number of categorical designs.
         dim_emb: History-summary dimension.
         design_low: Per-coordinate lower bounds for design normalization.
         design_high: Per-coordinate upper bounds for design normalization.
@@ -104,7 +104,7 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         *,
         dim_y: int,
         dim_design: int,
-        n_actions: int,
+        n_designs: int,
         design_low,
         design_high,
         outcome_low,
@@ -117,7 +117,7 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         Args:
             dim_y: Flattened outcome dimension.
             dim_design: Flattened design dimension.
-            n_actions: Number of categorical actions.
+            n_designs: Number of categorical designs.
             design_low: Per-coordinate lower bounds for design normalization.
             design_high: Per-coordinate upper bounds for design normalization.
             outcome_low: Lower bound for outcome normalization.
@@ -128,7 +128,7 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         super().__init__()
         self.dim_y = int(dim_y)
         self.dim_design = int(dim_design)
-        self.n_actions = int(n_actions)
+        self.n_designs = int(n_designs)
         self.dim_emb = int(dim_emb)
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         self.encoder_net = MLP(
@@ -136,7 +136,7 @@ class RLBOEDDiscreteQNetwork(nn.Module):
             activation=nn.ReLU,
         )
         self.emitter_net = MLP(
-            [self.dim_emb] + hidden_widths + [self.n_actions], activation=nn.ReLU
+            [self.dim_emb] + hidden_widths + [self.n_designs], activation=nn.ReLU
         )
         _initialize_linear_layers(self)
         self.register_buffer("design_low", torch.as_tensor(design_low))
@@ -145,14 +145,14 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
 
     def forward(self, observation: History) -> Tensor:
-        """Estimates all action Q-values from a permutation-invariant history.
+        """Estimates all design Q-values from a permutation-invariant history.
 
         Args:
             observation: History containing designs, outcomes, and an optional
                 padding mask.
 
         Returns:
-            Q-values with shape ``[batch, n_actions]``.
+            Q-values with shape ``[batch, n_designs]``.
         """
         designs = observation.designs
         outcomes = observation.outcomes

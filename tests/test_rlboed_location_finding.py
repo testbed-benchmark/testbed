@@ -194,7 +194,7 @@ def test_deployable_policy_maps_raw_history_to_physical_designs():
 
 def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
     design_space = CategoricalDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
-    actor = DeepSetCategoricalActor(dim_y=1, dim_design=1, n_actions=3)
+    actor = DeepSetCategoricalActor(dim_y=1, dim_design=1, n_designs=3)
     policy = CategoricalPolicyNet(
         design_space,
         actor=actor,
@@ -219,7 +219,7 @@ def test_discrete_q_network_is_masked_and_permutation_invariant():
     critic = RLBOEDDiscreteQNetwork(
         dim_y=1,
         dim_design=1,
-        n_actions=3,
+        n_designs=3,
         design_low=1.0,
         design_high=10.0,
         outcome_low=0.0,
@@ -546,7 +546,7 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
         cfg,
     )
     alpha_before = trainer.nets.log_alpha.exp().item()
-    assert trainer.target_entropy == pytest.approx(0.98 * log(design_space.n_actions))
+    assert trainer.target_entropy == pytest.approx(0.98 * log(design_space.n_designs))
 
     trainer.train_step()
 

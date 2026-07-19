@@ -12,7 +12,7 @@ def test_categorical_design_space_encodes_and_decodes_physical_designs():
     designs = torch.tensor([[10.0], [1.0], [5.0]])
     indices = space.encode(designs)
 
-    assert space.n_actions == 3
+    assert space.n_designs == 3
     assert space.contains(designs)
     assert torch.equal(indices, torch.tensor([2, 0, 1]))
     assert torch.equal(space.decode(indices), designs)

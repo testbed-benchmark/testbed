@@ -396,11 +396,11 @@ def make_networks(
         qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
         qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
     else:
-        values = design_space.values.reshape(design_space.n_actions, dim_design)
+        values = design_space.values.reshape(design_space.n_designs, dim_design)
         actor_module = DeepSetCategoricalActor(
             dim_y=dim_y,
             dim_design=dim_design,
-            n_actions=design_space.n_actions,
+            n_designs=design_space.n_designs,
         )
         actor = CategoricalPolicyNet(
             design_space,
@@ -412,7 +412,7 @@ def make_networks(
         critic_kwargs = {
             "dim_y": dim_y,
             "dim_design": dim_design,
-            "n_actions": design_space.n_actions,
+            "n_designs": design_space.n_designs,
             "design_low": values.amin(dim=0).to(device),
             "design_high": values.amax(dim=0).to(device),
             "outcome_low": cfg.reward.outcome_low,
@@ -546,7 +546,7 @@ def sac_update(
     with torch.no_grad():
         if is_categorical:
             next_probs, next_log_probs = (
-                nets.actor.action_probabilities_from_observation(data_next_obs)
+                nets.actor.design_probabilities_from_observation(data_next_obs)
             )
             min_qf_next_target = torch.min(
                 nets.qf1_target(data_next_obs), nets.qf2_target(data_next_obs)
@@ -568,11 +568,11 @@ def sac_update(
         )
 
     if is_categorical:
-        action_indices = (
+        design_indices = (
             nets.actor.design_space.encode(data_designs).long().unsqueeze(-1)
         )
-        qf1_a_values = nets.qf1(data_obs).gather(1, action_indices).squeeze(-1)
-        qf2_a_values = nets.qf2(data_obs).gather(1, action_indices).squeeze(-1)
+        qf1_a_values = nets.qf1(data_obs).gather(1, design_indices).squeeze(-1)
+        qf2_a_values = nets.qf2(data_obs).gather(1, design_indices).squeeze(-1)
     else:
         qf1_a_values = nets.qf1(data_obs, data_designs).view(-1)
         qf2_a_values = nets.qf2(data_obs, data_designs).view(-1)
@@ -589,7 +589,7 @@ def sac_update(
 
     if optimization_step % cfg.sac.policy_frequency == 0:
         if is_categorical:
-            probs, log_probs = nets.actor.action_probabilities_from_observation(
+            probs, log_probs = nets.actor.design_probabilities_from_observation(
                 data_obs
             )
             min_qf_pi = torch.min(nets.qf1(data_obs), nets.qf2(data_obs))
@@ -656,7 +656,7 @@ class Trainer:
         self.device = task.device
         if cfg.sac.target_entropy is None:
             self.target_entropy = (
-                0.98 * log(self.nets.actor.design_space.n_actions)
+                0.98 * log(self.nets.actor.design_space.n_designs)
                 if isinstance(self.nets.actor, CategoricalPolicyNet)
                 else -float(task.event_shape_design.numel())
             )

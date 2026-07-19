@@ -85,14 +85,10 @@ class CategoricalDesignSpace(DesignSpace):
     """Finite set of categorical designs.
 
     Attributes:
-        values: Physical designs with shape ``[n_actions, *event_shape]``.
+        values: Physical designs with shape ``[n_designs, *event_shape]``.
         event_shape: Shape of one physical design.
         is_discrete: Always ``True`` for categorical spaces.
-        n_actions: Number of valid physical designs.
-
-    Args:
-        values: Valid physical designs with shape
-            ``[n_actions, *event_shape]``.
+        n_designs: Number of valid physical designs.
     """
 
     is_discrete = True
@@ -102,19 +98,19 @@ class CategoricalDesignSpace(DesignSpace):
 
         Args:
             values: Valid physical designs with shape
-                ``[n_actions, *event_shape]``.
+                ``[n_designs, *event_shape]``.
 
         Raises:
-            ValueError: If no actions are supplied or actions are duplicated.
+            ValueError: If no designs are supplied or designs are duplicated.
         """
         values = torch.as_tensor(values)
         if values.ndim == 0 or values.shape[0] == 0:
-            raise ValueError("CategoricalDesignSpace requires at least one action.")
+            raise ValueError("CategoricalDesignSpace requires at least one design.")
         self.values = values
         self.event_shape = torch.Size(values.shape[1:])
         flat_values = values.reshape(values.shape[0], -1)
         if torch.unique(flat_values, dim=0).shape[0] != values.shape[0]:
-            raise ValueError("CategoricalDesignSpace requires unique actions.")
+            raise ValueError("CategoricalDesignSpace requires unique designs.")
 
     def sample(self, batch_shape=(), *, device=None) -> Tensor:
         """Samples uniformly from the valid physical designs.
@@ -128,11 +124,11 @@ class CategoricalDesignSpace(DesignSpace):
             Designs with shape ``[*batch_shape, *event_shape]``.
         """
         device = device or self.values.device
-        indices = torch.randint(self.n_actions, torch.Size(batch_shape), device=device)
+        indices = torch.randint(self.n_designs, torch.Size(batch_shape), device=device)
         return self.decode(indices)
 
     def contains(self, design: Tensor) -> bool:
-        """Checks whether every design is one of the valid actions.
+        """Checks whether every design is one of the valid designs.
 
         Args:
             design: Designs whose trailing dimensions should equal
@@ -147,22 +143,18 @@ class CategoricalDesignSpace(DesignSpace):
         return bool(self._matches(design).any(dim=-1).all().item())
 
     @property
-    def n_actions(self) -> int:
-        """Returns the number of valid categorical actions.
-
-        Returns:
-            Number of physical designs in the space.
-        """
+    def n_designs(self) -> int:
+        """Returns the number of valid categorical designs."""
         return self.values.shape[0]
 
     def encode(self, design: Tensor) -> Tensor:
-        """Maps valid physical designs to categorical action indices.
+        """Maps valid physical designs to categorical indices.
 
         Args:
             design: Valid physical designs with trailing shape ``event_shape``.
 
         Returns:
-            Action indices with the design's batch shape.
+            Design indices with the design's batch shape.
 
         Raises:
             ValueError: If a design is not in the categorical set.
@@ -179,31 +171,31 @@ class CategoricalDesignSpace(DesignSpace):
         return matches.to(torch.long).argmax(dim=-1).reshape(batch_shape)
 
     def decode(self, index: Tensor) -> Tensor:
-        """Maps categorical action indices to physical designs.
+        """Maps categorical design indices to physical designs.
 
         Args:
-            index: Integer-valued action indices.
+            index: Integer-valued design indices.
 
         Returns:
             Physical designs with shape ``[*index.shape, *event_shape]``.
 
         Raises:
-            ValueError: If an index is outside the categorical action range.
+            ValueError: If an index is outside the categorical design range.
         """
         index = torch.as_tensor(index)
         if not torch.equal(index, index.round()):
-            raise ValueError("Action index must be integer-valued.")
-        if torch.any((index < 0) | (index >= self.n_actions)):
-            raise ValueError("Action index is outside the categorical design space.")
+            raise ValueError("Design index must be integer-valued.")
+        if torch.any((index < 0) | (index >= self.n_designs)):
+            raise ValueError("Design index is outside the categorical design space.")
         return self.values.to(device=index.device)[index.long()]
 
     def _matches(self, design: Tensor) -> Tensor:
-        """Returns action-match indicators with shape ``[*batch_shape, n_actions]``."""
+        """Returns design-match indicators with shape ``[*batch_shape, n_designs]``."""
         values = self.values.to(device=design.device, dtype=design.dtype)
         flat_design = design.reshape(-1, self.event_shape.numel())
-        flat_values = values.reshape(self.n_actions, self.event_shape.numel())
+        flat_values = values.reshape(self.n_designs, self.event_shape.numel())
         matches = (flat_design.unsqueeze(1) == flat_values.unsqueeze(0)).all(dim=-1)
         batch_shape = (
             design.shape[: -len(self.event_shape)] if self.event_shape else design.shape
         )
-        return matches.reshape(*batch_shape, self.n_actions)
+        return matches.reshape(*batch_shape, self.n_designs)

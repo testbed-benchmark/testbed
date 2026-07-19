@@ -198,12 +198,12 @@ class DeepSetGaussianActor(GaussianPolicyActor):
 
 
 class DeepSetCategoricalActor(nn.Module):
-    """DeepSets actor that returns categorical action logits.
+    """DeepSets actor that returns categorical design logits.
 
     Attributes:
         dim_design: Flattened design dimension.
         dim_y: Flattened outcome dimension.
-        n_actions: Number of categorical actions.
+        n_designs: Number of categorical designs.
         dim_emb: History-summary dimension.
     """
 
@@ -211,7 +211,7 @@ class DeepSetCategoricalActor(nn.Module):
         self,
         *,
         dim_design: int,
-        n_actions: int,
+        n_designs: int,
         dim_y: int = 1,
         dim_h=[128, 128],
         dim_emb: int = 64,
@@ -220,7 +220,7 @@ class DeepSetCategoricalActor(nn.Module):
 
         Args:
             dim_design: Flattened design dimension.
-            n_actions: Number of categorical designs.
+            n_designs: Number of categorical designs.
             dim_y: Flattened outcome dimension.
             dim_h: Per-layer hidden widths as a list; an int is a single layer.
             dim_emb: History summary dimension.
@@ -228,7 +228,7 @@ class DeepSetCategoricalActor(nn.Module):
         super().__init__()
         self.dim_design = int(dim_design)
         self.dim_y = int(dim_y)
-        self.n_actions = int(n_actions)
+        self.n_designs = int(n_designs)
         self.dim_emb = int(dim_emb)
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         self.encoder_net = MLP(
@@ -236,13 +236,13 @@ class DeepSetCategoricalActor(nn.Module):
             activation=nn.ReLU,
         )
         self.actor_net = MLP([self.dim_emb] + hidden_widths, activation=nn.ReLU)
-        self.logits_head = nn.Linear(hidden_widths[-1], self.n_actions)
+        self.logits_head = nn.Linear(hidden_widths[-1], self.n_designs)
         _initialize_linear_layers(self)
 
     def forward(
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
     ) -> Tensor:
-        """Computes action logits from flattened histories.
+        """Computes design logits from flattened histories.
 
         Args:
             y_history: Outcomes with shape ``[batch, T, dim_y]``.
@@ -250,7 +250,7 @@ class DeepSetCategoricalActor(nn.Module):
             mask: Optional padding mask with shape ``[batch, T]``.
 
         Returns:
-            Action logits with shape ``[batch, n_actions]``.
+            Design logits with shape ``[batch, n_designs]``.
         """
         batch_size, history_length, _ = design_history.shape
         if history_length == 0:
@@ -554,7 +554,7 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
 
 
 class CategoricalPolicyNet(StochasticDesignNet):
-    """Categorical policy that maps action indices to physical designs.
+    """Categorical policy that maps design indices to physical designs.
 
     Attributes:
         design_space: Finite set of physical designs.
@@ -562,8 +562,8 @@ class CategoricalPolicyNet(StochasticDesignNet):
         dim_design: Flattened design dimension.
         normalize_design_history: Whether design histories are normalized.
         design_history_bounds: Target bounds for normalized design histories.
-        actor: Module that produces one logit per categorical action.
-        design_values: Physical designs indexed by categorical action.
+        actor: Module that produces one logit per categorical design.
+        design_values: Physical designs indexed by categorical design.
     """
 
     def __init__(
@@ -594,13 +594,13 @@ class CategoricalPolicyNet(StochasticDesignNet):
             raise ValueError("design_history_bounds must satisfy low < high.")
         self.actor = actor or DeepSetCategoricalActor(
             dim_design=self.dim_design,
-            n_actions=design_space.n_actions,
+            n_designs=design_space.n_designs,
         )
-        if self.actor.n_actions != design_space.n_actions:
-            raise ValueError("actor n_actions must match the categorical design space.")
+        if self.actor.n_designs != design_space.n_designs:
+            raise ValueError("actor n_designs must match the categorical design space.")
 
         self.register_buffer("design_values", design_space.values.clone())
-        values = self.design_values.reshape(design_space.n_actions, self.dim_design)
+        values = self.design_values.reshape(design_space.n_designs, self.dim_design)
         if not torch.is_floating_point(values):
             values = values.to(torch.get_default_dtype())
         self.register_buffer("design_low", values.amin(dim=0))
@@ -642,7 +642,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
         deterministic: bool = False,
         reparameterize_policy: bool = True,
     ) -> PolicySample:
-        """Samples a physical design and its selected-action log probability.
+        """Samples a physical design and its selected-design log probability.
 
         Args:
             y_history: Outcome history with shape
@@ -655,34 +655,34 @@ class CategoricalPolicyNet(StochasticDesignNet):
                 samples are not reparameterized.
 
         Returns:
-            Sampled design, selected-action log probability, deterministic
-            design, and selected action index.
+            Sampled design, selected-design log probability, deterministic
+            design, and selected design index.
         """
         del reparameterize_policy
         batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
             y_history, design_history, mask=mask
         )
         logits = self.actor(y_flat, design_flat, mask=mask_flat)
-        expected_shape = (design_flat.shape[0], self.design_space.n_actions)
+        expected_shape = (design_flat.shape[0], self.design_space.n_designs)
         if logits.shape != expected_shape:
             raise ValueError(
                 "actor logits must have shape "
                 f"{expected_shape}; got {tuple(logits.shape)}."
             )
         distribution = Categorical(logits=logits)
-        action = logits.argmax(dim=-1) if deterministic else distribution.sample()
-        deterministic_action = logits.argmax(dim=-1)
-        design = self.design_values[action].reshape(
+        design_index = logits.argmax(dim=-1) if deterministic else distribution.sample()
+        deterministic_design_index = logits.argmax(dim=-1)
+        design = self.design_values[design_index].reshape(
             *batch_shape, *self.event_shape_design
         )
-        deterministic_design = self.design_values[deterministic_action].reshape(
+        deterministic_design = self.design_values[deterministic_design_index].reshape(
             *batch_shape, *self.event_shape_design
         )
         return PolicySample(
             design=design,
-            log_prob=distribution.log_prob(action).reshape(batch_shape),
+            log_prob=distribution.log_prob(design_index).reshape(batch_shape),
             deterministic_design=deterministic_design,
-            raw_design=action.reshape(batch_shape),
+            raw_design=design_index.reshape(batch_shape),
         )
 
     def logits(
@@ -698,7 +698,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
             mask: Optional padding mask with shape ``[*batch_shape, T]``.
 
         Returns:
-            Logits with shape ``[batch, n_actions]`` after flattening batches.
+            Logits with shape ``[batch, n_designs]`` after flattening batches.
         """
         _, y_flat, design_flat, mask_flat = self._prepare_histories(
             y_history, design_history, mask=mask
@@ -712,11 +712,11 @@ class CategoricalPolicyNet(StochasticDesignNet):
             obs: History containing outcomes, designs, and an optional mask.
 
         Returns:
-            Logits with shape ``[batch, n_actions]``.
+            Logits with shape ``[batch, n_designs]``.
         """
         return self.logits(obs.outcomes, obs.designs, mask=obs.mask)
 
-    def action_probabilities_from_observation(self, obs) -> tuple[Tensor, Tensor]:
+    def design_probabilities_from_observation(self, obs) -> tuple[Tensor, Tensor]:
         """Returns exact categorical probabilities and log probabilities.
 
         Args:
@@ -724,7 +724,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
 
         Returns:
             A ``(probabilities, log_probabilities)`` tuple, each with shape
-            ``[batch, n_actions]``.
+                ``[batch, n_designs]``.
         """
         log_probs = torch.log_softmax(self.logits_from_observation(obs), dim=-1)
         return log_probs.exp(), log_probs
