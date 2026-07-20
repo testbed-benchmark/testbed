@@ -30,7 +30,10 @@ class DesignSpace(ABC):
         ...
 
     def project(self, design: Tensor) -> Tensor:
-        """Returns a design unchanged when the space has no projection."""
+        """Projects a tensor into the design space.
+
+        Returns a design unchanged when the space has no projection.
+        """
         return design
 
 
@@ -132,9 +135,6 @@ class CategoricalDesignSpace(DesignSpace):
         Args:
             design: Designs whose trailing dimensions should equal
                 ``event_shape``.
-
-        Returns:
-            Whether all supplied designs are valid.
         """
         design = torch.as_tensor(design)
         if not _has_event_shape(design, self.event_shape):
