@@ -42,6 +42,12 @@ def broadcast_and_flatten(*tensors_with_event_shapes):
     """
     batch_shapes = []
     for t, e in tensors_with_event_shapes:
+        e = torch.Size(e)
+        if t.ndim < len(e) or t.shape[t.ndim - len(e) :] != e:
+            raise ValueError(
+                f"Expected tensor with trailing (event) shape {tuple(e)}, "
+                f"got shape {tuple(t.shape)}."
+            )
         batch_shapes.append(t.shape[: t.ndim - len(e)])
 
     target_batch = torch.broadcast_shapes(*batch_shapes)

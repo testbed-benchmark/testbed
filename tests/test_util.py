@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from testbed.core.util import sort_by_norm
+from testbed.core.util import broadcast_and_flatten, sort_by_norm
 
 
 def test_sort_by_norm_no_batchdim():
@@ -30,3 +30,36 @@ def test_sort_by_norm_many_batch():
     input = torch.randn((10, 3, 4))
     output = sort_by_norm(input)
     assert output.shape == (10, 3, 4)
+
+
+def test_broadcast_and_flatten_matches_expected_event_shape():
+    t = torch.randn(5, 3, 2)
+    (flat,), batch_shape = broadcast_and_flatten((t, (3, 2)))
+    assert batch_shape == (5,)
+    assert flat.shape == (5, 3, 2)
+
+
+def test_broadcast_and_flatten_broadcasts_batch_dims():
+    a = torch.randn(4, 1, 2)
+    b = torch.randn(1, 6, 2)
+    (a_flat, b_flat), batch_shape = broadcast_and_flatten((a, (2,)), (b, (2,)))
+    assert batch_shape == (4, 6)
+    assert a_flat.shape == (24, 2)
+    assert b_flat.shape == (24, 2)
+
+
+def test_broadcast_and_flatten_rejects_wrong_trailing_shape():
+    # Regression test: a tensor whose last dim is 1 instead of the expected
+    # event dim used to silently pass through, since a size-1 trailing dim
+    # broadcasts against any size -- e.g. theta=[b, 1] against
+    # event_shape_theta=(2,) got expanded to [b, 2] by duplicating the single
+    # value, corrupting the two "components" of theta instead of raising.
+    t = torch.randn(5, 1)
+    with pytest.raises(ValueError, match="trailing"):
+        broadcast_and_flatten((t, (2,)))
+
+
+def test_broadcast_and_flatten_rejects_too_few_dims():
+    t = torch.randn(5)
+    with pytest.raises(ValueError, match="trailing"):
+        broadcast_and_flatten((t, (2,)))

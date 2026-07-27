@@ -210,6 +210,32 @@ def test_htd_design_space_keeps_gradients():
 
 
 # ============================================================================
+# theta shape validation (Task.outcome_logp / Task.history_logp)
+# ============================================================================
+
+
+def test_outcome_logp_rejects_malformed_theta():
+    # Regression test: theta of shape [b, 1] (instead of [b, *event_shape_theta]
+    # == [b, 2]) used to silently broadcast, duplicating the single value into
+    # both the k and alpha slots instead of raising.
+    task = _make_task()
+    theta = torch.ones(4, 1)
+    y = torch.ones(4, 1)
+    design = torch.tensor([20.0, 50.0]).expand(4, 2)
+    with pytest.raises(ValueError, match="trailing"):
+        task.outcome_logp(y, theta, design)
+
+
+def test_history_logp_rejects_malformed_theta():
+    task = _make_task()
+    theta = torch.ones(4, 1)
+    y_history = torch.ones(4, 2, 1)
+    design_history = torch.tensor([20.0, 50.0]).expand(4, 2, 2)
+    with pytest.raises(ValueError, match="trailing"):
+        task.history_logp(y_history, design_history, theta)
+
+
+# ============================================================================
 # design_space validation (Task._check_design)
 # ============================================================================
 
