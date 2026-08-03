@@ -1,7 +1,9 @@
 import math
 
+import pytest
 import torch
 
+from testbed.core.design_spaces import BoxDesignSpace
 from testbed.tasks import MichaelisMenten
 from testbed.tasks.michaelis_menten import MichaelisMentenPrior
 
@@ -130,3 +132,74 @@ def test_sample_outcome_mean_matches_conditional_mean():
     expected_mean = task.make_mean(theta, design).squeeze()
 
     assert torch.allclose(empirical_mean, expected_mean, atol=0.05)
+
+
+def test_default_design_space_is_the_concentration_box():
+    task = make_task()
+
+    assert isinstance(task.design_space, BoxDesignSpace)
+    assert task.design_space.event_shape == torch.Size([1])
+    assert torch.equal(task.design_space.low, torch.zeros(1))
+    assert torch.equal(task.design_space.high, torch.full((1,), 400.0))
+
+
+def test_design_space_accepts_the_closed_box_and_rejects_outside():
+    space = make_task().design_space
+
+    assert space.contains(torch.zeros(1))
+    assert space.contains(torch.full((1,), 400.0))
+    assert not space.contains(torch.full((1,), -1e-3))
+    assert not space.contains(torch.full((1,), 400.001))
+
+
+def test_task_rejects_negative_and_oversized_concentrations():
+    task = make_task()
+    theta = task.sample_prior(1)
+
+    with pytest.raises(ValueError, match="Design lies outside"):
+        task.sample_outcome(theta, torch.full((1, 1), -10.0))
+    with pytest.raises(ValueError, match="Design lies outside"):
+        task.sample_outcome(theta, torch.full((1, 1), 500.0))
+
+
+def test_design_space_sample_and_project_stay_in_the_box():
+    torch.manual_seed(0)
+    space = make_task().design_space
+
+    assert space.contains(space.sample((64,)))
+    assert space.contains(space.project(torch.randn(64, 1) * 1000))
+
+
+def test_reparametrisation_reaches_the_bounds_under_saturation():
+    # tanh is open in exact arithmetic but saturates to exactly +/-1 in float32,
+    # so a large raw value maps to exactly 0.0 or 400.0 -- the bounds are
+    # reachable through the squash, not just through project(). That matters
+    # for the x = 0 gradient singularity covered below.
+    torch.manual_seed(0)
+    space = make_task().design_space
+
+    design = space.to_design(torch.randn(256, 1) * 10)
+
+    assert space.contains(design)
+    assert (design == 0.0).any()
+    assert (design == 400.0).any()
+    # Inverting a saturated design stays finite rather than blowing up.
+    assert torch.isfinite(space.to_raw(design)).all()
+
+
+def test_mean_gradient_at_zero_concentration_depends_on_the_hill_exponent():
+    # x = 0 is a valid design, but x^s has an infinite derivative there when
+    # s < 1. Finite for the default s = 1, so this is only a hazard for a
+    # fractional Hill exponent -- and x = 0 is reachable both by project() and
+    # by a saturated to_design(), per the test above.
+    theta = torch.tensor([[120.0, 40.0]])
+
+    for exponent, expect_finite in ((1.0, True), (2.0, True), (0.5, False)):
+        task = make_task(exponent=exponent)
+        design = torch.zeros(1, 1, requires_grad=True)
+
+        mean = task.make_mean(theta, design)
+        mean.sum().backward()
+
+        assert torch.allclose(mean, torch.zeros(1, 1))
+        assert torch.isfinite(design.grad).all() == expect_finite

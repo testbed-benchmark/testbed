@@ -7,6 +7,7 @@ References:
 import torch
 from torch import Tensor
 
+from ..core.design_spaces import BoxDesignSpace, DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
 from .base import Task
@@ -95,7 +96,8 @@ class MichaelisMenten(Task):
     .. math::
         p(y \mid \theta, x) = \mathcal{N}(\mu(\theta, x), \sigma^2)
 
-    Convention: :math:`\theta = (V_{\max}, V_{\mathrm{half}})`.
+    Convention: :math:`\theta = (V_{\max}, V_{\mathrm{half}})`; the design
+    :math:`x` is the substrate concentration.
 
     Args:
         noise_scale (float, optional):
@@ -105,6 +107,12 @@ class MichaelisMenten(Task):
             model, other values give the Hill model (default: 1.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default MichaelisMentenPrior is used.
+        design_space (DesignSpace, optional):
+            Controls the design parametrization. If None, a
+            :class:`~testbed.core.design_spaces.BoxDesignSpace` over
+            ``[0, 400]`` is used -- concentrations are non-negative, and the
+            upper bound covers twice the largest :math:`V_{\mathrm{half}}` the
+            default prior admits, where the response has saturated.
     """
 
     def __init__(
@@ -112,17 +120,22 @@ class MichaelisMenten(Task):
         noise_scale: float = 2.5,
         exponent: float = 1.0,
         prior=None,
+        design_space: DesignSpace | None = None,
     ) -> None:
         """Initializes the Michaelis-Menten task."""
         # Default prior
         if prior is None:
             prior = MichaelisMentenPrior()
 
+        if design_space is None:
+            design_space = BoxDesignSpace(low=0.0, high=400.0, event_shape=[1])
+
         super().__init__(
             event_shape_y=[1],
             event_shape_theta=[2],
             event_shape_design=[1],
             prior=prior,
+            design_space=design_space,
         )
 
         # Standard deviation of observation noise (assumed Gaussian)

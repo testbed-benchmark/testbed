@@ -11,9 +11,15 @@ import torch
 from torch import Tensor
 from torch.distributions import Beta, Dirichlet, LogNormal
 
+from ..core.design_spaces import BoxDesignSpace, DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
 from .base import Task
+
+# Baskets hold between 0 and 100 units of each of 3 goods; a design is two
+# such baskets flattened to 6 dims.
+BASKET_LOW = 0.0
+BASKET_HIGH = 100.0
 
 
 class CESPrior(Distribution):
@@ -126,6 +132,10 @@ class CES(Task):
             Censoring bound on the sigmoid output (default: 2**-22).
         prior (Distribution, optional):
             Prior distribution of the parameters.
+        design_space (DesignSpace, optional):
+            Controls the design parametrization. If None, a
+            :class:`~testbed.core.design_spaces.BoxDesignSpace` over
+            ``[0, 100]^6`` is used.
     """
 
     def __init__(
@@ -133,16 +143,23 @@ class CES(Task):
         tau: float = 0.005,
         epsilon: float = 2**-22,
         prior=None,
+        design_space: DesignSpace | None = None,
     ) -> None:
         """Initializes the CES task."""
         if prior is None:
             prior = CESPrior()
+
+        if design_space is None:
+            design_space = BoxDesignSpace(
+                low=BASKET_LOW, high=BASKET_HIGH, event_shape=[6]
+            )
 
         super().__init__(
             event_shape_y=[1],
             event_shape_theta=[5],
             event_shape_design=[6],
             prior=prior,
+            design_space=design_space,
         )
 
         self.tau = tau
