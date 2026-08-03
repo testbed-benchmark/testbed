@@ -63,13 +63,13 @@ class HTDDesignSpace(DesignSpace):
     def project(self, design: Tensor) -> Tensor:
         """Lossy fallback: clamps into the domain.
 
-        Clamps to the *closed* domain, so a projected design can still sit on
-        the excluded boundary (``R_0 == 0`` or ``R_0 == 100``) and fail
-        :meth:`contains`. Prefer :meth:`to_design` where a valid design is
-        required.
+        The domain is open, so this clamps to the largest representable value
+        strictly below ``DELAYED_REWARD`` rather than to the bound itself.
         """
+        reward = torch.tensor(DELAYED_REWARD, dtype=design.dtype, device=design.device)
+        below_reward = torch.nextafter(reward, torch.zeros_like(reward))
         D1 = design[..., 0:1].clamp(min=_D1_FLOOR)
-        R0 = design[..., 1:2].clamp(min=0.0, max=DELAYED_REWARD)
+        R0 = design[..., 1:2].clamp(min=_D1_FLOOR, max=below_reward)
         return torch.cat((D1, R0), dim=-1)
 
     def _to_design(self, raw_design: Tensor) -> Tensor:

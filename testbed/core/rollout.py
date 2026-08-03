@@ -27,9 +27,9 @@ class Rollout:
     extra: dict[str, Any] = field(default_factory=dict)
     # Common optional keys a Designer.rollout() may populate (only when actually
     # present -- never as a key holding None):
-    #   extra["raw_design_history"]: Tensor [b, T, *event_shape_design], when the
-    #       designer computed one and (for StaticDesigner/SequentialDesigner)
-    #       expose_raw_design=True, or unconditionally for PolicyDesigner subclasses.
+    #   extra["raw_design_history"]: Tensor [b, T, *event_shape_design], whenever
+    #       the designer computed a raw design at every step. Absent for designers
+    #       that produce no raw design at all (e.g. RandomDesigner).
     #   extra["policy_log_probs"]: Tensor [b, T], when the designer's per-step
     #       proposal exposes a log prob (i.e. a stochastic policy).
 
@@ -59,22 +59,31 @@ class Rollout:
 class RolloutState:
     """Mutable state threaded through a single `Designer.rollout()` call.
 
-    Mostly used for hooks called during the design process.
+    Read by rollout hooks, and by `Designer._step_design`, which receives this
+    whole object rather than a fixed argument list: everything a designer needs
+    to choose the next design lives here, so a designer that comes to depend on
+    something new (a hook's bookkeeping under `scratch`, say) needs no signature
+    change anywhere.
 
     `y_history`/`design_history` hold the steps completed strictly before the
     current one in the `before_propose`/`after_propose`/`before_sample_outcome`
     callbacks; by `after_step`, they have been extended to include step `t`.
     `scratch` is hook-owned bookkeeping, freshly created for every rollout
     call, so a single hook instance is safe to reuse across many rollouts.
+
+    `theta` is optional so a caller can build a minimal state for a one-off
+    `_step_design` call outside a rollout.
     """
 
     task: Task
-    theta: Tensor
+    theta: Tensor | None
     T: int
     t: int = 0
     y_history: Tensor | None = None
     design_history: Tensor | None = None
     raw_design_history: Tensor | None = None
+    # Optional boolean mask [b, T] for padded histories.
+    mask: Tensor | None = None
     # data for current step
     design: Tensor | None = None
     raw_design: Tensor | None = None

@@ -18,10 +18,10 @@ class _CountingDesigner(Designer):
     def device(self):
         return self.task.device
 
-    def propose_design(self, y_history, design_history, *, mask=None):
-        b = y_history.shape[0]
-        t = y_history.shape[1]
-        return torch.full((b, *self.task.event_shape_design), float(t))
+    def _step_design(self, state):
+        b = state.y_history.shape[0]
+        design = torch.full((b, *self.task.event_shape_design), float(state.t))
+        return design, None, None
 
 
 class _RecordingHook(RolloutHook):

@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 from testbed.core.rollout import Rollout
 
@@ -12,12 +12,21 @@ from .hooks import RolloutHook, RolloutState
 
 
 class Designer(ABC, nn.Module):
-    """Base class for deterministic designers: produce a design, no log-prob.
+    r"""Base class for designers.
 
-    Subclass this directly for designers whose design isn't randomly sampled
-    (e.g. StaticDesigner, SequentialDesigner, DeterministicPolicyDesigner).
-    For designers whose design *is* randomly sampled, subclass
-    StochasticDesigner instead.
+    Subclasses implement :meth:`_step_design`, which returns the design along
+    with an optional raw (pre-transform) design and an optional log-prob.
+
+    Args:
+        task (Task):
+            The :class:`Task` we are producing designs for.
+        T (int):
+            The number of steps in the experiment.
+        hooks (iterable, optional):
+            An optional iterable of ``RolloutHook``s used to modify the design process (default: ()).
+        transform_designs (bool):
+            If True, the designer will automatically reparametrise designs using the task's DesignSpace.
+            Set to False if you would prefer to handle this manually (default: True).
     """
 
     def __init__(
@@ -26,55 +35,28 @@ class Designer(ABC, nn.Module):
         T,
         *,
         hooks: Sequence[RolloutHook] = (),
-        use_raw_history: bool = True,
-        expose_raw_design: bool = False,
         transform_designs: bool = True,
     ):
-        """Stores the task, horizon, and the hooks this designer always runs.
-
-        hooks: composable "extra bits" run on every rollout() call from this
-        designer (e.g. a posterior update after every step, or an action net
-        at the end). Fixed at construction, not passed to rollout() -- a
-        designer's hooks don't change between calls, and self.hooks is a
-        plain mutable list if you need to append one later.
-        use_raw_history: if True (default), rollout() feeds the raw design
-        history back into _step_design once one is available, instead of the
-        constrained history -- for numerically stable conditioning when a
-        task's raw<->design transform has a large dynamic range. No-op for
-        designers that never produce a raw design (e.g. StaticDesigner,
-        SequentialDesigner, RandomDesigner).
-        expose_raw_design: should we return the raw designs?
-        transform_designs: if True (default), a raw value a designer
-        produces (a learned parameter, an optimized tensor, or a
-        design_net's output) is mapped into a valid design via
-        task.design_space.to_design/.to_raw. A Task only ever consumes and
-        validates already-constrained designs (Task._check_design) -- it
-        never performs this mapping itself, so it's a designer-layer policy
-        choice, not a task concern. Set False if your design_net/parameter
-        already produces valid, constrained designs and you don't want them
-        remapped -- raw and design then coincide exactly (self._to_design/
-        self._to_raw become the identity). This is an assumption you are
-        making, not something enforced here: Task._check_design still
-        validates the final design downstream when task.validate_designs is
-        True, so an invalid passthrough design still raises there. Only
-        meaningful for designers that compute a raw value via a pointwise
-        transform (StaticDesigner, SequentialDesigner,
-        DeterministicPolicyDesigner) -- unused by StochasticPolicyDesigner,
-        whose net owns its own squash transform because it must enter the
-        sampled log-prob (see TanhGaussianPolicyNet), and unused by
-        RandomDesigner, which never produces a raw value.
-        """
+        r"""Initializes the designer."""
         super().__init__()
 
         self.task = task
         self.T = T
         self.hooks = list(hooks)
-        self.use_raw_history = bool(use_raw_history)
-        self.expose_raw_design = bool(expose_raw_design)
         self.transform_designs = bool(transform_designs)
 
+    @property
+    def device(self) -> torch.device:
+        """Returns the device this designer produces designs on.
+
+        Defaults to the task's device. Subclasses that own tensors of their own
+        (a learnable design, a policy net) override this to report theirs, so
+        that a designer moved independently of its task still answers correctly.
+        """
+        return self.task.device
+
     def _to_design(self, raw_design):
-        """Maps a raw value into a valid design via task.design_space.to_design.
+        r"""Maps a raw value into a valid design via task.design_space.to_design.
 
         Identity when self.transform_designs is False.
         """
@@ -83,29 +65,58 @@ class Designer(ABC, nn.Module):
         return self.task.design_space.to_design(raw_design)
 
     def _to_raw(self, design):
-        """Inverse of _to_design, via task.design_space.to_raw.
+        r"""Inverse of ``_to_design``, via task.design_space.to_raw.
 
-        Identity when self.transform_designs is False -- always exactly
-        consistent with _to_design, since both are gated by the same flag.
+        Identity when self.transform_designs is False.
         """
         if not self.transform_designs:
             return design
         return self.task.design_space.to_raw(design)
 
     @abstractmethod
-    def propose_design(self, y_history, design_history, *, mask=None):
-        """Proposes the next design."""
-        # y_history, design_history: [b=1, T, **dim]
-        # mask: optional boolean mask [b=1, T] for padded histories
-        # returns: [b=1, **dim_design]
+    def _step_design(self, state: RolloutState):
+        r"""Produces the next design from the current rollout state.
+
+        The single extension point for a Designer. It receives the whole
+        ``RolloutState`` rather than a fixed argument list, so a designer that
+        comes to need something particular about the rollout can just read it,
+        instead of every designer's signature having to grow.
+
+        Keep this a thin adapter. Put the actual logic in a method of your own
+        that takes explicit, semantic inputs and documents what it needs, then
+        have this pull those pieces off the state. Otherwise "what does this
+        designer read?" becomes unanswerable without reading the body. The
+        existing designers each do exactly this.
+
+        Args:
+            state (RolloutState):
+                Current rollout state. Its histories hold the steps completed
+                strictly before ``state.t``, so at ``t=0`` they are empty.
+
+        Returns:
+            Tensor:
+                The design ``[b, *event_shape_design]``.
+            Tensor | None:
+                The raw (pre-transform) design, when the designer computes one.
+            Tensor | None:
+                The policy log-prob ``[b]`` when the designer is stochastic and calculates a log-prob.
+        """
         ...
 
-    def _step_design(self, y_history, design_history):
-        """Proposes the next design, returning (design, raw_design, policy_log_prob)."""
-        return self.propose_design(y_history, design_history), None, None
+    def make_empty_history(self, b: int):
+        r"""Returns an empty rollout (i.e., corresponding to t=0).
 
-    def make_empty_history(self, b):
-        """Returns an empty rollout (i.e., corresponding to t=0)."""
+        Args:
+            b (int):
+                Batch size.
+
+        Returns:
+            Tensor:
+                Empty y_history ``[b, 0, *event_shape_y]``.
+
+            Tensor:
+                Empty design_history ``[b, 0, *event_shape_design]``.
+        """
         y_history = torch.empty(
             (b, 0, *self.task.event_shape_y), device=self.task.device
         )
@@ -114,13 +125,22 @@ class Designer(ABC, nn.Module):
         )
         return y_history, design_history
 
-    def rollout(self, theta) -> Rollout:
-        """Runs a rollout for batched theta values.
+    def rollout(self, theta: Tensor) -> Rollout:
+        r"""Runs a rollout for batched theta values.
 
-        theta: [b, *event_shape_theta]
-        returns: a Rollout with per-step policy log probs populated whenever
-            the designer's proposal exposes them. Runs self.hooks (set at
-            construction) alongside the rollout.
+        Args:
+            theta (Tensor):
+                Parameter values in the likelihood used to produce the rollout. Shape ``[b, *event_shape_theta]``.
+
+        Runs ``self.hooks`` (fixed at construction) alongside the rollout.
+
+        Returns:
+            Rollout:
+                A :class:`testbed.core.rollout.Rollout`. ``extra`` carries
+                ``raw_design_history`` whenever the designer produced a raw
+                design at every step, and ``policy_log_probs`` whenever its
+                proposal exposed a log-prob at every step; each key is simply
+                absent otherwise.
         """
         hooks = self.hooks
         b = theta.shape[0]
@@ -147,18 +167,10 @@ class Designer(ABC, nn.Module):
             for hook in hooks:
                 hook.before_propose(state)
 
-            # Should we use design_history or raw_design_history for this step?
-            # At t=0, use the empty design history
-            design_history_for_step = (
-                state.raw_design_history
-                if self.use_raw_history and state.raw_design_history is not None
-                else state.design_history
-            )
-
-            # Produce the next design, possibly with raw/logprobs
-            design, raw_design, policy_log_prob = self._step_design(
-                state.y_history, design_history_for_step
-            )
+            # Produce the next design, possibly with raw/logprobs. The designer
+            # reads whatever it needs off the state, including which of the
+            # constrained/raw histories to condition on.
+            design, raw_design, policy_log_prob = self._step_design(state)
 
             state.design = design
             state.raw_design = raw_design
@@ -194,7 +206,7 @@ class Designer(ABC, nn.Module):
             policy_log_probs = torch.stack(policy_log_prob_list, dim=1)  # [b, T]
 
         extra = {}
-        if state.raw_design_history is not None and self.expose_raw_design:
+        if state.raw_design_history is not None:
             extra["raw_design_history"] = state.raw_design_history
         if policy_log_probs is not None:
             extra["policy_log_probs"] = policy_log_probs
@@ -218,32 +230,3 @@ class Designer(ABC, nn.Module):
             rollout.extra.update(extra_update)
 
         return rollout
-
-
-class StochasticDesigner(Designer):
-    """Base class for designers whose design is randomly sampled.
-
-    sample_design's log-prob is optional, not guaranteed: a stochastic
-    designer is defined by its design being randomly sampled, not by
-    exposing a log-prob for it. An implicit/black-box sampler is still a
-    StochasticDesigner even if it returns log_prob=None; that just means
-    it can't be used with a score-function/REINFORCE gradient that needs one.
-    """
-
-    @abstractmethod
-    def sample_design(self, y_history, design_history, *, mask=None):
-        """Samples the next design.
-
-        returns: (design, log_prob or None). log_prob has shape [b].
-        """
-        ...
-
-    def propose_design(self, y_history, design_history, *, mask=None):
-        """Returns just the sampled design, discarding the log-prob."""
-        design, _ = self.sample_design(y_history, design_history, mask=mask)
-        return design
-
-    def _step_design(self, y_history, design_history):
-        """Proposes the next design, returning (design, raw_design=None, policy_log_prob)."""
-        design, log_prob = self.sample_design(y_history, design_history)
-        return design, None, log_prob

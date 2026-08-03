@@ -96,7 +96,7 @@ def make_random_designer(task, device):
     # Random designs in the unconstrained space, mapped to valid (D_1, R_0) the
     # same way as the policy net's wrapper (cf. Step-DAD random baseline).
     log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
-    return RandomDesigner(task, T, _HTDRandomDesigns(log_k_mean, device))
+    return RandomDesigner(task, T, dist=_HTDRandomDesigns(log_k_mean, device))
 
 
 def train(task, designer):

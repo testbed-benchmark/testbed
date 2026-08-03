@@ -8,7 +8,7 @@ from .amortized import (
     StochasticPolicyDesigner,
     build_policy_designer,
 )
-from .base import Designer, StochasticDesigner
+from .base import Designer
 from .hooks import ActionHook, PosteriorUpdateHook, RolloutHook, RolloutState
 from .non_adaptive import RandomDesigner, StaticDesigner
 from .sequential import SequentialDesigner
@@ -25,7 +25,6 @@ __all__ = [
     "RolloutState",
     "SequentialDesigner",
     "StaticDesigner",
-    "StochasticDesigner",
     "StochasticPolicyDesigner",
     "build_policy_designer",
 ]

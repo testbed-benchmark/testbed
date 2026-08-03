@@ -85,22 +85,10 @@ def test_sequential_designer_matches_pre_refactor_reference():
     assert new_task.current_prior is not new_task.prior
 
 
-def test_raw_design_not_exposed_by_default():
+def test_raw_design_history_matches_forward_transform():
     task = HyperbolicTemporalDiscounting()
     objective = PCE(task, n_outer=4, n_inner=4)
     designer = SequentialDesigner(task, T=2, objective=objective, lr=1e-2, n_step_opt=3)
-
-    rollout = designer.rollout(task.sample_prior(1))
-
-    assert "raw_design_history" not in rollout.extra
-
-
-def test_expose_raw_design_matches_forward_transform():
-    task = HyperbolicTemporalDiscounting()
-    objective = PCE(task, n_outer=4, n_inner=4)
-    designer = SequentialDesigner(
-        task, T=2, objective=objective, lr=1e-2, n_step_opt=3, expose_raw_design=True
-    )
 
     rollout = designer.rollout(task.sample_prior(1))
 
@@ -126,7 +114,6 @@ def test_transform_designs_false_opts_out():
         objective=objective,
         lr=1e-2,
         n_step_opt=3,
-        expose_raw_design=True,
         transform_designs=False,
     )
 

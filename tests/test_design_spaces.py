@@ -396,6 +396,19 @@ def test_htd_sample_lands_in_the_space():
     assert space.contains(space.sample((256,)))
 
 
+def test_htd_project_output_is_contained():
+    # Regression: project() clamped R_0 to the closed [0, 100] while contains()
+    # requires the open (0, 100), so a projected design failed validation --
+    # BEDEnv projects and then validates, so this raised on every step whose
+    # design fell outside the domain.
+    space = HTDDesignSpace()
+    outside = torch.tensor([[5.0, -20.0], [1.0, 500.0], [-3.0, 100.0]])
+
+    projected = space.project(outside)
+
+    assert space.contains(projected)
+
+
 def test_htd_to_design_round_trips():
     space = HTDDesignSpace(log_k_mean=-3.0)
     raw = torch.randn(16, 2)

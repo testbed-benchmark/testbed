@@ -1,4 +1,4 @@
-"""Tests for the amortized policy designers, including the expose_raw_design and
+"""Tests for the amortized policy designers, including the
 transform_designs flags on PolicyDesigner/DeterministicPolicyDesigner/
 StochasticPolicyDesigner/build_policy_designer."""
 
@@ -69,9 +69,8 @@ def test_transform_designs_false_opts_out():
     )
 
 
-def test_expose_raw_design_defaults_true():
-    # Unlike StaticDesigner/SequentialDesigner (default False), PolicyDesigner
-    # subclasses default expose_raw_design to True.
+def test_raw_design_history_is_always_exposed():
+    # The net's raw output is computed either way, so it is always reported.
     torch.manual_seed(0)
     task = _make_task()
     policy_net = _make_policy_net(task)
@@ -80,19 +79,6 @@ def test_expose_raw_design_defaults_true():
     rollout = designer.rollout(task.sample_prior(3))
 
     assert "raw_design_history" in rollout.extra
-
-
-def test_expose_raw_design_false_omits_from_extra():
-    torch.manual_seed(0)
-    task = _make_task()
-    policy_net = _make_policy_net(task)
-    designer = DeterministicPolicyDesigner(
-        task, T=2, design_net=policy_net, expose_raw_design=False
-    )
-
-    rollout = designer.rollout(task.sample_prior(3))
-
-    assert "raw_design_history" not in rollout.extra
 
 
 def test_build_policy_designer_forwards_transform_designs_to_deterministic():
@@ -123,7 +109,7 @@ def test_build_policy_designer_rejects_transform_designs_false_for_stochastic_ne
         )
 
 
-def test_build_policy_designer_stochastic_expose_raw_design_defaults_true():
+def test_build_policy_designer_stochastic_exposes_raw_design():
     torch.manual_seed(0)
     task = _make_task()
     stochastic_net = _make_stochastic_net()
@@ -132,16 +118,3 @@ def test_build_policy_designer_stochastic_expose_raw_design_defaults_true():
     rollout = designer.rollout(task.sample_prior(3))
 
     assert "raw_design_history" in rollout.extra
-
-
-def test_build_policy_designer_stochastic_expose_raw_design_false_omits_from_extra():
-    torch.manual_seed(0)
-    task = _make_task()
-    stochastic_net = _make_stochastic_net()
-    designer = build_policy_designer(
-        task, T=2, design_net=stochastic_net, expose_raw_design=False
-    )
-
-    rollout = designer.rollout(task.sample_prior(3))
-
-    assert "raw_design_history" not in rollout.extra
