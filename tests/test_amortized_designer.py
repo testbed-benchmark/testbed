@@ -23,7 +23,7 @@ def _make_policy_net(task):
 
 
 def _make_stochastic_net():
-    space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0])
+    space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
     return TanhGaussianPolicyNet(space)
 
 

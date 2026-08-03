@@ -1,7 +1,27 @@
 import pytest
 import torch
 
-from testbed.core.util import broadcast_and_flatten, sort_by_norm
+from testbed.core.util import broadcast_and_flatten, matches_event_shape, sort_by_norm
+
+
+def test_matches_event_shape_ignores_leading_batch_dims():
+    t = torch.randn(4, 6, 3, 2)
+    assert matches_event_shape(t, (3, 2))
+    assert matches_event_shape(t, (2,))
+    assert not matches_event_shape(t, (6, 2))
+
+
+def test_matches_event_shape_edge_cases():
+    # An empty event shape matches anything: the whole tensor is batch.
+    assert matches_event_shape(torch.randn(4, 2), ())
+    assert matches_event_shape(torch.tensor(1.0), ())
+
+    # Too few dims to hold the event shape at all.
+    assert not matches_event_shape(torch.randn(2), (3, 2))
+    assert not matches_event_shape(torch.tensor(1.0), (2,))
+
+    # A size-1 trailing dim is not a match, even though it would broadcast.
+    assert not matches_event_shape(torch.randn(5, 1), (2,))
 
 
 def test_sort_by_norm_no_batchdim():

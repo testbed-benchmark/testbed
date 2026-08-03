@@ -1,138 +1,318 @@
-"""Design spaces: constraints and raw/design reparametrization for Tasks."""
+"""Design spaces handle constraints, reparametrisation, and priors on designs."""
 
+import math
 from abc import ABC, abstractmethod
 
 import torch
 from torch import Tensor
 
-
-def _has_event_shape(tensor: Tensor, event_shape: torch.Size) -> bool:
-    """Checks whether trailing dimensions match an event shape."""
-    if len(event_shape) == 0:
-        return True
-    return tensor.shape[-len(event_shape) :] == event_shape
+from .util import matches_event_shape
 
 
 class DesignSpace(ABC):
-    """Base class for a Task's design space.
+    """Abstract base class for a Task's design space.
 
-    Beyond the space itself (sample/contains/project), a DesignSpace may
-    support a raw<->design reparametrization (to_design/to_raw), used by
-    designers that optimize or condition a net on a raw/latent
-    parametrization rather than the design directly -- for pathwise/
-    reparameterization-trick gradients, or for numerically stable history
-    conditioning. Default: identity, i.e. raw and design coincide.
+    Checks whether a tensor is a valid design, and optionally provides
+    methods for reparametrising designs, projecting designs, and
+    sampling from a design prior.
+
+    Subclasses must implement :meth:`_contains`. By default,
+    reparametrisation and projection correspond to no-ops.
+    This is only an abstract class and should be subclassed in actual use cases,
+    e.g., :class:`DefaultDesignSpace` provides a default unconstrained space.
+
+    :meth:`project` and :meth:`to_design` both produce valid designs but are
+    not the same operation: ``project`` is a typically lossy, typically
+    non-differentiable correction of an already-nearly-valid design, while
+    ``to_design`` is a (typically) smooth reparametrization of an unconstrained value.
+
+    - :meth:`_contains` (**required**): the space's value constraints.
+      Reached through the public :meth:`contains`, which validates shape
+      first, so subclasses never re-check shape.
+    - :meth:`sample`: draw a random valid design. Needed
+      by RandomDesigner and by callers wanting a design prior (default: raises).
+    - :meth:`project`: map an arbitrary tensor into the
+      space, e.g. by clipping (default: identity).
+    - :meth:`to_design` / :meth:`to_raw`: reparametrise between raw and valid
+      designs, optionally carrying a log-prob through the change of variables.
+      Subclasses override :meth:`_to_design` / :meth:`_to_raw` (default: identity).
+    - :meth:`log_det_jacobian`: log-det of that reparametrisation; required
+      whenever :meth:`_to_design` is overridden (default: zeros).
+
+    Args:
+        event_shape (iterable):
+            Shape of a single design.
+        is_discrete (bool):
+            Whether designs take discrete values.
     """
 
-    event_shape: torch.Size
-    is_discrete: bool
+    def __init__(self, event_shape, is_discrete: bool):
+        """Initializes the design space."""
+        self.event_shape = torch.Size(event_shape)
+        self.is_discrete = bool(is_discrete)
 
-    @abstractmethod
-    def sample(self, batch_shape=(), *, device=None) -> Tensor:
-        """Samples random designs with shape ``[*batch_shape, *event_shape]``."""
-        ...
+    def __repr__(self) -> str:
+        """Returns a compact representation."""
+        return f"{type(self).__name__}(event_shape={tuple(self.event_shape)})"
 
-    @abstractmethod
-    def contains(self, design: Tensor) -> bool:
-        """Checks whether a tensor lies in the space."""
-        ...
+    def contains(self, design) -> bool:
+        """Checks whether a tensor lies in the space.
 
-    @abstractmethod
-    def project(self, design: Tensor) -> Tensor:
-        """Projects a tensor into the design space."""
-        ...
+        A tensor of the wrong shape is not an element of the space, so this
+        validates the trailing (event) dimensions before delegating the value
+        constraints to :meth:`_contains`. Leading dimensions are treated as a
+        batch, and the result is a single bool for the whole batch: True only
+        if *every* design in it lies in the space.
 
-    def to_design(self, raw_design: Tensor) -> Tensor:
-        """Maps a raw/latent value to a design in this space.
+        Args:
+            design (Tensor):
+                Designs of shape ``[*batch_shape, *event_shape]``.
 
-        A pure pointwise map -- no log-det-Jacobian or density tracking --
-        for pathwise/reparameterization-trick gradients (SequentialDesigner,
-        DeterministicPolicyDesigner, StaticDesigner). Default: identity.
+        Returns:
+            bool:
+                Whether all designs in the batch lie in the space.
         """
-        return raw_design
+        design = torch.as_tensor(design)
+        if not matches_event_shape(design, self.event_shape):
+            return False
+        return self._contains(design)
 
-    def to_raw(self, design: Tensor) -> Tensor:
-        """Inverse of to_design. Default: identity.
+    @abstractmethod
+    def _contains(self, design: Tensor) -> bool:
+        """Checks whether a batch of designs satisfies the space's constraints.
 
-        Not every DesignSpace can support this efficiently or safely --
-        override to raise if inversion isn't well-defined (e.g. because the
-        forward map is lossy, or because designs should only ever be
-        produced from a raw value, never inverted back to one).
+        Called by :meth:`contains` once ``design`` is known to be a tensor with
+        trailing shape ``event_shape``, so implementations express only the
+        value constraints. A space with no value constraints returns True.
+
+        Args:
+            design (Tensor):
+                Designs of shape ``[*batch_shape, *event_shape]``.
+
+        Returns:
+            bool:
+                Whether all designs in the batch lie in the space.
+        """
+        ...
+
+    # TODO this possibly wants to be cleaned up a bit
+    # batch_shape doesn't match other conventions in testbed
+    # and explicitly passing in a device might not be the cleanest way to do this.
+    def sample(self, batch_shape=(), *, device=None) -> Tensor:
+        """Samples random designs with shape ``[*batch_shape, *event_shape]``.
+
+        Raises a NotImplementedError by default. Subclasses can override this
+        class to specify a design prior. Implementations follow the
+        ``torch.distributions`` convention of an explicit ``batch_shape``,
+        rather than the ``n_samples`` convention used by
+        :class:`~testbed.core.distributions.Distribution` and ``Task``:
+        ``sample()`` returns a single unbatched design, and no leading
+        dimension is ever squeezed away.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not implement sampling.")
+
+    def project(self, design: Tensor) -> Tensor:
+        """Projects a tensor into the design space.
+
+        Default: identity.
         """
         return design
 
+    def to_design(self, raw_design: Tensor, log_prob: Tensor | None = None):
+        """Maps a raw/latent value to a design in this space. Default: identity.
 
-class BoxDesignSpace(DesignSpace):
-    """Continuous box design space."""
+        With ``log_prob`` (the log-density of ``raw_design``, shape
+        ``[*batch_shape]``) this is a change of variables: returns
+        ``(design, log_prob - log_det_jacobian(raw_design))``, the density of
+        the design. Without it, returns just the design.
 
-    is_discrete = False
+        Subclasses override :meth:`_to_design` and :meth:`log_det_jacobian`,
+        not this method.
+        """
+        design = self._to_design(raw_design)
+        if log_prob is None:
+            return design
+        return design, log_prob - self._log_det_jacobian(raw_design)
 
-    def __init__(self, low, high, event_shape=None):
-        """Initializes lower/upper bounds."""
-        low = torch.as_tensor(low)
-        high = torch.as_tensor(high, device=low.device)
-        dtype = torch.promote_types(low.dtype, high.dtype)
-        if not torch.is_floating_point(torch.empty((), dtype=dtype)):
-            dtype = torch.get_default_dtype()
-        low = low.to(dtype=dtype)
-        high = high.to(dtype=dtype)
-        if event_shape is None:
-            event_shape = torch.broadcast_shapes(low.shape, high.shape)
-        self.event_shape = torch.Size(event_shape)
-        self.low = low.broadcast_to(self.event_shape)
-        self.high = high.broadcast_to(self.event_shape)
-        if torch.any(self.low > self.high):
-            raise ValueError("BoxDesignSpace requires low <= high.")
+    def to_raw(self, design: Tensor, log_prob: Tensor | None = None):
+        """Inverse of :meth:`to_design`. Default: identity.
 
-    def sample(self, batch_shape=(), *, device=None) -> Tensor:
-        """Samples uniformly from the box."""
-        device = device or self.low.device
-        low = self.low.to(device)
-        high = self.high.to(device)
-        batch_shape = torch.Size(batch_shape)
-        u = torch.rand(*batch_shape, *self.event_shape, device=device, dtype=low.dtype)
-        return low + (high - low) * u
+        Undoes the change of variables when ``log_prob`` (the log-density of
+        ``design``) is given. Often not required even when :meth:`to_design`
+        is supported.
+        """
+        raw_design = self._to_raw(design)
+        if log_prob is None:
+            return raw_design
+        return raw_design, log_prob + self._log_det_jacobian(raw_design)
 
-    def contains(self, design: Tensor) -> bool:
-        """Checks shape and bounds."""
-        design = torch.as_tensor(design)
-        if not _has_event_shape(design, self.event_shape):
-            return False
-        low = self.low.to(device=design.device, dtype=design.dtype)
-        high = self.high.to(device=design.device, dtype=design.dtype)
-        return bool(torch.all((design >= low) & (design <= high)).item())
+    def _to_design(self, raw_design: Tensor) -> Tensor:
+        """Pointwise raw -> design map. Default: identity.
 
-    def project(self, design: Tensor) -> Tensor:
-        """Clamps to the box bounds."""
-        low = self.low.to(device=design.device, dtype=design.dtype)
-        high = self.high.to(device=design.device, dtype=design.dtype)
-        return design.clamp(low, high)
+        Subclasses should override this method if reparametrisation is needed.
+        """
+        return raw_design
+
+    def _to_raw(self, design: Tensor) -> Tensor:
+        """Pointwise design -> raw map. Default: identity.
+
+        Subclasses should override this method if reparametrisation is needed.
+        """
+        return design
+
+    def log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+        """Log |det d(design)/d(raw)| at ``raw_design``, summed over event dims.
+
+        Returns shape ``[*batch_shape]``, matching the ``log_prob`` that
+        :meth:`to_design` corrects. Default: zeros, which is correct for the
+        identity map, so any subclass overriding :meth:`_to_design` must
+        override this too (:meth:`to_design` raises if it doesn't).
+        """
+        batch_ndim = raw_design.ndim - len(self.event_shape)
+        return raw_design.new_zeros(raw_design.shape[:batch_ndim])
+
+    def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+        """Refuses to silently apply a zero correction to a real transform."""
+        cls = type(self)
+        if (
+            cls._to_design is not DesignSpace._to_design
+            and cls.log_det_jacobian is DesignSpace.log_det_jacobian
+        ):
+            raise NotImplementedError(
+                f"{cls.__name__} reparametrises designs but does not implement "
+                "log_det_jacobian, so log-probs cannot be transformed."
+            )
+        return self.log_det_jacobian(raw_design)
+
+    def _sum_event_dims(self, x: Tensor) -> Tensor:
+        """Sums trailing event dims of a per-element quantity, leaving the batch."""
+        if not self.event_shape:
+            return x
+        return x.sum(dim=tuple(range(-len(self.event_shape), 0)))
 
 
 class DefaultDesignSpace(DesignSpace):
-    """Every real vector of the right shape is valid.
+    """Unconstrained space: every real tensor of the right shape is valid.
 
-    The default Task.design_space for tasks that declare no real space of
-    their own (e.g. LocationFinding). sample() draws standard normal --
-    there's no well-defined "uniform over R^d" -- matching what designers
-    already assumed by default before this class existed.
+    The default ``Task.design_space`` for tasks that declare no real space of
+    their own (e.g. LocationFinding). Constrains nothing beyond shape, so it
+    keeps the identity ``project``/``to_design``/``to_raw``. :meth:`sample`
+    draws standard normal.
+
+    Tasks that want to use an unconstrained design space but a custom design prior
+    can subclass DefaultDesignSpace and override :meth:`sample()`.
+
+    Args:
+        event_shape (iterable):
+            Shape of a single design.
     """
-
-    is_discrete = False
 
     def __init__(self, event_shape):
         """Initializes with the task's design event shape."""
-        self.event_shape = torch.Size(event_shape)
+        super().__init__(event_shape, is_discrete=False)
 
     def sample(self, batch_shape=(), *, device=None) -> Tensor:
         """Draws a standard normal sample."""
         batch_shape = torch.Size(batch_shape)
         return torch.randn(*batch_shape, *self.event_shape, device=device)
 
-    def contains(self, design: Tensor) -> bool:
-        """Checks shape only -- every value is valid."""
-        return _has_event_shape(torch.as_tensor(design), self.event_shape)
+    def _contains(self, design: Tensor) -> bool:
+        """Accepts any value; shape is already checked by contains()."""
+        return True
+
+
+class BoxDesignSpace(DesignSpace):
+    """Continuous box design space, i.e. elementwise ``low <= x <= high``.
+
+    The raw<->design reparametrisation is the tanh squash
+    ``design = bias + scale * tanh(raw)``, with ``bias = (high + low) / 2`` and
+    ``scale = (high - low) / 2``. This is the same transform
+    :class:`~testbed.design_nets.stochastic.TanhGaussianPolicyNet` applies
+    internally; that net predates this method and still owns its own copy,
+    because its squash has to enter the sampled log-prob.
+
+    Args:
+        low (Tensor or float):
+            Lower bounds, broadcast against ``high`` and ``event_shape``.
+        high (Tensor or float):
+            Upper bounds, broadcast against ``low`` and ``event_shape``.
+        event_shape (iterable):
+            Shape of a single design.
+    """
+
+    def __init__(self, low, high, event_shape):
+        """Initializes lower/upper bounds."""
+        low = torch.as_tensor(low)
+        high = torch.as_tensor(high, device=low.device)
+
+        # Integer bounds are legitimate input for a continuous box, so promote
+        # to a float dtype rather than sampling/comparing in integer arithmetic.
+        dtype = torch.promote_types(low.dtype, high.dtype)
+        if not torch.is_floating_point(torch.empty((), dtype=dtype)):
+            dtype = torch.get_default_dtype()
+        low = low.to(dtype=dtype)
+        high = high.to(dtype=dtype)
+
+        super().__init__(event_shape, is_discrete=False)
+
+        self.low = low.broadcast_to(self.event_shape)
+        self.high = high.broadcast_to(self.event_shape)
+        if torch.any(self.low > self.high):
+            raise ValueError("BoxDesignSpace requires low <= high.")
+
+    def _bounds_like(self, design: Tensor) -> tuple[Tensor, Tensor]:
+        """Returns the bounds on the device and dtype of a design."""
+        return (
+            self.low.to(device=design.device, dtype=design.dtype),
+            self.high.to(device=design.device, dtype=design.dtype),
+        )
+
+    def sample(self, batch_shape=(), *, device=None) -> Tensor:
+        """Samples uniformly from the box."""
+        device = self.low.device if device is None else device
+        low, high = self.low.to(device), self.high.to(device)
+        batch_shape = torch.Size(batch_shape)
+        u = torch.rand(*batch_shape, *self.event_shape, device=device, dtype=low.dtype)
+        return low + (high - low) * u
+
+    def _contains(self, design: Tensor) -> bool:
+        """Checks the bounds."""
+        low, high = self._bounds_like(design)
+        return bool(torch.all((design >= low) & (design <= high)).item())
 
     def project(self, design: Tensor) -> Tensor:
-        """No-op: every value is already valid."""
-        return design
+        """Clamps to the box bounds."""
+        low, high = self._bounds_like(design)
+        return design.clamp(low, high)
+
+    def _squash_affine(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        """Returns the (bias, scale) of the tanh squash, on x's device and dtype."""
+        low, high = self._bounds_like(x)
+        scale = (high - low) / 2.0
+        if not bool(torch.all(torch.isfinite(scale) & (scale > 0)).item()):
+            raise ValueError(
+                "BoxDesignSpace reparametrisation requires finite bounds with "
+                f"low < high; got low={self.low}, high={self.high}."
+            )
+        return (high + low) / 2.0, scale
+
+    def _to_design(self, raw_design: Tensor) -> Tensor:
+        """Tanh-squashes an unconstrained value into the box."""
+        bias, scale = self._squash_affine(raw_design)
+        return bias + scale * torch.tanh(raw_design)
+
+    def _to_raw(self, design: Tensor) -> Tensor:
+        """Inverts the squash; a design on the boundary maps to a large finite raw."""
+        bias, scale = self._squash_affine(design)
+        eps = torch.finfo(design.dtype).eps
+        return torch.atanh(((design - bias) / scale).clamp(-1 + eps, 1 - eps))
+
+    def log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+        """Log-det of the tanh-then-affine squash."""
+        _, scale = self._squash_affine(raw_design)
+        # log(1 - tanh(x)^2) in a numerically stable form
+        # evaluated forward so it stays finite once tanh saturates in float.
+        tanh_log_det = 2.0 * (
+            math.log(2.0) - raw_design - torch.nn.functional.softplus(-2.0 * raw_design)
+        )
+        return self._sum_event_dims(torch.log(scale) + tanh_log_det)

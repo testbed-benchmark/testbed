@@ -4,6 +4,23 @@ import torch
 from torch import Tensor
 
 
+def matches_event_shape(tensor: Tensor, event_shape) -> bool:
+    """Checks whether a tensor's trailing dimensions are exactly ``event_shape``.
+
+    The leading dimensions are unconstrained -- they are the batch shape. An
+    empty ``event_shape`` matches any tensor; a tensor with fewer dimensions
+    than ``event_shape`` matches nothing.
+
+    This is the predicate form of the check :func:`broadcast_and_flatten`
+    raises on, for callers that want to branch rather than fail (e.g.
+    ``DesignSpace.contains``).
+    """
+    event_shape = torch.Size(event_shape)
+    if tensor.ndim < len(event_shape):
+        return False
+    return tensor.shape[tensor.ndim - len(event_shape) :] == event_shape
+
+
 def squeeze_history(tensor: Tensor, event_shape: torch.Size) -> Tensor:
     """Ensures tensor has shape ``[T, *event_shape]`` by squeezing leading size-1 dims.
 
@@ -43,7 +60,7 @@ def broadcast_and_flatten(*tensors_with_event_shapes):
     batch_shapes = []
     for t, e in tensors_with_event_shapes:
         e = torch.Size(e)
-        if t.ndim < len(e) or t.shape[t.ndim - len(e) :] != e:
+        if not matches_event_shape(t, e):
             raise ValueError(
                 f"Expected tensor with trailing (event) shape {tuple(e)}, "
                 f"got shape {tuple(t.shape)}."
