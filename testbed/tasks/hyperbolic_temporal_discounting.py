@@ -211,7 +211,6 @@ class HyperbolicTemporalDiscounting(Task):
     to 1, recovering the standard hyperbolic model. Useful for misspecification
     experiments.
 
-
     Args:
         epsilon (float, optional):
             Lapse-rate bias towards random responding (default: 0.01).

@@ -6,7 +6,7 @@ from collections.abc import Iterable
 import torch
 import torch.nn as nn
 
-from ..core.design_spaces import DefaultDesignSpace
+from ..core.design_spaces import DefaultDesignSpace, DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import broadcast_and_flatten
 
@@ -77,7 +77,7 @@ class Task(ABC, nn.Module):
         discrete_design: bool = False,
         separable: bool = True,
         implicit_likelihood: bool = False,
-        design_space=None,
+        design_space: DesignSpace | None = None,
         validate_designs: bool = True,
     ):
         """Initializes the task."""
@@ -172,9 +172,13 @@ class Task(ABC, nn.Module):
         if not self.validate_designs:
             return
         if not self.design_space.contains(design):
+            # contains() rejects both bad values and a bad event shape
+            design = torch.as_tensor(design)
             raise ValueError(
-                f"Design lies outside {type(self.design_space).__name__}. "
-                f"Got design: {design}"
+                f"Design lies outside {self.design_space} "
+                f"(expected trailing shape "
+                f"{tuple(self.design_space.event_shape)}). "
+                f"Got design of shape {tuple(design.shape)}: {design}"
             )
 
     def outcome_logp(self, y, theta, design):

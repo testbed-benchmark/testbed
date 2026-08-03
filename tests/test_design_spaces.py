@@ -1,7 +1,12 @@
 import pytest
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace, DefaultDesignSpace, DesignSpace
+from testbed.core.design_spaces import (
+    BoxDesignSpace,
+    DefaultDesignSpace,
+    DesignSpace,
+    FiniteDesignSpace,
+)
 from testbed.design_nets.stochastic import TanhGaussianPolicyNet
 from testbed.tasks.hyperbolic_temporal_discounting import HTDDesignSpace
 
@@ -263,6 +268,104 @@ def test_box_design_space_rejects_invalid_bounds_and_shapes():
         space.project(torch.tensor([-2.0, 3.0])),
         torch.tensor([-1.0, 2.0]),
     )
+
+
+# ---------------------------------------------------------------------------
+# FiniteDesignSpace
+# ---------------------------------------------------------------------------
+
+
+def _finite_space():
+    return FiniteDesignSpace(torch.tensor([[0.0, 0.0], [1.0, 2.0], [3.0, 4.0]]))
+
+
+def test_finite_design_space_derives_shape_and_discreteness():
+    space = _finite_space()
+
+    assert space.event_shape == torch.Size([2])
+    assert space.n_designs == 3
+    assert space.is_discrete is True
+
+
+def test_finite_design_space_rejects_empty_and_duplicate_values():
+    with pytest.raises(ValueError, match="at least one design"):
+        FiniteDesignSpace(torch.zeros(0, 2))
+    with pytest.raises(ValueError, match="unique"):
+        FiniteDesignSpace(torch.tensor([[1.0, 2.0], [1.0, 2.0]]))
+
+
+def test_finite_design_space_contains_uses_the_base_shape_check():
+    space = _finite_space()
+
+    assert space.contains(torch.tensor([1.0, 2.0]))
+    assert space.contains(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+    assert not space.contains(torch.tensor([1.0, 5.0]))  # not in the set
+    assert not space.contains(torch.tensor([1.0, 2.0, 3.0]))  # wrong event shape
+
+
+def test_finite_design_space_encode_decode_round_trip():
+    space = _finite_space()
+    designs = torch.tensor([[3.0, 4.0], [0.0, 0.0]])
+
+    index = space.encode(designs)
+
+    assert torch.equal(index, torch.tensor([2, 0]))
+    assert torch.equal(space.decode(index), designs)
+
+
+def test_finite_design_space_encode_decode_handle_unbatched_designs():
+    space = _finite_space()
+
+    index = space.encode(torch.tensor([1.0, 2.0]))
+
+    assert index.shape == ()
+    assert space.decode(index).shape == (2,)
+
+
+def test_finite_design_space_encode_rejects_invalid_designs():
+    space = _finite_space()
+
+    with pytest.raises(ValueError, match="trailing shape"):
+        space.encode(torch.tensor([1.0, 2.0, 3.0]))
+    with pytest.raises(ValueError, match="outside the finite design space"):
+        space.encode(torch.tensor([9.0, 9.0]))
+
+
+def test_finite_design_space_decode_rejects_invalid_indices():
+    space = _finite_space()
+
+    with pytest.raises(ValueError, match="integer-valued"):
+        space.decode(torch.tensor([0.5]))
+    with pytest.raises(ValueError, match="outside the finite design space"):
+        space.decode(torch.tensor([3]))
+
+
+def test_finite_design_space_projects_to_the_nearest_design():
+    space = _finite_space()
+
+    projected = space.project(torch.tensor([[0.9, 1.9], [2.6, 3.6]]))
+
+    assert torch.equal(projected, torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+    assert space.contains(projected)
+
+
+def test_finite_design_space_samples_land_in_the_set():
+    torch.manual_seed(0)
+    space = _finite_space()
+
+    assert space.sample().shape == (2,)
+    assert space.contains(space.sample())
+    assert space.contains(space.sample((32,)))
+    assert space.sample((4, 3)).shape == (4, 3, 2)
+
+
+def test_finite_design_space_supports_scalar_designs():
+    space = FiniteDesignSpace(torch.tensor([1.0, 2.0, 3.0]))
+
+    assert space.event_shape == torch.Size([])
+    assert space.contains(torch.tensor([1.0, 3.0]))
+    assert torch.equal(space.encode(torch.tensor([3.0, 1.0])), torch.tensor([2, 0]))
+    assert torch.equal(space.project(torch.tensor([2.9])), torch.tensor([3.0]))
 
 
 # ---------------------------------------------------------------------------

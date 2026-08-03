@@ -316,3 +316,136 @@ class BoxDesignSpace(DesignSpace):
             math.log(2.0) - raw_design - torch.nn.functional.softplus(-2.0 * raw_design)
         )
         return self._sum_event_dims(torch.log(scale) + tanh_log_det)
+
+
+class FiniteDesignSpace(DesignSpace):
+    """Finite set of designs.
+
+    Membership is exact equality, so a design not
+    taken from the set may not be contained; :meth:`project` snaps such a
+    design to the nearest valid one.
+
+    :meth:`encode` / :meth:`decode` convert between a design and its index in
+    the set. These are not the raw<->design reparametrisation;
+    :meth:`to_design` stays the identity.
+
+    Attributes:
+        values: Finite set of designs with shape ``[n_designs, *event_shape]``.
+        event_shape: Shape of one design.
+        is_discrete: Always ``True`` for finite spaces.
+    """
+
+    def __init__(self, values) -> None:
+        """Initializes the finite design set.
+
+        Args:
+            values: Valid designs with shape
+                ``[n_designs, *event_shape]``.
+
+        Raises:
+            ValueError: If no designs are supplied or designs are duplicated.
+        """
+        values = torch.as_tensor(values)
+        if values.ndim == 0 or values.shape[0] == 0:
+            raise ValueError("FiniteDesignSpace requires at least one design.")
+
+        super().__init__(values.shape[1:], is_discrete=True)
+        self.values = values
+
+        flat_values = values.reshape(values.shape[0], -1)
+        if torch.unique(flat_values, dim=0).shape[0] != values.shape[0]:
+            raise ValueError("FiniteDesignSpace requires unique designs.")
+
+    @property
+    def n_designs(self) -> int:
+        """Returns the number of designs in the set."""
+        return self.values.shape[0]
+
+    def sample(self, batch_shape=(), *, device=None) -> Tensor:
+        """Samples uniformly from the valid physical designs.
+
+        Args:
+            batch_shape: Shape of the batch of designs to sample.
+            device: Device on which to return the samples. Defaults to the
+                device of ``values``.
+
+        Returns:
+            Designs with shape ``[*batch_shape, *event_shape]``.
+        """
+        device = self.values.device if device is None else device
+        indices = torch.randint(self.n_designs, torch.Size(batch_shape), device=device)
+        return self.decode(indices)
+
+    def _contains(self, design: Tensor) -> bool:
+        """Checks whether every design is one of the valid designs.
+
+        Args:
+            design: Designs with trailing shape ``event_shape``.
+        """
+        return bool(self._matches(design).any(dim=-1).all().item())
+
+    def project(self, design: Tensor) -> Tensor:
+        """Snaps each design to the nearest valid design, by squared distance.
+
+        Args:
+            design: Designs with trailing shape ``event_shape``.
+
+        Returns:
+            Valid designs with the same shape as ``design``.
+        """
+        values = self.values.to(device=design.device, dtype=design.dtype)
+        flat_design = design.reshape(-1, self.event_shape.numel())
+        flat_values = values.reshape(self.n_designs, self.event_shape.numel())
+        distances = ((flat_design.unsqueeze(1) - flat_values.unsqueeze(0)) ** 2).sum(-1)
+        return flat_values[distances.argmin(dim=-1)].reshape(design.shape)
+
+    def encode(self, design: Tensor) -> Tensor:
+        """Maps valid physical designs to categorical indices.
+
+        Args:
+            design: Valid physical designs with trailing shape ``event_shape``.
+
+        Returns:
+            Design indices with the design's batch shape.
+
+        Raises:
+            ValueError: If a design is not in the categorical set.
+        """
+        design = torch.as_tensor(design)
+        if not matches_event_shape(design, self.event_shape):
+            raise ValueError(
+                f"Design must have trailing shape {tuple(self.event_shape)}; "
+                f"got shape {tuple(design.shape)}."
+            )
+        matches = self._matches(design)
+        if not matches.any(dim=-1).all():
+            raise ValueError("Design is outside the finite design space.")
+        return matches.to(torch.long).argmax(dim=-1)
+
+    def decode(self, index: Tensor) -> Tensor:
+        """Maps categorical design indices to physical designs.
+
+        Args:
+            index: Integer-valued design indices.
+
+        Returns:
+            Physical designs with shape ``[*index.shape, *event_shape]``.
+
+        Raises:
+            ValueError: If an index is outside the categorical design range.
+        """
+        index = torch.as_tensor(index)
+        if not torch.equal(index, index.round()):
+            raise ValueError("Design index must be integer-valued.")
+        if torch.any((index < 0) | (index >= self.n_designs)):
+            raise ValueError("Design index is outside the finite design space.")
+        return self.values.to(device=index.device)[index.long()]
+
+    def _matches(self, design: Tensor) -> Tensor:
+        """Returns design-match indicators with shape ``[*batch_shape, n_designs]``."""
+        values = self.values.to(device=design.device, dtype=design.dtype)
+        flat_design = design.reshape(-1, self.event_shape.numel())
+        flat_values = values.reshape(self.n_designs, self.event_shape.numel())
+        matches = (flat_design.unsqueeze(1) == flat_values.unsqueeze(0)).all(dim=-1)
+        batch_shape = design.shape[: design.ndim - len(self.event_shape)]
+        return matches.reshape(*batch_shape, self.n_designs)
