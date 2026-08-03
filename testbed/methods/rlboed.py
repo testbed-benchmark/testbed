@@ -17,14 +17,19 @@ from omegaconf import OmegaConf
 
 from testbed.core.setup import setup
 from testbed.design_nets import (
+    CategoricalPolicyNet,
+    DeepSetCategoricalActor,
     DeepSetGaussianActor,
+    RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
+    StochasticDesignNet,
     TanhGaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner
 from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
+    CategoricalDesignSpace,
 )
 from testbed.envs.design_spaces import DesignSpace
 from testbed.envs.history import History
@@ -336,17 +341,20 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.policy_init_std must be positive.")
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
-    if not isinstance(design_space, BoxDesignSpace):
-        raise TypeError("This RLBOED SAC implementation requires a BoxDesignSpace.")
+    if not isinstance(design_space, (BoxDesignSpace, CategoricalDesignSpace)):
+        raise TypeError(
+            "This RLBOED SAC implementation requires a BoxDesignSpace or "
+            "CategoricalDesignSpace."
+        )
 
 
 @dataclass
 class _SACNetworks:
-    actor: TanhGaussianPolicyNet
-    qf1: RLBOEDQNetwork
-    qf2: RLBOEDQNetwork
-    qf1_target: RLBOEDQNetwork
-    qf2_target: RLBOEDQNetwork
+    actor: StochasticDesignNet
+    qf1: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
+    qf2: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
+    qf1_target: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
+    qf2_target: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
     q_optimizer: optim.Adam
     actor_optimizer: optim.Adam
     log_alpha: torch.Tensor
@@ -361,34 +369,57 @@ def make_networks(
 ) -> _SACNetworks:
     """Builds the SAC actor, twin critics, target networks, optimizers, and alpha."""
     sac = cfg.sac
-    design_low = design_space.low.to(device)
-    design_high = design_space.high.to(device)
     dim_y = task.event_shape_y.numel()
     dim_design = task.event_shape_design.numel()
 
-    actor_module = DeepSetGaussianActor(
-        dim_y=dim_y,
-        dim_design=dim_design,
-        init_std=sac.policy_init_std,
-    )
-    actor = TanhGaussianPolicyNet(
-        design_space,
-        actor=actor_module,
-        normalize_design_history=True,
-        design_history_bounds=(0.0, 1.0),
-        outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
-    ).to(device)
-
-    critic_kwargs = {
-        "dim_y": dim_y,
-        "dim_design": dim_design,
-        "design_low": design_low,
-        "design_high": design_high,
-        "outcome_low": cfg.reward.outcome_low,
-        "outcome_high": cfg.reward.outcome_high,
-    }
-    qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
-    qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
+    if isinstance(design_space, BoxDesignSpace):
+        actor_module = DeepSetGaussianActor(
+            dim_y=dim_y,
+            dim_design=dim_design,
+            init_std=sac.policy_init_std,
+        )
+        actor = TanhGaussianPolicyNet(
+            design_space,
+            actor=actor_module,
+            normalize_design_history=True,
+            design_history_bounds=(0.0, 1.0),
+            outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
+        ).to(device)
+        critic_kwargs = {
+            "dim_y": dim_y,
+            "dim_design": dim_design,
+            "design_low": design_space.low.to(device),
+            "design_high": design_space.high.to(device),
+            "outcome_low": cfg.reward.outcome_low,
+            "outcome_high": cfg.reward.outcome_high,
+        }
+        qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
+        qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
+    else:
+        values = design_space.values.reshape(design_space.n_designs, dim_design)
+        actor_module = DeepSetCategoricalActor(
+            dim_y=dim_y,
+            dim_design=dim_design,
+            n_designs=design_space.n_designs,
+        )
+        actor = CategoricalPolicyNet(
+            design_space,
+            actor=actor_module,
+            normalize_design_history=True,
+            design_history_bounds=(0.0, 1.0),
+            outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
+        ).to(device)
+        critic_kwargs = {
+            "dim_y": dim_y,
+            "dim_design": dim_design,
+            "n_designs": design_space.n_designs,
+            "design_low": values.amin(dim=0).to(device),
+            "design_high": values.amax(dim=0).to(device),
+            "outcome_low": cfg.reward.outcome_low,
+            "outcome_high": cfg.reward.outcome_high,
+        }
+        qf1 = RLBOEDDiscreteQNetwork(**critic_kwargs).to(device)
+        qf2 = RLBOEDDiscreteQNetwork(**critic_kwargs).to(device)
     qf1_target = copy.deepcopy(qf1)
     qf2_target = copy.deepcopy(qf2)
 
@@ -435,7 +466,7 @@ class _EpisodeBatch:
 
 def collect_episode_batch(
     env: BEDEnv,
-    actor: TanhGaussianPolicyNet,
+    actor: StochasticDesignNet,
     task: Task,
     cfg,
     *,
@@ -511,21 +542,40 @@ def sac_update(
     data_dones = data.done
     alpha = nets.log_alpha.exp().detach()
 
+    is_categorical = isinstance(nets.actor, CategoricalPolicyNet)
     with torch.no_grad():
-        next_policy_sample = nets.actor.sample_from_observation(data_next_obs)
-        next_designs = next_policy_sample.design
-        next_log_pi = next_policy_sample.log_prob.unsqueeze(-1)
-        qf1_next_target = nets.qf1_target(data_next_obs, next_designs)
-        qf2_next_target = nets.qf2_target(data_next_obs, next_designs)
-        min_qf_next_target = (
-            torch.min(qf1_next_target, qf2_next_target) - alpha * next_log_pi
+        if is_categorical:
+            next_probs, next_log_probs = (
+                nets.actor.design_probabilities_from_observation(data_next_obs)
+            )
+            min_qf_next_target = torch.min(
+                nets.qf1_target(data_next_obs), nets.qf2_target(data_next_obs)
+            )
+            next_value = (
+                next_probs * (min_qf_next_target - alpha * next_log_probs)
+            ).sum(dim=-1)
+        else:
+            next_policy_sample = nets.actor.sample_from_observation(data_next_obs)
+            next_designs = next_policy_sample.design
+            next_log_pi = next_policy_sample.log_prob.unsqueeze(-1)
+            qf1_next_target = nets.qf1_target(data_next_obs, next_designs)
+            qf2_next_target = nets.qf2_target(data_next_obs, next_designs)
+            next_value = (
+                torch.min(qf1_next_target, qf2_next_target) - alpha * next_log_pi
+            ).view(-1)
+        next_q_value = (
+            data_rewards + (1.0 - data_dones.float()) * cfg.sac.gamma * next_value
         )
-        next_q_value = data_rewards + (
-            1.0 - data_dones.float()
-        ) * cfg.sac.gamma * min_qf_next_target.view(-1)
 
-    qf1_a_values = nets.qf1(data_obs, data_designs).view(-1)
-    qf2_a_values = nets.qf2(data_obs, data_designs).view(-1)
+    if is_categorical:
+        design_indices = (
+            nets.actor.design_space.encode(data_designs).long().unsqueeze(-1)
+        )
+        qf1_a_values = nets.qf1(data_obs).gather(1, design_indices).squeeze(-1)
+        qf2_a_values = nets.qf2(data_obs).gather(1, design_indices).squeeze(-1)
+    else:
+        qf1_a_values = nets.qf1(data_obs, data_designs).view(-1)
+        qf2_a_values = nets.qf2(data_obs, data_designs).view(-1)
     qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
     qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
     qf_loss = qf1_loss + qf2_loss
@@ -538,20 +588,33 @@ def sac_update(
     alpha_loss = None
 
     if optimization_step % cfg.sac.policy_frequency == 0:
-        policy_sample = nets.actor.sample_from_observation(data_obs)
-        pi = policy_sample.design
-        log_pi = policy_sample.log_prob.unsqueeze(-1)
-        min_qf_pi = torch.min(nets.qf1(data_obs, pi), nets.qf2(data_obs, pi))
-        actor_loss = (alpha * log_pi - min_qf_pi).mean()
+        if is_categorical:
+            probs, log_probs = nets.actor.design_probabilities_from_observation(
+                data_obs
+            )
+            min_qf_pi = torch.min(nets.qf1(data_obs), nets.qf2(data_obs))
+            actor_loss = (probs * (alpha * log_probs - min_qf_pi)).sum(dim=-1).mean()
+        else:
+            policy_sample = nets.actor.sample_from_observation(data_obs)
+            pi = policy_sample.design
+            log_pi = policy_sample.log_prob.unsqueeze(-1)
+            min_qf_pi = torch.min(nets.qf1(data_obs, pi), nets.qf2(data_obs, pi))
+            actor_loss = (alpha * log_pi - min_qf_pi).mean()
 
         nets.actor_optimizer.zero_grad()
         actor_loss.backward()
         nets.actor_optimizer.step()
 
         if nets.alpha_optimizer is not None:
-            alpha_loss = -(
-                nets.log_alpha.exp() * (log_pi.detach() + target_entropy)
-            ).mean()
+            if is_categorical:
+                entropy_error = (
+                    (probs * (log_probs + target_entropy)).sum(dim=-1).detach()
+                )
+                alpha_loss = -(nets.log_alpha.exp() * entropy_error).mean()
+            else:
+                alpha_loss = -(
+                    nets.log_alpha.exp() * (log_pi.detach() + target_entropy)
+                ).mean()
             nets.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             nets.alpha_optimizer.step()
@@ -591,11 +654,14 @@ class Trainer:
         self.manager = manager
 
         self.device = task.device
-        self.target_entropy = (
-            -float(task.event_shape_design.numel())
-            if cfg.sac.target_entropy is None
-            else float(cfg.sac.target_entropy)
-        )
+        if cfg.sac.target_entropy is None:
+            self.target_entropy = (
+                0.98 * log(self.nets.actor.design_space.n_designs)
+                if isinstance(self.nets.actor, CategoricalPolicyNet)
+                else -float(task.event_shape_design.numel())
+            )
+        else:
+            self.target_entropy = float(cfg.sac.target_entropy)
 
         # logging / checkpointing
         self.metrics: list[dict[str, float]] = []
@@ -819,8 +885,16 @@ class Trainer:
                 self.cfg, resolve=True, throw_on_missing=False
             ),
             "horizon": self.env.horizon,
-            "design_low": design_space.low.detach().cpu(),
-            "design_high": design_space.high.detach().cpu(),
+            "design_low": (
+                design_space.low.detach().cpu()
+                if isinstance(design_space, BoxDesignSpace)
+                else design_space.values.amin(dim=0).detach().cpu()
+            ),
+            "design_high": (
+                design_space.high.detach().cpu()
+                if isinstance(design_space, BoxDesignSpace)
+                else design_space.values.amax(dim=0).detach().cpu()
+            ),
             "outcome_low": torch.as_tensor(self.cfg.reward.outcome_low),
             "outcome_high": torch.as_tensor(self.cfg.reward.outcome_high),
             "designer": actor_state_dict,
@@ -844,6 +918,8 @@ class Trainer:
             "training_iterations": self.cfg.sac.num_training_iterations,
             "global_step": self.cfg.sac.num_training_iterations,
         }
+        if isinstance(design_space, CategoricalDesignSpace):
+            checkpoint["design_values"] = design_space.values.detach().cpu()
         if step is not None:
             checkpoint["step"] = step
         if metric is not None:
@@ -857,7 +933,9 @@ class Trainer:
 
 
 def build_design_space(cfg, task):
-    """Instantiates the box design space for the task."""
+    """Returns the task's declared space or configures a continuous box."""
+    if task.design_space is not None:
+        return task.design_space
     return BoxDesignSpace(
         cfg.design_space.low,
         cfg.design_space.high,

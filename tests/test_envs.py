@@ -1,3 +1,5 @@
+import typing
+
 import pytest
 import torch
 
@@ -5,6 +7,7 @@ from testbed.envs import (
     BEDEnv,
     BoxDesignSpace,
     CallableReward,
+    CategoricalDesignSpace,
     History,
     RLBOEDDenseReward,
     RLBOEDTerminalReward,
@@ -45,6 +48,24 @@ def test_box_design_space_rejects_invalid_bounds_and_shapes():
         space.project(torch.tensor([-2.0, 3.0])),
         torch.tensor([-1.0, 2.0]),
     )
+
+
+def test_bed_env_rejects_invalid_categorical_designs_without_projection():
+    task = make_task()
+    env = BEDEnv(
+        task,
+        horizon=1,
+        design_space=CategoricalDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]])),
+        batch_shape=(1,),
+    )
+    env.reset()
+
+    with pytest.raises(ValueError, match="outside the design space"):
+        env.step(torch.tensor([[0.5, 0.5]]))
+
+
+def test_bed_env_init_type_hints_resolve_at_runtime():
+    assert "task" in typing.get_type_hints(BEDEnv.__init__)
 
 
 def test_history_empty_write_append_prefix_and_bounds():

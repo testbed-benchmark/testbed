@@ -36,8 +36,6 @@ class Task(ABC, nn.Module):
             Whether observations are discrete (default: False).
         discrete_theta (bool):
             Whether parameters are discrete (default: False).
-        discrete_design (bool):
-            Whether designs are discrete (default: False).
         separable (bool):
             Whether the likelihood factorizes over observations.
             Non-separable tasks must override :meth:`history_logp` (default: True).
@@ -70,7 +68,6 @@ class Task(ABC, nn.Module):
         prior: Distribution,
         discrete_y: bool = False,
         discrete_theta: bool = False,
-        discrete_design: bool = False,
         separable: bool = True,
         implicit_likelihood: bool = False,
         design_space=None,
@@ -97,7 +94,6 @@ class Task(ABC, nn.Module):
         # Tracking if there are discrete components in the model
         self.discrete_y = discrete_y
         self.discrete_theta = discrete_theta
-        self.discrete_design = discrete_design
 
         self.design_space = design_space
 
