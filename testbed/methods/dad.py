@@ -1,12 +1,10 @@
 """Training for DAD (Foster et al., 2021)."""
 
-import os
-
+import hydra
 import torch
 from hydra.utils import instantiate
-from omegaconf import OmegaConf
 
-from testbed.core.manager import Manager
+from testbed.core.setup import setup
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import (
     PolicyDesigner,
@@ -181,36 +179,20 @@ def build_objective(cfg, task):
 # Entry point
 # ============================================================================
 
-if __name__ == "__main__":
-    """ Entry point for DAD training.
 
-    Usage: python dad.py config='./path/to/config.yaml' save_dir='./save_path/'
+@hydra.main(version_base="1.3", config_path="../recipes", config_name="dad")
+def main(cfg):
+    """Entry point for DAD training.
+
+    Args:
+        cfg: Composed Hydra configuration for the training run.
+
+    Run with ``python testbed/methods/dad.py [overrides...]``.
     """
-    cfg_cli = OmegaConf.from_cli()
-    cfg_file = OmegaConf.load(cfg_cli.config)
-    # Some defaults for optional args
-    # You should set these in your config file if you want to change them
-    cfg_defaults = OmegaConf.create(
-        {
-            "objective": {
-                "reparameterize_policy": False,
-                "baseline": None,
-                "requires_policy_log_probs": False,
-            },
-        }
-    )
-    # Precedence: CLI > file > defaults
-    cfg = OmegaConf.merge(cfg_defaults, cfg_file, cfg_cli)
-
-    # Manager setup
-    run_name = f"{os.environ.get('SLURM_ARRAY_JOB_ID', '0')}_{os.environ.get('SLURM_ARRAY_TASK_ID', '0')}"
-    manager = Manager(cfg, root=cfg.save_dir, name=run_name, timestamp=True)
+    manager, task = setup(cfg)
 
     # Set seed
     torch.manual_seed(cfg.seed)
-
-    task = instantiate(cfg.task)
-    task = task.to(cfg.device)
 
     policy_net = build_design_net(cfg, task)
     policy_net = policy_net.to(cfg.device)
@@ -244,3 +226,7 @@ if __name__ == "__main__":
     )
 
     trainer.train()
+
+
+if __name__ == "__main__":
+    main()

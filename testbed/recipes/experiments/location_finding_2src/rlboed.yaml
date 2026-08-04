@@ -1,0 +1,8 @@
+# @package _global_
+
+defaults:
+  - /rlboed
+  - override /task: location_finding_2src
+  - _self_
+
+# Select the two-source task; its constructor settings live in the task recipe.

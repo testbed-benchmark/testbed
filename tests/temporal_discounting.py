@@ -27,7 +27,7 @@ from testbed.tasks import HyperbolicTemporalDiscounting
 EXPECTED_SPCE = 5.021
 SPCE_TOL = 0.15
 
-# Training (short GPU run; see recipes/temporal_discounting/dad.yaml for the full recipe)
+# Training (short GPU run; see recipes/experiments/temporal_discounting/dad.yaml for the full recipe)
 T = 20
 N_TRAIN_ITER = 5_000
 N_OUTER = 512

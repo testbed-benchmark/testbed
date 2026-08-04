@@ -23,11 +23,13 @@ jobs:
       - name: Run Ruff linter
         uses: astral-sh/ruff-action@v3
         with:
+          version: "0.15.20"
           args: check --output-format=github
           src: "."
 
       - name: Run Ruff formatter
         uses: astral-sh/ruff-action@v3
         with:
+          version: "0.15.20"
           args: format --check
           src: "."

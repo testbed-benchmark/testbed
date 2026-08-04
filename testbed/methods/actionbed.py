@@ -1,14 +1,13 @@
 """Training for ActionBED (Rossa et al., 2026)."""
 
 import inspect
-import os
 
+import hydra
 import torch
 from hydra.utils import get_class, instantiate
-from omegaconf import OmegaConf
 
 from testbed.core.distributions import TorchDistribution
-from testbed.core.manager import Manager
+from testbed.core.setup import setup
 from testbed.designers import (
     ActionHook,
     PolicyDesigner,
@@ -341,35 +340,20 @@ def build_loss_fn(cfg, task, device, manager):
 # Entry point
 # ============================================================================
 
-if __name__ == "__main__":
-    """ Entry point for ActionBED training.
 
-    Usage: python actionbed.py config='./path/to/config.yaml' save_dir='./save_path/'
+@hydra.main(version_base="1.3", config_path="../recipes", config_name="actionbed")
+def main(cfg):
+    """Entry point for ActionBED training.
+
+    Args:
+        cfg: Composed Hydra configuration for the training run.
+
+    Run with ``python testbed/methods/actionbed.py [overrides...]``.
     """
-    cfg_cli = OmegaConf.from_cli()
-    cfg_file = OmegaConf.load(cfg_cli.config)
-    # Some defaults for optional args
-    cfg_defaults = OmegaConf.create(
-        {
-            "n_action_warmup_iter": 0,
-            "betas": (0.9, 0.999),
-            "grad_clip": None,
-            "lr_period": None,
-            "lr_gamma": None,
-        }
-    )
-    # Precedence: CLI > file > defaults
-    cfg = OmegaConf.merge(cfg_defaults, cfg_file, cfg_cli)
-
-    # Manager setup
-    run_name = f"{os.environ.get('SLURM_ARRAY_JOB_ID', '0')}_{os.environ.get('SLURM_ARRAY_TASK_ID', '0')}"
-    manager = Manager(cfg, root=cfg.save_dir, name=run_name, timestamp=True)
+    manager, task = setup(cfg)
 
     # Set seed
     torch.manual_seed(cfg.seed)
-
-    task = instantiate(cfg.task)
-    task = task.to(cfg.device)
 
     design_net, action_net = build_policy_nets(cfg, task, manager)
     design_net = design_net.to(cfg.device)
@@ -407,3 +391,7 @@ if __name__ == "__main__":
     )
 
     trainer.train()
+
+
+if __name__ == "__main__":
+    main()

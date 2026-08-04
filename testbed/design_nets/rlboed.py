@@ -83,3 +83,93 @@ class RLBOEDQNetwork(nn.Module):
         history_summary = encoded_history.sum(dim=1)
 
         return self.emitter_net(torch.cat([history_summary, design], dim=-1))
+
+
+class RLBOEDDiscreteQNetwork(nn.Module):
+    """DeepSets critic that returns one Q-value for each categorical design.
+
+    Attributes:
+        dim_y: Flattened outcome dimension.
+        dim_design: Flattened design dimension.
+        n_designs: Number of categorical designs.
+        dim_emb: History-summary dimension.
+        design_low: Per-coordinate lower bounds for design normalization.
+        design_high: Per-coordinate upper bounds for design normalization.
+        outcome_low: Lower bound for outcome normalization.
+        outcome_high: Upper bound for outcome normalization.
+        encoder_net: Module that embeds each design-outcome pair.
+        emitter_net: Module that maps a history embedding to Q-values.
+    """
+
+    def __init__(
+        self,
+        *,
+        dim_y: int,
+        dim_design: int,
+        n_designs: int,
+        design_low,
+        design_high,
+        outcome_low,
+        outcome_high,
+        dim_h=[128, 128],
+        dim_emb: int = 64,
+    ):
+        """Initializes the discrete critic.
+
+        Args:
+            dim_y: Flattened outcome dimension.
+            dim_design: Flattened design dimension.
+            n_designs: Number of categorical designs.
+            design_low: Per-coordinate lower bounds for design normalization.
+            design_high: Per-coordinate upper bounds for design normalization.
+            outcome_low: Lower bound for outcome normalization.
+            outcome_high: Upper bound for outcome normalization.
+            dim_h: Hidden layer widths; an integer specifies one layer.
+            dim_emb: History-summary dimension.
+        """
+        super().__init__()
+        self.dim_y = int(dim_y)
+        self.dim_design = int(dim_design)
+        self.n_designs = int(n_designs)
+        self.dim_emb = int(dim_emb)
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
+        self.encoder_net = MLP(
+            [self.dim_y + self.dim_design] + hidden_widths + [self.dim_emb],
+            activation=nn.ReLU,
+        )
+        self.emitter_net = MLP(
+            [self.dim_emb] + hidden_widths + [self.n_designs], activation=nn.ReLU
+        )
+        _initialize_linear_layers(self)
+        self.register_buffer("design_low", torch.as_tensor(design_low))
+        self.register_buffer("design_high", torch.as_tensor(design_high))
+        self.register_buffer("outcome_low", torch.as_tensor(outcome_low))
+        self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
+
+    def forward(self, observation: History) -> Tensor:
+        """Estimates all design Q-values from a permutation-invariant history.
+
+        Args:
+            observation: History containing designs, outcomes, and an optional
+                padding mask.
+
+        Returns:
+            Q-values with shape ``[batch, n_designs]``.
+        """
+        designs = observation.designs
+        outcomes = observation.outcomes
+        batch_size, history_length = designs.shape[:2]
+        designs = designs.reshape(batch_size, history_length, self.dim_design)
+        outcomes = outcomes.reshape(batch_size, history_length, self.dim_y)
+        width = self.design_high - self.design_low
+        scaled_designs = (designs - self.design_low) / width
+        designs = torch.where(
+            width == 0, torch.zeros_like(scaled_designs), scaled_designs
+        )
+        outcomes = affine_rescale(
+            outcomes, self.outcome_low, self.outcome_high, 0.0, 1.0
+        )
+        encoded = self.encoder_net(torch.cat([outcomes, designs], dim=-1))
+        if observation.mask is not None:
+            encoded = encoded * observation.mask.to(dtype=encoded.dtype).unsqueeze(-1)
+        return self.emitter_net(encoded.sum(dim=1))

@@ -33,7 +33,6 @@ def test_event_shapes_and_flags():
     assert task.event_shape_y == torch.Size([1])
     assert task.discrete_y
     assert not task.discrete_theta
-    assert not task.discrete_design
 
 
 def test_task_uses_default_prior():

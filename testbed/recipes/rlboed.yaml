@@ -1,31 +1,25 @@
-# system
+defaults:
+  - system: default
+  - task: location_finding
+  - wandb: default
+  - hydra_run: default
+  - _self_
+# system (device/save_dir come from the system group)
 seed: 373693
 torch_deterministic: true
-device: 'cuda'
-save_dir: ???
-
-# task
-task:
-  _target_: testbed.tasks.LocationFinding
-  n_sources: 2
-  dim_theta: 2
 T: 30
-
 # design space
 design_space:
   low: -4.0
   high: 4.0
-
 # reward / outcome bounds
 reward:
   n_contrastive: 100_000
   outcome_low: -3.0
   outcome_high: 10.0
-
 # eval
-eval_every: 0                  # no periodic eval during SAC training
+eval_every: 0  # no periodic eval during SAC training
 eval_n_contrastive: 1_000_000
-
 # SAC hyperparameters
 sac:
   num_training_iterations: 2_001
@@ -39,20 +33,11 @@ sac:
   gradient_steps_per_iteration: 64
   policy_lr: 0.0001
   q_lr: 0.0003
-  policy_init_std: 0.5773502691896258      # 3 ** -0.5
+  policy_init_std: 0.5773502691896258  # 3 ** -0.5
   policy_frequency: 1
   target_network_frequency: 1
   alpha: null
   initial_alpha: 1.0
   target_entropy: null
-  entropy_anneal_rate: 7.142857142857143e-05   # 1 / 1.4e4
+  entropy_anneal_rate: 7.142857142857143e-05  # 1 / 1.4e4
   log_frequency: 100
-
-# experiment tracking
-wandb:
-  enabled: false            # opt-in; flip to true or override on the CLI
-  project: testbed
-  entity: null              # your wandb team/user; null uses the default
-  mode: online              # online | offline | disabled
-  tags: []
-  group: null

@@ -78,6 +78,7 @@ caption: Guides
 maxdepth: 1
 ---
 
+guides/configuration
 guides/custom_tasks
 guides/custom_methods
 guides/using_designers

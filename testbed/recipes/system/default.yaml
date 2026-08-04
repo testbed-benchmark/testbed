@@ -1,0 +1,3 @@
+# @package _global_
+device: cuda
+save_dir: runs

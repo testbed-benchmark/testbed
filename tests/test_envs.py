@@ -1,7 +1,9 @@
+import typing
+
 import pytest
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.envs import (
     BEDEnv,
     CallableReward,
@@ -23,6 +25,27 @@ def make_space(task):
 
 # BoxDesignSpace's own behaviour is covered in tests/test_design_spaces.py;
 # what follows exercises how BEDEnv uses a design space.
+
+
+def test_bed_env_rejects_invalid_categorical_designs_without_projection():
+    task = make_task()
+    # FiniteDesignSpace.project snaps to the nearest valid design, so an invalid
+    # design only reaches validation with projection turned off.
+    env = BEDEnv(
+        task,
+        horizon=1,
+        design_space=FiniteDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]])),
+        batch_shape=(1,),
+        project_designs=False,
+    )
+    env.reset()
+
+    with pytest.raises(ValueError, match="outside the design space"):
+        env.step(torch.tensor([[0.5, 0.5]]))
+
+
+def test_bed_env_init_type_hints_resolve_at_runtime():
+    assert "task" in typing.get_type_hints(BEDEnv.__init__)
 
 
 def test_history_empty_write_append_prefix_and_bounds():

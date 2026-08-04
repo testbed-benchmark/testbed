@@ -279,6 +279,27 @@ def _finite_space():
     return FiniteDesignSpace(torch.tensor([[0.0, 0.0], [1.0, 2.0], [3.0, 4.0]]))
 
 
+def test_finite_design_space_encodes_and_decodes_physical_designs():
+    space = FiniteDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
+
+    designs = torch.tensor([[10.0], [1.0], [5.0]])
+    indices = space.encode(designs)
+
+    assert space.n_designs == 3
+    assert space.contains(designs)
+    assert torch.equal(indices, torch.tensor([2, 0, 1]))
+    assert torch.equal(space.decode(indices), designs)
+    assert not space.contains(torch.tensor([[2.0]]))
+    with pytest.raises(ValueError, match="integer-valued"):
+        space.decode(torch.tensor([0.5]))
+
+
+@pytest.mark.parametrize("values", [torch.tensor([]), torch.tensor([[1.0], [1.0]])])
+def test_finite_design_space_rejects_empty_or_duplicate_actions(values):
+    with pytest.raises(ValueError):
+        FiniteDesignSpace(values)
+
+
 def test_finite_design_space_derives_shape_and_discreteness():
     space = _finite_space()
 

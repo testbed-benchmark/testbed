@@ -1,0 +1,11 @@
+# @package _global_
+# Hydra owns the run directory; reproduce the historical run-dir name.
+# Shared by every recipe via the `hydra_run` defaults group.
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${save_dir}/${now:%Y-%m-%d_%H-%M-%S}_${oc.env:SLURM_ARRAY_JOB_ID,0}_${oc.env:SLURM_ARRAY_TASK_ID,0}
+  sweep:
+    dir: ${save_dir}
+    subdir: ${now:%Y-%m-%d_%H-%M-%S}_${oc.env:SLURM_ARRAY_JOB_ID,0}_${oc.env:SLURM_ARRAY_TASK_ID,0}_${hydra.job.num}
