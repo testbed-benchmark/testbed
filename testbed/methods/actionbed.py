@@ -380,7 +380,7 @@ if __name__ == "__main__":
     random_designer = None
     if cfg.n_action_warmup_iter > 0:
         design_dist = default_design_distr(task, cfg.device, manager)
-        random_designer = RandomDesigner(task, cfg.T, design_dist)
+        random_designer = RandomDesigner(task, cfg.T, dist=design_dist)
 
     # Create optimizer + LR scheduler
     all_policy_params = list(design_net.parameters()) + list(action_net.parameters())

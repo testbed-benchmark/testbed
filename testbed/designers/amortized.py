@@ -95,12 +95,6 @@ class DeterministicPolicyDesigner(PolicyDesigner):
         )
         return design, raw_design, None
 
-    @property
-    def reinforce_requires_policy_log_probs(self) -> bool:
-        """Deterministic policies never need policy log probs (pure pathwise gradient)."""
-        # TODO possibly remove
-        return False
-
 
 class StochasticPolicyDesigner(PolicyDesigner):
     """Policy designer backed by a StochasticDesignNet."""
@@ -155,11 +149,6 @@ class StochasticPolicyDesigner(PolicyDesigner):
             state.y_history, self.design_history_for_step(state), mask=state.mask
         )
         return sample.design, sample.raw_design, sample.log_prob
-
-    @property
-    def reinforce_requires_policy_log_probs(self) -> bool:
-        """True unless designs are reparameterized (pathwise gradient instead)."""
-        return not self.reparameterize_policy
 
 
 def build_policy_designer(

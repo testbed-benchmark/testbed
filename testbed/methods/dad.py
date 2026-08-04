@@ -8,7 +8,11 @@ from omegaconf import OmegaConf
 
 from testbed.core.manager import Manager
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
-from testbed.designers import PolicyDesigner, build_policy_designer
+from testbed.designers import (
+    PolicyDesigner,
+    StochasticPolicyDesigner,
+    build_policy_designer,
+)
 
 # ============================================================================
 # Training class
@@ -216,9 +220,11 @@ if __name__ == "__main__":
         policy_net,
         reparameterize_policy=cfg.objective.reparameterize_policy,
     )
-    # Update config to match designer
+    # Update config to match designer: only a stochastic policy sampled without
+    # reparameterization needs the score-function form of REINFORCE.
     cfg.objective.requires_policy_log_probs = (
-        designer.reinforce_requires_policy_log_probs
+        isinstance(designer, StochasticPolicyDesigner)
+        and not designer.reparameterize_policy
     )
 
     objective = build_objective(cfg, task)

@@ -103,7 +103,7 @@ def train(task, designer):
     objective = SPCEReinforce(
         task,
         n_contrastive=N_INNER,
-        stochastic_design_policy=designer.reinforce_requires_policy_log_probs,
+        stochastic_design_policy=False,  # deterministic policy net -> pathwise
     )
     optimizer = torch.optim.Adam(designer.design_net.parameters(), lr=LR)
 

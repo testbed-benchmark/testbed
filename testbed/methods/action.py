@@ -241,7 +241,7 @@ if __name__ == "__main__":
             torch.eye(task.event_shape_design.numel(), device=cfg.device),
         )
     )
-    random_designer = RandomDesigner(task, cfg.T, design_dist)
+    random_designer = RandomDesigner(task, cfg.T, dist=design_dist)
 
     # Create optimizer + LR scheduler
     optimizer = torch.optim.Adam(action_net.parameters(), lr=cfg.lr, betas=cfg.betas)

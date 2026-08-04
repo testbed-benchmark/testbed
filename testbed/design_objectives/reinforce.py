@@ -65,7 +65,7 @@ class Reinforce(RolloutObjective, ABC):
         stochastic_design_policy: True when the designer samples designs
         without reparameterization (and not greedily), so the gradient must
         come from the policy score (rollout.extra["policy_log_probs"]) rather
-        than a pathwise graph. Typically `designer.reinforce_requires_policy_log_probs`.
+        than a pathwise graph.
 
         baseline: "leave_one_out" or None; a control variate on the score term.
         """
@@ -104,30 +104,23 @@ class Reinforce(RolloutObjective, ABC):
 
             value = value.detach()
             score = rollout.extra["policy_log_probs"].sum(-1)  # [b]
-            return _add_score_gradient(value, score, self._apply_baseline(value)).mean()
 
         # Deterministic policy: requires additional loss term.
         # Requires differentiable value functions.
         # See e.g. DAD Eq. 16
+        else:
+            if torch.is_grad_enabled() and not rollout.design_history.requires_grad:
+                raise ValueError(
+                    "pathwise estimator expects designs that carry a graph, but "
+                    "rollout.design_history has requires_grad=False. Roll out with a "
+                    "deterministic or reparameterize_policy=True PolicyDesigner "
+                    "(and not under torch.no_grad())."
+                )
 
-        # Deterministic design policies require that we can differentiate through the designs
-        if torch.is_grad_enabled() and not rollout.design_history.requires_grad:
-            raise ValueError(
-                "pathwise estimator expects designs that carry a graph, but "
-                "rollout.design_history has requires_grad=False. Roll out with a "
-                "deterministic or reparameterize_policy=True PolicyDesigner "
-                "(and not under torch.no_grad())."
-            )
+            score = self.task.history_logp(
+                rollout.y_history, rollout.design_history, rollout.theta
+            )  # [b]
 
-        # Pathwise estimate for an expected-log-ratio objective (SPCE / SNMC).
-        #
-        # The value is a per-sample log ratio evaluated on sampled outcomes, so its
-        # pathwise gradient alone misses the outcome-sampling term. Adding the score
-        # of the task outcome model p(h_T | theta_0) recovers the full DAD Eq. 16
-        # gradient d/dphi V + (V - b) d/dphi log p(h_T | theta_0).
-        score = self.task.history_logp(
-            rollout.y_history, rollout.design_history, rollout.theta
-        )  # [b]
         return _add_score_gradient(value, score, self._apply_baseline(value)).mean()
 
     def _apply_baseline(self, value: Tensor):
