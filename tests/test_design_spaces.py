@@ -381,12 +381,18 @@ def test_htd_design_space_inherits_the_base_shape_check():
     assert not space.contains(torch.tensor([1.0, 50.0, 25.0]))
 
 
-def test_htd_design_space_domain():
+def test_htd_design_space_domain_is_closed():
+    # Closed, matching Step-DAD: exp and sigmoid saturate onto the boundary in
+    # float32, and the likelihood is well defined there.
     space = HTDDesignSpace()
 
-    assert not space.contains(torch.tensor([0.0, 50.0]))  # D_1 > 0 is strict
-    assert not space.contains(torch.tensor([1.0, 0.0]))  # R_0 > 0 is strict
-    assert not space.contains(torch.tensor([1.0, 100.0]))  # R_0 < 100 is strict
+    assert space.contains(torch.tensor([0.0, 50.0]))  # D_1 = 0 is allowed
+    assert space.contains(torch.tensor([1.0, 0.0]))  # R_0 = 0 is allowed
+    assert space.contains(torch.tensor([1.0, 100.0]))  # R_0 = 100 is allowed
+
+    assert not space.contains(torch.tensor([-1e-6, 50.0]))  # D_1 < 0
+    assert not space.contains(torch.tensor([1.0, -1e-6]))  # R_0 < 0
+    assert not space.contains(torch.tensor([1.0, 100.001]))  # R_0 > 100
 
 
 def test_htd_sample_lands_in_the_space():
@@ -394,6 +400,39 @@ def test_htd_sample_lands_in_the_space():
     space = HTDDesignSpace(log_k_mean=-3.0)
 
     assert space.contains(space.sample((256,)))
+
+
+def test_htd_to_design_survives_float_saturation():
+    # Regression: exp and 100*sigmoid saturate onto the domain boundary in
+    # float32 (from raw around -104 and +17), which a DAD policy net reaches
+    # routinely. Those designs must stay valid and finite -- they used to crash
+    # training against a strict domain.
+    space = HTDDesignSpace(log_k_mean=-3.125)
+    extreme = torch.tensor(
+        [[-200.0, -200.0], [-120.0, -120.0], [20.0, 20.0], [200.0, 200.0]]
+    )
+
+    design = space.to_design(extreme)
+
+    assert space.contains(design)
+    assert torch.isfinite(design).all()
+    # Saturation genuinely reaches the bounds; that is allowed, not clamped away.
+    assert (design[:, 0] == 0.0).any()
+    assert (design[:, 1] == 100.0).any()
+
+
+def test_htd_to_design_gradients_stay_finite_when_saturated():
+    # Regression: bounding D_1 by clamping exp's *output* makes the backward
+    # pass compute 0 * inf = nan, which silently poisoned the policy net a few
+    # thousand steps into DAD training. The bound goes on the exponent instead.
+    space = HTDDesignSpace(log_k_mean=-3.125)
+    raw = torch.tensor(
+        [[-200.0, -200.0], [0.0, 0.0], [200.0, 200.0]], requires_grad=True
+    )
+
+    space.to_design(raw).sum().backward()
+
+    assert torch.isfinite(raw.grad).all()
 
 
 def test_htd_project_output_is_contained():

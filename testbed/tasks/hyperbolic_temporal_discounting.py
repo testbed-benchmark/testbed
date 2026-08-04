@@ -24,7 +24,7 @@ _D1_FLOOR = 1e-30
 
 
 class HTDDesignSpace(DesignSpace):
-    r"""Design space for HTD: :math:`D_1 > 0` and :math:`0 < R_0 < 100`.
+    r"""Design space for HTD: :math:`D_1 \ge 0` and :math:`0 \le R_0 \le 100`.
 
     Supports the raw<->design reparametrization
     :math:`D_1 = \exp(x_d - \texttt{log_k_mean})`,
@@ -55,28 +55,29 @@ class HTDDesignSpace(DesignSpace):
         return self.to_design(raw)
 
     def _contains(self, design: Tensor) -> bool:
-        """Checks D_1 > 0 and 0 < R_0 < 100."""
+        """Checks D_1 >= 0 and 0 <= R_0 <= 100."""
         D1, R0 = design[..., 0], design[..., 1]
-        in_domain = (D1 > 0) & (R0 > 0) & (R0 < DELAYED_REWARD)
+        in_domain = (D1 >= 0) & (R0 >= 0) & (R0 <= DELAYED_REWARD)
         return bool(torch.all(in_domain).item())
 
     def project(self, design: Tensor) -> Tensor:
-        """Lossy fallback: clamps into the domain.
-
-        The domain is open, so this clamps to the largest representable value
-        strictly below ``DELAYED_REWARD`` rather than to the bound itself.
-        """
-        reward = torch.tensor(DELAYED_REWARD, dtype=design.dtype, device=design.device)
-        below_reward = torch.nextafter(reward, torch.zeros_like(reward))
-        D1 = design[..., 0:1].clamp(min=_D1_FLOOR)
-        R0 = design[..., 1:2].clamp(min=_D1_FLOOR, max=below_reward)
+        """Lossy fallback: clamps an arbitrary tensor into the domain."""
+        D1 = design[..., 0:1].clamp(min=0.0)
+        R0 = design[..., 1:2].clamp(min=0.0, max=DELAYED_REWARD)
         return torch.cat((D1, R0), dim=-1)
 
     def _to_design(self, raw_design: Tensor) -> Tensor:
-        """Maps raw (x_d, x_r) to valid (D_1, R_0)."""
+        """Maps raw (x_d, x_r) to valid (D_1, R_0).
+
+        The exponent is capped so exp cannot overflow to inf. Capping exp's
+        *output* instead would make the backward pass multiply a zero clamp
+        gradient by an infinite exp gradient, which is nan.
+        """
+        max_exponent = math.log(torch.finfo(raw_design.dtype).max) - 1.0
         D_raw = raw_design[..., 0:1]
         R_raw = raw_design[..., 1:2]
-        D1 = torch.exp(D_raw - self.log_k_mean)
+
+        D1 = torch.exp((D_raw - self.log_k_mean).clamp(max=max_exponent))
         R0 = DELAYED_REWARD * torch.sigmoid(R_raw)
         return torch.cat((D1, R0), dim=-1)
 
@@ -94,6 +95,10 @@ class HTDDesignSpace(DesignSpace):
         The map is diagonal, so this is the sum of the two per-coordinate
         terms: ``d D_1/d x_d = exp(x_d - log_k_mean)`` and
         ``d R_0/d x_r = 100 * sigmoid(x_r) * sigmoid(-x_r)``.
+
+        This describes the mathematical transform; :meth:`_to_design` caps the
+        exponent against overflow, and beyond that cap the realised derivative
+        is 0 rather than what this reports.
         """
         D_raw = raw_design[..., 0]
         R_raw = raw_design[..., 1]
