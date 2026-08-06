@@ -84,7 +84,7 @@ class RolloutState:
     raw_design_history: Tensor | None = None
     # Optional boolean mask [b, T] for padded histories.
     mask: Tensor | None = None
-    # data for current step
+    # Data for the current step, cleared at the start of every step
     design: Tensor | None = None
     raw_design: Tensor | None = None
     y: Tensor | None = None

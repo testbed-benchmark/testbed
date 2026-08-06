@@ -40,6 +40,16 @@ class _RecordingHook(RolloutHook):
         self.calls.append(("after_step", state.y_history.shape[1]))
 
 
+class _OverwriteDesignHook(RolloutHook):
+    """Replaces the proposed design after it is proposed."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def after_propose(self, state):
+        state.design = torch.full_like(state.design, self.value)
+
+
 class _ConstantExtraHook(RolloutHook):
     def __init__(self, key, value):
         self.key = key
@@ -71,6 +81,37 @@ def test_hook_callback_ordering_and_history_shapes():
         assert before_propose_len == t
         assert after_propose_len == t
         assert after_step_len == t + 1
+
+
+def test_after_propose_can_overwrite_the_design_used():
+    """A design rewritten in after_propose must govern the outcome and the history."""
+    task = _make_task()
+    hook = _OverwriteDesignHook(7.0)
+    designer = _CountingDesigner(task, T=3, hooks=[hook])
+    theta = task.sample_prior(2)
+
+    rollout = designer.rollout(theta)
+
+    assert torch.equal(
+        rollout.design_history, torch.full_like(rollout.design_history, 7.0)
+    )
+
+
+def test_per_step_state_is_cleared_between_steps():
+    """Per-step fields hold no stale values from step t-1 when step t begins."""
+    task = _make_task()
+    seen = []
+
+    class _PeekHook(RolloutHook):
+        def before_propose(self, state):
+            seen.append(
+                (state.design, state.raw_design, state.y, state.policy_log_prob)
+            )
+
+    designer = _CountingDesigner(task, T=3, hooks=[_PeekHook()])
+    designer.rollout(task.sample_prior(2))
+
+    assert seen == [(None, None, None, None)] * 3
 
 
 def test_on_rollout_end_key_collision_raises():

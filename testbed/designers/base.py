@@ -163,6 +163,10 @@ class Designer(ABC, nn.Module):
 
         for t in range(T):
             state.t = t
+            # Clear the previous step's per-step fields, so that anything reading
+            # them before they are set this step sees None rather than step t-1's
+            # values.
+            state.design = state.raw_design = state.policy_log_prob = state.y = None
 
             for hook in hooks:
                 hook.before_propose(state)
@@ -171,7 +175,6 @@ class Designer(ABC, nn.Module):
             # reads whatever it needs off the state, including which of the
             # constrained/raw histories to condition on.
             design, raw_design, policy_log_prob = self._step_design(state)
-
             state.design = design
             state.raw_design = raw_design
             state.policy_log_prob = policy_log_prob
@@ -179,14 +182,16 @@ class Designer(ABC, nn.Module):
             for hook in hooks:
                 hook.after_propose(state)
 
-            # Sample observation; always using the (possibly transformed) design
-            y = self.task.sample_outcome(theta, design)  # [b, *event_shape_y]
-            state.y = y
+            # Sample observation; always using the (possibly transformed) design.
+            y = state.task.sample_outcome(state.theta, state.design)
+            state.y = y  # [b, *event_shape_y]
 
+            # Update state history using data that actually produced the observation.
+            # A hook editing state.*_history in place is ovewritten.
             y_list.append(y)
-            design_list.append(design)
-            raw_design_list.append(raw_design)
-            policy_log_prob_list.append(policy_log_prob)
+            design_list.append(state.design)
+            raw_design_list.append(state.raw_design)
+            policy_log_prob_list.append(state.policy_log_prob)
             state.y_history = torch.stack(y_list, dim=1)
             state.design_history = torch.stack(design_list, dim=1)
             state.raw_design_history = (
@@ -199,7 +204,9 @@ class Designer(ABC, nn.Module):
                 hook.after_step(state)
 
         policy_log_probs = None
-        if all(log_prob is not None for log_prob in policy_log_prob_list):
+        if policy_log_prob_list and all(
+            log_prob is not None for log_prob in policy_log_prob_list
+        ):
             policy_log_probs = torch.stack(policy_log_prob_list, dim=1)  # [b, T]
 
         extra = {}
@@ -209,7 +216,7 @@ class Designer(ABC, nn.Module):
             extra["policy_log_probs"] = policy_log_probs
 
         rollout = Rollout(
-            theta=theta,
+            theta=state.theta,
             y_history=state.y_history,
             design_history=state.design_history,
             extra=extra,
