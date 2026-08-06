@@ -179,9 +179,6 @@ class Designer(ABC, nn.Module):
             for hook in hooks:
                 hook.after_propose(state)
 
-            for hook in hooks:
-                hook.before_sample_outcome(state)
-
             # Sample observation; always using the (possibly transformed) design
             y = self.task.sample_outcome(theta, design)  # [b, *event_shape_y]
             state.y = y

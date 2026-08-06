@@ -25,9 +25,6 @@ class RolloutHook:
     def after_propose(self, state: RolloutState) -> None:
         """Runs after a design is proposed, before the outcome is sampled."""
 
-    def before_sample_outcome(self, state: RolloutState) -> None:
-        """Runs immediately before the outcome is sampled."""
-
     def after_step(self, state: RolloutState) -> None:
         """Runs after the outcome is sampled and appended to the history."""
 

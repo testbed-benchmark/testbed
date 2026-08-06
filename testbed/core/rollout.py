@@ -66,8 +66,8 @@ class RolloutState:
     change anywhere.
 
     `y_history`/`design_history` hold the steps completed strictly before the
-    current one in the `before_propose`/`after_propose`/`before_sample_outcome`
-    callbacks; by `after_step`, they have been extended to include step `t`.
+    current one in the `before_propose`/`after_propose` callbacks; by
+    `after_step`, they have been extended to include step `t`.
     `scratch` is hook-owned bookkeeping, freshly created for every rollout
     call, so a single hook instance is safe to reuse across many rollouts.
 

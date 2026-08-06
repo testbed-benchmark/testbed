@@ -36,9 +36,6 @@ class _RecordingHook(RolloutHook):
     def after_propose(self, state):
         self.calls.append(("after_propose", state.y_history.shape[1]))
 
-    def before_sample_outcome(self, state):
-        self.calls.append(("before_sample_outcome", state.y_history.shape[1]))
-
     def after_step(self, state):
         self.calls.append(("after_step", state.y_history.shape[1]))
 
@@ -61,29 +58,18 @@ def test_hook_callback_ordering_and_history_shapes():
     designer.rollout(theta)
 
     kinds = [call[0] for call in hook.calls]
-    assert (
-        kinds
-        == [
-            "before_propose",
-            "after_propose",
-            "before_sample_outcome",
-            "after_step",
-        ]
-        * 3
-    )
+    assert kinds == ["before_propose", "after_propose", "after_step"] * 3
 
-    # before_propose/after_propose/before_sample_outcome see history strictly
-    # before step t; after_step sees history including step t.
+    # before_propose/after_propose see history strictly before step t;
+    # after_step sees history including step t.
     for t in range(3):
-        before_propose_len, after_propose_len, before_sample_len, after_step_len = (
-            hook.calls[4 * t][1],
-            hook.calls[4 * t + 1][1],
-            hook.calls[4 * t + 2][1],
-            hook.calls[4 * t + 3][1],
+        before_propose_len, after_propose_len, after_step_len = (
+            hook.calls[3 * t][1],
+            hook.calls[3 * t + 1][1],
+            hook.calls[3 * t + 2][1],
         )
         assert before_propose_len == t
         assert after_propose_len == t
-        assert before_sample_len == t
         assert after_step_len == t + 1
 
 
