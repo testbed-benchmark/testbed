@@ -108,6 +108,7 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(self.action_net.parameters(), cfg.grad_clip)
 
         self.optimizer.step()
+        self.scheduler.step()
 
         return {"loss": loss.item()}
 
@@ -245,6 +246,7 @@ if __name__ == "__main__":
 
     # Create optimizer + LR scheduler
     optimizer = torch.optim.Adam(action_net.parameters(), lr=cfg.lr, betas=cfg.betas)
+    scheduler = None
     if cfg.lr_period is not None:
         scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma

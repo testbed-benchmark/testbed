@@ -180,6 +180,8 @@ def build_policy_designer(
                 "transform, baked into the sampled log-prob, so there is no "
                 "designer-level way to bypass it."
             )
+            if isinstance(design_net, CategoricalPolicyNet):
+                use_raw_history = False
         return StochasticPolicyDesigner(
             task,
             T,
