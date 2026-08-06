@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 import torch
 
-from ..design_nets.stochastic import StochasticDesignNet
+from ..design_nets.stochastic import CategoricalPolicyNet, StochasticDesignNet
 from .base import Designer
 from .hooks import RolloutHook
 
