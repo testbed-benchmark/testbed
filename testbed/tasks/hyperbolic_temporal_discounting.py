@@ -89,7 +89,7 @@ class HTDDesignSpace(DesignSpace):
         R_raw = torch.logit(R0 / DELAYED_REWARD, eps=1e-6)
         return torch.cat((D_raw, R_raw), dim=-1)
 
-    def log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+    def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
         """Log-det of the exp / scaled-sigmoid reparametrisation.
 
         The map is diagonal, so this is the sum of the two per-coordinate

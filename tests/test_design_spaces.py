@@ -36,7 +36,7 @@ class ExpSpace(DesignSpace):
     def _to_raw(self, design):
         return torch.log(design)
 
-    def log_det_jacobian(self, raw_design):
+    def _log_det_jacobian(self, raw_design):
         return self._sum_event_dims(raw_design)
 
 
@@ -51,11 +51,19 @@ def test_subclass_only_needs_contains():
     assert space.contains(torch.tensor([1.0, 2.0]))
     assert not space.contains(torch.tensor([1.0, -2.0]))
 
-    # Everything else falls back to a working default.
+
+def test_unimplemented_optional_methods_raise_rather_than_defaulting():
+    # A space that does not project or reparametrise must say so: an identity
+    # default would silently hand back an invalid design as if it were valid.
+    space = PositiveSpace(event_shape=(2,))
     design = torch.tensor([1.0, -2.0])
-    assert torch.equal(space.project(design), design)
-    assert torch.equal(space.to_design(design), design)
-    assert torch.equal(space.to_raw(design), design)
+
+    with pytest.raises(NotImplementedError):
+        space.project(design)
+    with pytest.raises(NotImplementedError):
+        space.to_design(design)
+    with pytest.raises(NotImplementedError):
+        space.to_raw(design)
 
 
 def test_contains_checks_shape_without_subclass_help():
@@ -161,18 +169,18 @@ def test_identity_space_change_of_variables_is_a_no_op():
     assert torch.equal(new_log_prob, log_prob)
 
 
-def test_log_det_jacobian_defaults_to_zeros_with_batch_shape():
+def test_identity_space_log_det_is_zeros_with_batch_shape():
     space = DefaultDesignSpace(event_shape=(2, 3))
     raw = torch.randn(4, 5, 2, 3)
 
-    log_det = space.log_det_jacobian(raw)
+    log_det = space._log_det_jacobian(raw)
 
     assert log_det.shape == (4, 5)
     assert torch.all(log_det == 0)
 
 
 def test_transform_without_log_det_jacobian_raises_rather_than_silently_wrong():
-    # A subclass that reparametrises but forgets log_det_jacobian would
+    # A subclass that reparametrises but forgets _log_det_jacobian would
     # otherwise get a zero correction, i.e. silently wrong log-probs.
     class Forgetful(DesignSpace):
         def __init__(self):
@@ -188,7 +196,7 @@ def test_transform_without_log_det_jacobian_raises_rather_than_silently_wrong():
     raw = torch.randn(4, 2)
 
     assert torch.allclose(space.to_design(raw), torch.exp(raw))  # still fine
-    with pytest.raises(NotImplementedError, match="log_det_jacobian"):
+    with pytest.raises(NotImplementedError):
         space.to_design(raw, torch.zeros(4))
 
 
@@ -196,7 +204,7 @@ def test_exp_space_log_det_matches_autograd():
     space = ExpSpace(event_shape=(2,))
     raw = torch.tensor([0.3, -1.2])
 
-    assert torch.allclose(space.log_det_jacobian(raw), _autograd_log_det(space, raw))
+    assert torch.allclose(space._log_det_jacobian(raw), _autograd_log_det(space, raw))
 
 
 def test_box_log_det_matches_autograd():
@@ -205,14 +213,14 @@ def test_box_log_det_matches_autograd():
     )
     raw = torch.tensor([0.4, -0.9])
 
-    assert torch.allclose(space.log_det_jacobian(raw), _autograd_log_det(space, raw))
+    assert torch.allclose(space._log_det_jacobian(raw), _autograd_log_det(space, raw))
 
 
 def test_htd_log_det_matches_autograd():
     space = HTDDesignSpace(log_k_mean=-3.0)
     raw = torch.tensor([0.7, -0.4])
 
-    assert torch.allclose(space.log_det_jacobian(raw), _autograd_log_det(space, raw))
+    assert torch.allclose(space._log_det_jacobian(raw), _autograd_log_det(space, raw))
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +388,22 @@ def test_finite_design_space_samples_land_in_the_set():
     assert space.sample((4, 3)).shape == (4, 3, 2)
 
 
+def test_finite_design_space_reparametrisation_is_the_identity():
+    # A finite set admits no smooth reparametrisation, so to_design/to_raw must
+    # pass physical designs straight through -- a designer with the default
+    # transform_designs=True runs everything it proposes through them.
+    space = _finite_space()
+    design = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    log_prob = torch.randn(2)
+
+    assert torch.equal(space.to_design(design), design)
+    assert torch.equal(space.to_raw(design), design)
+
+    transformed, new_log_prob = space.to_design(design, log_prob)
+    assert torch.equal(transformed, design)
+    assert torch.equal(new_log_prob, log_prob)
+
+
 def test_finite_design_space_supports_scalar_designs():
     space = FiniteDesignSpace(torch.tensor([1.0, 2.0, 3.0]))
 
@@ -492,7 +516,7 @@ def test_box_squash_matches_tanh_gaussian_policy_net():
 
     assert torch.allclose(space.to_design(raw), policy._squash(raw))
     assert torch.allclose(
-        space.log_det_jacobian(raw), policy._squash_log_det(raw).sum(-1)
+        space._log_det_jacobian(raw), policy._squash_log_det(raw).sum(-1)
     )
 
 

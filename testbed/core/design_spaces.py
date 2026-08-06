@@ -10,34 +10,38 @@ from .util import matches_event_shape
 
 
 class DesignSpace(ABC):
-    """Abstract base class for a Task's design space.
+    r"""Abstract base class for a Task's design space.
 
     Checks whether a tensor is a valid design, and optionally provides
     methods for reparametrising designs, projecting designs, and
     sampling from a design prior.
 
-    Subclasses must implement :meth:`_contains`. By default,
-    reparametrisation and projection correspond to no-ops.
+    Subclasses must implement :meth:`_contains`. Everything else is optional:
+    sampling, projection, and reparametrisation raise NotImplementedError until
+    a subclass provides them.
     This is only an abstract class and should be subclassed in actual use cases,
-    e.g., :class:`DefaultDesignSpace` provides a default unconstrained space.
+    e.g., :class:`DefaultDesignSpace` provides a default unconstrained space
+    where projection / reparametrisation are the identity.
 
     :meth:`project` and :meth:`to_design` both produce valid designs but are
     not the same operation: ``project`` is a typically lossy, typically
     non-differentiable correction of an already-nearly-valid design, while
     ``to_design`` is a (typically) smooth reparametrization of an unconstrained value.
 
-    - :meth:`_contains` (**required**): the space's value constraints.
+    - :meth:`_contains` (**required**): checks the space's value constraints.
       Reached through the public :meth:`contains`, which validates shape
       first, so subclasses never re-check shape.
     - :meth:`sample`: draw a random valid design. Needed
-      by RandomDesigner and by callers wanting a design prior (default: raises).
+      by RandomDesigner and by callers wanting a design prior.
     - :meth:`project`: map an arbitrary tensor into the
-      space, e.g. by clipping (default: identity).
+      space, e.g. by clipping. Needed by any caller projecting designs,
+      e.g. :class:`~testbed.envs.bed_env.BEDEnv` with ``project_designs``.
     - :meth:`to_design` / :meth:`to_raw`: reparametrise between raw and valid
       designs, optionally carrying a log-prob through the change of variables.
-      Subclasses override :meth:`_to_design` / :meth:`_to_raw` (default: identity).
-    - :meth:`log_det_jacobian`: log-det of that reparametrisation; required
-      whenever :meth:`_to_design` is overridden (default: zeros).
+      Subclasses override :meth:`_to_design` / :meth:`_to_raw`. Needed by any
+      Designer with ``transform_designs=True``.
+    - :meth:`_log_det_jacobian`: log-det of that reparametrisation; required
+      whenever :meth:`_to_design` is overridden *and* a log-prob is passed.
 
     Args:
         event_shape (iterable):
@@ -54,46 +58,6 @@ class DesignSpace(ABC):
     def __repr__(self) -> str:
         """Returns a compact representation."""
         return f"{type(self).__name__}(event_shape={tuple(self.event_shape)})"
-
-    def contains(self, design) -> bool:
-        """Checks whether a tensor lies in the space.
-
-        A tensor of the wrong shape is not an element of the space, so this
-        validates the trailing (event) dimensions before delegating the value
-        constraints to :meth:`_contains`. Leading dimensions are treated as a
-        batch, and the result is a single bool for the whole batch: True only
-        if *every* design in it lies in the space.
-
-        Args:
-            design (Tensor):
-                Designs of shape ``[*batch_shape, *event_shape]``.
-
-        Returns:
-            bool:
-                Whether all designs in the batch lie in the space.
-        """
-        design = torch.as_tensor(design)
-        if not matches_event_shape(design, self.event_shape):
-            return False
-        return self._contains(design)
-
-    @abstractmethod
-    def _contains(self, design: Tensor) -> bool:
-        """Checks whether a batch of designs satisfies the space's constraints.
-
-        Called by :meth:`contains` once ``design`` is known to be a tensor with
-        trailing shape ``event_shape``, so implementations express only the
-        value constraints. A space with no value constraints returns True.
-
-        Args:
-            design (Tensor):
-                Designs of shape ``[*batch_shape, *event_shape]``.
-
-        Returns:
-            bool:
-                Whether all designs in the batch lie in the space.
-        """
-        ...
 
     # TODO this possibly wants to be cleaned up a bit
     # batch_shape doesn't match other conventions in testbed
@@ -114,19 +78,82 @@ class DesignSpace(ABC):
     def project(self, design: Tensor) -> Tensor:
         """Projects a tensor into the design space.
 
-        Default: identity.
+        This method is optional for subclasses.
+        Raises NotImplementedError by default.
         """
-        return design
+        raise NotImplementedError
+
+    def _to_design(self, raw_design: Tensor) -> Tensor:
+        """Pointwise raw -> design map.
+
+        Subclasses should override this method if reparametrisation is needed.
+        """
+        raise NotImplementedError
+
+    def _to_raw(self, design: Tensor) -> Tensor:
+        """Pointwise design -> raw map.
+
+        Subclasses should override this method if desired.
+        This implements the inverse of _to_design and may not always be needed.
+        """
+        raise NotImplementedError
+
+    def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+        r"""Log |det d(design)/d(raw)| at ``raw_design``, summed over event dims.
+
+        Returns shape ``[*batch_shape]``, matching the ``log_prob`` that
+        :meth:`to_design` corrects.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _contains(self, design: Tensor) -> bool:
+        r"""Checks whether a batch of designs satisfies the space's constraints.
+
+        Called by :meth:`contains` once ``design`` is known to be a tensor with
+        trailing shape ``event_shape``, so implementations express only the
+        value constraints. A space with no value constraints returns True.
+
+        Args:
+            design (Tensor):
+                Designs of shape ``[*batch_shape, *event_shape]``.
+
+        Returns:
+            bool:
+                Whether all designs in the batch lie in the space.
+        """
+        ...
+
+    def contains(self, design: Tensor) -> bool:
+        r"""Checks whether a tensor lies in the space.
+
+        A tensor of the wrong shape is not an element of the space, so this
+        validates the trailing (event) dimensions before delegating the value
+        constraints to :meth:`_contains`. Leading dimensions are treated as a
+        batch, and the result is a single bool for the whole batch.
+
+        Args:
+            design (Tensor):
+                Designs of shape ``[*batch_shape, *event_shape]``.
+
+        Returns:
+            bool:
+                Whether all designs in the batch lie in the space.
+        """
+        design = torch.as_tensor(design)
+        if not matches_event_shape(design, self.event_shape):
+            return False
+        return self._contains(design)
 
     def to_design(self, raw_design: Tensor, log_prob: Tensor | None = None):
-        """Maps a raw/latent value to a design in this space. Default: identity.
+        r"""Maps a raw/latent value to a design in this space.
 
         With ``log_prob`` (the log-density of ``raw_design``, shape
         ``[*batch_shape]``) this is a change of variables: returns
         ``(design, log_prob - log_det_jacobian(raw_design))``, the density of
         the design. Without it, returns just the design.
 
-        Subclasses override :meth:`_to_design` and :meth:`log_det_jacobian`,
+        Subclasses override :meth:`_to_design` and :meth:`_log_det_jacobian`,
         not this method.
         """
         design = self._to_design(raw_design)
@@ -135,7 +162,7 @@ class DesignSpace(ABC):
         return design, log_prob - self._log_det_jacobian(raw_design)
 
     def to_raw(self, design: Tensor, log_prob: Tensor | None = None):
-        """Inverse of :meth:`to_design`. Default: identity.
+        """Inverse of :meth:`to_design`.
 
         Undoes the change of variables when ``log_prob`` (the log-density of
         ``design``) is given. Often not required even when :meth:`to_design`
@@ -145,44 +172,6 @@ class DesignSpace(ABC):
         if log_prob is None:
             return raw_design
         return raw_design, log_prob + self._log_det_jacobian(raw_design)
-
-    def _to_design(self, raw_design: Tensor) -> Tensor:
-        """Pointwise raw -> design map. Default: identity.
-
-        Subclasses should override this method if reparametrisation is needed.
-        """
-        return raw_design
-
-    def _to_raw(self, design: Tensor) -> Tensor:
-        """Pointwise design -> raw map. Default: identity.
-
-        Subclasses should override this method if reparametrisation is needed.
-        """
-        return design
-
-    def log_det_jacobian(self, raw_design: Tensor) -> Tensor:
-        """Log |det d(design)/d(raw)| at ``raw_design``, summed over event dims.
-
-        Returns shape ``[*batch_shape]``, matching the ``log_prob`` that
-        :meth:`to_design` corrects. Default: zeros, which is correct for the
-        identity map, so any subclass overriding :meth:`_to_design` must
-        override this too (:meth:`to_design` raises if it doesn't).
-        """
-        batch_ndim = raw_design.ndim - len(self.event_shape)
-        return raw_design.new_zeros(raw_design.shape[:batch_ndim])
-
-    def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
-        """Refuses to silently apply a zero correction to a real transform."""
-        cls = type(self)
-        if (
-            cls._to_design is not DesignSpace._to_design
-            and cls.log_det_jacobian is DesignSpace.log_det_jacobian
-        ):
-            raise NotImplementedError(
-                f"{cls.__name__} reparametrises designs but does not implement "
-                "log_det_jacobian, so log-probs cannot be transformed."
-            )
-        return self.log_det_jacobian(raw_design)
 
     def _sum_event_dims(self, x: Tensor) -> Tensor:
         """Sums trailing event dims of a per-element quantity, leaving the batch."""
@@ -195,9 +184,9 @@ class DefaultDesignSpace(DesignSpace):
     """Unconstrained space: every real tensor of the right shape is valid.
 
     The default ``Task.design_space`` for tasks that declare no real space of
-    their own (e.g. LocationFinding). Constrains nothing beyond shape, so it
-    keeps the identity ``project``/``to_design``/``to_raw``. :meth:`sample`
-    draws standard normal.
+    their own (e.g. LocationFinding). Constrains nothing beyond shape, so
+    :meth:`project` / :meth:`_to_raw` / :meth:`_to_design` are all the identity maps.
+    :meth:`sample` draws standard normal.
 
     Tasks that want to use an unconstrained design space but a custom design prior
     can subclass DefaultDesignSpace and override :meth:`sample()`.
@@ -220,9 +209,29 @@ class DefaultDesignSpace(DesignSpace):
         """Accepts any value; shape is already checked by contains()."""
         return True
 
+    def project(self, design: Tensor) -> Tensor:
+        """Identity mapping."""
+        return design
+
+    def _to_design(self, raw_design: Tensor) -> Tensor:
+        """Identity mapping."""
+        return raw_design
+
+    def _to_raw(self, design: Tensor) -> Tensor:
+        """Identity mapping."""
+        return design
+
+    def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+        r"""Zero in the case of the identity mapping.
+
+        Returns shape ``[*batch_shape]``.
+        """
+        batch_ndim = raw_design.ndim - len(self.event_shape)
+        return raw_design.new_zeros(raw_design.shape[:batch_ndim])
+
 
 class BoxDesignSpace(DesignSpace):
-    """Continuous box design space, i.e. elementwise ``low <= x <= high``.
+    r"""Continuous box design space, i.e. elementwise ``low <= x <= high``.
 
     The raw<->design reparametrisation is the tanh squash
     ``design = bias + scale * tanh(raw)``, with ``bias = (high + low) / 2`` and
@@ -307,7 +316,7 @@ class BoxDesignSpace(DesignSpace):
         eps = torch.finfo(design.dtype).eps
         return torch.atanh(((design - bias) / scale).clamp(-1 + eps, 1 - eps))
 
-    def log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+    def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
         """Log-det of the tanh-then-affine squash."""
         _, scale = self._squash_affine(raw_design)
         # log(1 - tanh(x)^2) in a numerically stable form
@@ -319,15 +328,16 @@ class BoxDesignSpace(DesignSpace):
 
 
 class FiniteDesignSpace(DesignSpace):
-    """Finite set of designs.
+    r"""Finite set of designs.
 
     Membership is exact equality, so a design not
-    taken from the set may not be contained; :meth:`project` snaps such a
+    taken from the set may not be contained. :meth:`project` snaps such a
     design to the nearest valid one.
 
     :meth:`encode` / :meth:`decode` convert between a design and its index in
-    the set. These are not the raw<->design reparametrisation;
-    :meth:`to_design` stays the identity.
+    the set. These are not the raw<->design reparametrisation; a finite set
+    admits no smooth one, so :meth:`to_design` / :meth:`to_raw` are the
+    identity (and their log-det is exactly zero).
 
     Attributes:
         values: Finite set of designs with shape ``[n_designs, *event_shape]``.
@@ -336,7 +346,7 @@ class FiniteDesignSpace(DesignSpace):
     """
 
     def __init__(self, values) -> None:
-        """Initializes the finite design set.
+        r"""Initializes the finite design set.
 
         Args:
             values: Valid designs with shape
@@ -362,7 +372,7 @@ class FiniteDesignSpace(DesignSpace):
         return self.values.shape[0]
 
     def sample(self, batch_shape=(), *, device=None) -> Tensor:
-        """Samples uniformly from the valid physical designs.
+        r"""Samples uniformly from the valid physical designs.
 
         Args:
             batch_shape: Shape of the batch of designs to sample.
@@ -398,6 +408,22 @@ class FiniteDesignSpace(DesignSpace):
         flat_values = values.reshape(self.n_designs, self.event_shape.numel())
         distances = ((flat_design.unsqueeze(1) - flat_values.unsqueeze(0)) ** 2).sum(-1)
         return flat_values[distances.argmin(dim=-1)].reshape(design.shape)
+
+    def _to_design(self, raw_design: Tensor) -> Tensor:
+        """Identity mapping: a finite set has no smooth reparametrisation."""
+        return raw_design
+
+    def _to_raw(self, design: Tensor) -> Tensor:
+        """Identity mapping: a finite set has no smooth reparametrisation."""
+        return design
+
+    def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+        r"""Zero, the log-det of the identity mapping.
+
+        Returns shape ``[*batch_shape]``.
+        """
+        batch_ndim = raw_design.ndim - len(self.event_shape)
+        return raw_design.new_zeros(raw_design.shape[:batch_ndim])
 
     def encode(self, design: Tensor) -> Tensor:
         """Maps valid physical designs to categorical indices.
