@@ -1,11 +1,12 @@
 """Amortized (policy-net-backed) designer abstractions."""
 
+import warnings
 from collections.abc import Sequence
 
 import torch
 
 from ..core.hooks import RolloutHook
-from ..design_nets.stochastic import CategoricalPolicyNet, StochasticDesignNet
+from ..design_nets.stochastic import StochasticDesignNet
 from .base import Designer
 
 
@@ -107,7 +108,7 @@ class StochasticPolicyDesigner(PolicyDesigner):
         *,
         reparameterize_policy: bool = False,
         hooks: Sequence[RolloutHook] = (),
-        use_raw_history: bool = True,
+        use_raw_history: bool = False,
     ):
         """Stores the policy network.
 
@@ -158,7 +159,7 @@ def build_policy_designer(
     *,
     reparameterize_policy: bool = False,
     hooks: Sequence[RolloutHook] = (),
-    use_raw_history: bool = True,
+    use_raw_history: bool | None = None,
     transform_designs: bool = True,
 ):
     """Constructs the PolicyDesigner matching the policy net's type.
@@ -166,35 +167,53 @@ def build_policy_designer(
     Dispatches to StochasticPolicyDesigner for a StochasticDesignNet, else
     DeterministicPolicyDesigner. reparameterize_policy is only meaningful
     (and only forwarded) for the stochastic case. transform_designs is only
-    meaningful (and only forwarded) for the deterministic case -- a
-    StochasticDesignNet owns its own squash transform, baked into its
+    meaningful (and only forwarded) for the deterministic case.
+    StochasticDesignNet owns its own transforms, baked into its
     sampled log-prob, so it can't be swapped out; passing
     transform_designs=False alongside a StochasticDesignNet raises, rather
     than silently ignoring it.
+
+    use_raw_history defaults to each designer's own default when left as None:
+    True for the deterministic case, False for the stochastic one, whose net
+    always conditions on the constrained history. Passing True explicitly
+    alongside a StochasticDesignNet warns and falls back to False rather than
+    raising, so a caller can hand the same flag to either kind of net.
     """
     if isinstance(design_net, StochasticDesignNet):
         if not transform_designs:
             raise TypeError(
                 "transform_designs=False is not supported for "
-                "StochasticPolicyDesigner: its net always owns its own squash "
+                "StochasticPolicyDesigner: its net always owns its own "
                 "transform, baked into the sampled log-prob, so there is no "
                 "designer-level way to bypass it."
             )
-            if isinstance(design_net, CategoricalPolicyNet):
-                use_raw_history = False
+
+        # Unlike transform_designs, this one is a request we can honour the
+        # spirit of: the constrained history is a valid thing to condition on,
+        # so downgrade instead of refusing to build the designer.
+        if use_raw_history:
+            warnings.warn(
+                "use_raw_history=True is not supported for "
+                "StochasticPolicyDesigner: its net samples through its own "
+                "squash, so the raw value is an internal pre-squash "
+                "coordinate. Conditioning on the constrained design history "
+                "instead.",
+            )
+
         return StochasticPolicyDesigner(
             task,
             T,
             design_net,
             reparameterize_policy=reparameterize_policy,
             hooks=hooks,
-            use_raw_history=use_raw_history,
+            use_raw_history=False,
         )
+
     return DeterministicPolicyDesigner(
         task,
         T,
         design_net,
         hooks=hooks,
-        use_raw_history=use_raw_history,
+        use_raw_history=True if use_raw_history is None else use_raw_history,
         transform_designs=transform_designs,
     )

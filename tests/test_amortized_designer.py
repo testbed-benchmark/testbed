@@ -2,11 +2,22 @@
 transform_designs flags on PolicyDesigner/DeterministicPolicyDesigner/
 StochasticPolicyDesigner/build_policy_designer."""
 
+import warnings
+
+import pytest
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace
-from testbed.design_nets import DeepSetPolicyNet, TanhGaussianPolicyNet
-from testbed.designers import DeterministicPolicyDesigner, build_policy_designer
+from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
+from testbed.design_nets import (
+    CategoricalPolicyNet,
+    DeepSetPolicyNet,
+    TanhGaussianPolicyNet,
+)
+from testbed.designers import (
+    DeterministicPolicyDesigner,
+    StochasticPolicyDesigner,
+    build_policy_designer,
+)
 from testbed.tasks import HyperbolicTemporalDiscounting
 
 
@@ -118,3 +129,62 @@ def test_build_policy_designer_stochastic_exposes_raw_design():
     rollout = designer.rollout(task.sample_prior(3))
 
     assert "raw_design_history" in rollout.extra
+
+
+# ============================================================================
+# use_raw_history dispatch
+# ============================================================================
+
+
+def test_use_raw_history_defaults_per_designer_kind():
+    # Left unset, each branch keeps its own default: the raw history is a
+    # sensible conditioning target for a deterministic net, but a stochastic
+    # net's raw value is an internal pre-squash coordinate.
+    task = _make_task()
+
+    deterministic = build_policy_designer(task, T=2, design_net=_make_policy_net(task))
+    stochastic = build_policy_designer(task, T=2, design_net=_make_stochastic_net())
+
+    assert deterministic.use_raw_history is True
+    assert stochastic.use_raw_history is False
+
+
+def test_use_raw_history_true_is_downgraded_for_a_stochastic_net():
+    task = _make_task()
+    stochastic_net = _make_stochastic_net()
+
+    with pytest.warns(UserWarning, match="use_raw_history=True is not supported"):
+        designer = build_policy_designer(
+            task, T=2, design_net=stochastic_net, use_raw_history=True
+        )
+
+    assert isinstance(designer, StochasticPolicyDesigner)
+    assert designer.use_raw_history is False
+
+
+def test_use_raw_history_does_not_warn_when_not_requested():
+    # The flag defaults to a value the caller never asked for, so building a
+    # stochastic designer the usual way must stay quiet.
+    task = _make_task()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        build_policy_designer(task, T=2, design_net=_make_stochastic_net())
+        build_policy_designer(
+            task, T=2, design_net=_make_stochastic_net(), use_raw_history=False
+        )
+
+
+def test_categorical_policy_net_never_conditions_on_raw_history():
+    # Its raw_design is a design *index*, not a design, so feeding the raw
+    # history back to the net would hand it the wrong thing entirely.
+    task = _make_task()
+    space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
+    net = CategoricalPolicyNet(space)
+
+    with pytest.warns(UserWarning, match="use_raw_history=True is not supported"):
+        designer = build_policy_designer(
+            task, T=2, design_net=net, use_raw_history=True
+        )
+
+    assert designer.use_raw_history is False
