@@ -6,7 +6,6 @@ import hydra
 import torch
 from hydra.utils import get_class, instantiate
 
-from testbed.core.distributions import TorchDistribution
 from testbed.core.setup import setup
 from testbed.designers import (
     ActionHook,
@@ -299,30 +298,14 @@ def build_policy_nets(cfg, task, manager):
     return design_net, action_net
 
 
-def default_design_distr(task, device, manager):
-    """A Gaussian distribution over designs, for objectives that need a design prior.
-
-    Assumes ``task.event_shape_design`` is flat.
-    """
-    manager.event_logger.warning(
-        "Assuming a Gaussian design prior. Also assumes that task.event_shape_design is flat."
-    )
-    return TorchDistribution(
-        torch.distributions.MultivariateNormal(
-            torch.zeros(task.event_shape_design, device=device),
-            torch.eye(task.event_shape_design.numel(), device=device),
-        )
-    )
-
-
-def build_loss_fn(cfg, task, device, manager):
+def build_loss_fn(cfg, task):
     """Instantiates the training loss.
 
     Most losses only depend on ``cfg.loss``, but some (e.g. LogLoss) also
-    need runtime objects the config can't express, like the task itself or a
-    design distribution to estimate an outer expectation. Rather than special
+    need the task itself, which the config can't express. Rather than special
     casing loss classes by name, we inspect the target's constructor and only
-    supply what it actually declares.
+    supply what it actually declares. Losses needing a design prior take it
+    from ``task.design_space``, so nothing extra is threaded through here.
     """
     loss_cls = get_class(cfg.loss._target_)
     params = inspect.signature(loss_cls.__init__).parameters
@@ -330,8 +313,6 @@ def build_loss_fn(cfg, task, device, manager):
     extra_kwargs = {}
     if "task" in params:
         extra_kwargs["task"] = task
-    if "design_distr" in params:
-        extra_kwargs["design_distr"] = default_design_distr(task, device, manager)
 
     return instantiate(cfg.loss, **extra_kwargs)
 
@@ -360,11 +341,10 @@ def main(cfg):
     action_net = action_net.to(cfg.device)
     designer = build_policy_designer(task, cfg.T, design_net)
 
-    # Setup for action-warmup
+    # Setup for action-warmup; designs are drawn from the task's design space.
     random_designer = None
     if cfg.n_action_warmup_iter > 0:
-        design_dist = default_design_distr(task, cfg.device, manager)
-        random_designer = RandomDesigner(task, cfg.T, dist=design_dist)
+        random_designer = RandomDesigner(task, cfg.T)
 
     # Create optimizer + LR scheduler
     all_policy_params = list(design_net.parameters()) + list(action_net.parameters())
@@ -376,7 +356,7 @@ def main(cfg):
             optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma
         )
 
-    loss_fn = build_loss_fn(cfg, task, cfg.device, manager)
+    loss_fn = build_loss_fn(cfg, task)
 
     trainer = Trainer(
         task=task,

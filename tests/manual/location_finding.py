@@ -15,7 +15,6 @@ from rich.panel import Panel
 from rich.progress import track
 from rich.table import Table
 
-from testbed.core.distributions import TorchDistribution
 from testbed.design_objectives import SNMC, SPCE
 from testbed.designers import RandomDesigner
 from testbed.tasks import LocationFinding
@@ -34,14 +33,9 @@ def test_random_eig():
 
     task = LocationFinding(n_sources, dim_theta)
     task = task.to(device)
-    design_prior = TorchDistribution(
-        torch.distributions.MultivariateNormal(
-            torch.zeros(dim_theta, device=device),
-            torch.eye(dim_theta, device=device),
-        )
-    )
 
-    designer = RandomDesigner(task, T, design_prior)
+    # Designs are drawn from the task's design space, a standard normal here.
+    designer = RandomDesigner(task, T)
     spce = SPCE(task, n_contrastive=n_contrastive)
     snmc = SNMC(task, n_contrastive=n_contrastive)
 

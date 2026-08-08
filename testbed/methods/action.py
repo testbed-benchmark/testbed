@@ -6,7 +6,6 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from testbed.core.distributions import TorchDistribution
 from testbed.core.manager import Manager
 from testbed.designers import ActionHook, RandomDesigner
 
@@ -233,16 +232,8 @@ if __name__ == "__main__":
     action_net = build_policy_net(cfg, task, manager)
     action_net = action_net.to(cfg.device)
 
-    manager.event_logger.warning(
-        "Assuming a Gaussian design prior for action warmup. Also assumes that task.event_shape_design is flat."
-    )
-    design_dist = TorchDistribution(
-        torch.distributions.MultivariateNormal(
-            torch.zeros(task.event_shape_design, device=cfg.device),
-            torch.eye(task.event_shape_design.numel(), device=cfg.device),
-        )
-    )
-    random_designer = RandomDesigner(task, cfg.T, dist=design_dist)
+    # Designs are drawn from the task's design space.
+    random_designer = RandomDesigner(task, cfg.T)
 
     # Create optimizer + LR scheduler
     optimizer = torch.optim.Adam(action_net.parameters(), lr=cfg.lr, betas=cfg.betas)

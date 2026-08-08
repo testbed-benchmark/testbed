@@ -16,7 +16,6 @@ from rich.panel import Panel
 from rich.progress import track
 from rich.table import Table
 
-from testbed.core.distributions import Distribution
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import RandomDesigner, build_policy_designer
@@ -57,46 +56,10 @@ def make_policy_designer(task, device):
     return build_policy_designer(task, T, design_net)
 
 
-class _HTDRandomDesigns(Distribution):
-    """Random HTD designs: raw N(0, 1) mapped to (D_1, R_0), as in Step-DAD.
-
-    D_1 = exp(raw_0 - log_k_mean), R_0 = 100 * sigmoid(raw_1); log_prob applies
-    the matching change-of-variables correction to the standard normal base
-    density (same pattern as TanhGaussianPolicyNet's squash-log-det).
-    """
-
-    def __init__(self, log_k_mean, device):
-        super().__init__()
-        self.log_k_mean = log_k_mean
-        self._device = torch.device(device)
-
-    @property
-    def device(self):
-        return self._device
-
-    def sample(self, n_samples=1):
-        raw = torch.randn(n_samples, 2, device=self._device)
-        D1 = torch.exp(raw[:, 0:1] - self.log_k_mean)
-        R0 = 100 * torch.sigmoid(raw[:, 1:2])
-        return torch.cat((D1, R0), dim=-1)
-
-    def log_prob(self, design):
-        D1, R0 = design[..., 0], design[..., 1]
-        raw0 = torch.log(D1) + self.log_k_mean
-        raw1 = torch.logit(R0 / 100)
-        standard_normal = torch.distributions.Normal(0.0, 1.0)
-        # D1 = exp(raw0 - log_k_mean) => d(D1)/d(raw0) = D1
-        log_prob_D1 = standard_normal.log_prob(raw0) - torch.log(D1)
-        # R0 = 100 * sigmoid(raw1) => d(R0)/d(raw1) = R0 * (1 - R0 / 100)
-        log_prob_R0 = standard_normal.log_prob(raw1) - torch.log(R0 * (1 - R0 / 100))
-        return log_prob_D1 + log_prob_R0
-
-
-def make_random_designer(task, device):
-    # Random designs in the unconstrained space, mapped to valid (D_1, R_0) the
-    # same way as the policy net's wrapper (cf. Step-DAD random baseline).
-    log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
-    return RandomDesigner(task, T, dist=_HTDRandomDesigns(log_k_mean, device))
+def make_random_designer(task):
+    # HTDDesignSpace.sample draws raw N(0, 1) and maps it to valid (D_1, R_0)
+    # the same way as the policy net's wrapper (cf. Step-DAD random baseline).
+    return RandomDesigner(task, T)
 
 
 def train(task, designer):
@@ -144,7 +107,7 @@ def test_dad_reinforce_eig():
 
     task = HyperbolicTemporalDiscounting().to(device)
 
-    random_designer = make_random_designer(task, device)
+    random_designer = make_random_designer(task)
     policy_designer = make_policy_designer(task, device)
 
     start = time.perf_counter()
