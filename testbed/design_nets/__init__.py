@@ -13,4 +13,3 @@ from .stochastic import (
     StochasticDesignNet,
     TanhGaussianPolicyNet,
 )
-from .task_specific.htd import HTDDesignNetWrapper

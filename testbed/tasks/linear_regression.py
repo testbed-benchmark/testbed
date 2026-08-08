@@ -5,6 +5,7 @@ import math
 import torch
 from torch import Tensor
 
+from ..core.design_spaces import BoxDesignSpace, DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
 from .base import Task
@@ -119,6 +120,11 @@ class LinearRegression(Task):
             Setting this to zero gives the standard linear model.
         prior (Distribution, optional):
             Prior over parameters. If None, the default Gaussian LinearRegressionPrior is used.
+        design_space (DesignSpace, optional):
+            Controls the design parametrization. If None, a
+            :class:`~testbed.core.design_spaces.BoxDesignSpace` over
+            ``[-1, 1]^dim`` is used. Note the quadratic term above is centred
+            on ``||x|| = 1``, which this box attains.
     """
 
     def __init__(
@@ -128,17 +134,22 @@ class LinearRegression(Task):
         noise_scale: float = 0.01,
         quad: float = 0.0,
         prior=None,
+        design_space: DesignSpace | None = None,
     ) -> None:
         """Initializes the LinearRegression task."""
         # Default prior
         if prior is None:
             prior = LinearRegressionPrior(dim_theta=dim + 1)
 
+        if design_space is None:
+            design_space = BoxDesignSpace(low=-1.0, high=1.0, event_shape=[dim])
+
         super().__init__(
             event_shape_y=[dim_y],
             event_shape_theta=[dim + 1],
             event_shape_design=[dim],
             prior=prior,
+            design_space=design_space,
         )
 
         self.noise_scale = noise_scale

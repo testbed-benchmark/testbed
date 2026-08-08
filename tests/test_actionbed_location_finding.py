@@ -9,7 +9,7 @@ import torch
 from testbed.core.manager import Manager
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import MSELoss, SortedMSELoss
-from testbed.designers import PolicyDesigner
+from testbed.designers import build_policy_designer
 from testbed.methods.actionbed import Trainer, resolve_event_shape_action
 from testbed.tasks import LocationFinding
 
@@ -35,7 +35,7 @@ def _make_trainer(task=None, cfg=None, manager=None):
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_theta,
     )
-    designer = PolicyDesigner(task, T=3, policy_net=policy_net)
+    designer = build_policy_designer(task, T=3, design_net=policy_net)
     loss_fn = MSELoss()
     all_params = list(policy_net.parameters()) + list(action_net.parameters())
     optimizer = torch.optim.Adam(all_params, lr=1e-3)
@@ -165,7 +165,7 @@ def test_sorted_mse_loss_is_compatible_with_train_step():
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_theta,
     )
-    designer = PolicyDesigner(task, T=3, policy_net=policy_net)
+    designer = build_policy_designer(task, T=3, design_net=policy_net)
     all_params = list(policy_net.parameters()) + list(action_net.parameters())
     optimizer = torch.optim.Adam(all_params, lr=1e-3)
     trainer = Trainer(

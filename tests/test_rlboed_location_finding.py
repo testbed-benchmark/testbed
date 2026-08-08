@@ -8,6 +8,7 @@ import torch
 from omegaconf import OmegaConf
 from torch import nn
 
+from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.core.manager import Manager
 from testbed.design_nets import (
     CategoricalPolicyNet,
@@ -17,8 +18,11 @@ from testbed.design_nets import (
     RLBOEDQNetwork,
     TanhGaussianPolicyNet,
 )
-from testbed.designers import PolicyDesigner
-from testbed.envs import BoxDesignSpace, CategoricalDesignSpace
+from testbed.designers import (
+    PolicyDesigner,
+    StochasticPolicyDesigner,
+    build_policy_designer,
+)
 from testbed.envs.history import History
 from testbed.methods.rlboed import (
     Trainer,
@@ -193,7 +197,7 @@ def test_deployable_policy_maps_raw_history_to_physical_designs():
 
 
 def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
-    design_space = CategoricalDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
+    design_space = FiniteDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
     actor = DeepSetCategoricalActor(dim_y=1, dim_design=1, n_designs=3)
     policy = CategoricalPolicyNet(
         design_space,
@@ -422,7 +426,7 @@ def _build_trainer(cfg, *, manager=None):
     nets = make_networks(task, design_space, cfg, task.device)
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = PolicyDesigner(task, cfg.T, nets.actor, deterministic=False)
+    designer = build_policy_designer(task, cfg.T, nets.actor)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
 
 
@@ -455,7 +459,7 @@ def test_validate_config_requires_box_design_space():
 def test_validate_config_accepts_categorical_design_space():
     cfg = _tiny_cfg()
     task = LocationFinding(n_sources=1, dim_theta=2)
-    design_space = CategoricalDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]]))
+    design_space = FiniteDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]]))
 
     validate_config(task, cfg, design_space)
 
@@ -502,7 +506,7 @@ def test_categorical_train_step_updates_networks_with_finite_losses():
     nets = make_networks(task, design_space, cfg, task.device)
     trainer = Trainer(
         task,
-        PolicyDesigner(task, cfg.T, nets.actor, deterministic=False),
+        build_policy_designer(task, cfg.T, nets.actor),
         build_env(cfg, task, design_space),
         build_replay_buffer(cfg, task),
         nets,
@@ -539,7 +543,7 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
         nets.actor.actor.logits_head.bias[0] = 10.0
     trainer = Trainer(
         task,
-        PolicyDesigner(task, cfg.T, nets.actor, deterministic=False),
+        build_policy_designer(task, cfg.T, nets.actor),
         build_env(cfg, task, design_space),
         build_replay_buffer(cfg, task),
         nets,
@@ -591,9 +595,9 @@ def test_trainer_produces_deployable_designer(tmp_path):
     trainer.train()
 
     assert isinstance(trainer.designer, PolicyDesigner)
-    assert isinstance(trainer.designer.policy_net, TanhGaussianPolicyNet)
-    assert not trainer.designer.deterministic
-    assert trainer.designer.policy_net.design_history_bounds == (0.0, 1.0)
+    assert isinstance(trainer.designer.design_net, TanhGaussianPolicyNet)
+    assert isinstance(trainer.designer, StochasticPolicyDesigner)
+    assert trainer.designer.design_net.design_history_bounds == (0.0, 1.0)
 
     checkpoint = trainer.build_checkpoint(step=cfg.sac.num_training_iterations - 1)
     assert checkpoint["config"]["sac"]["gamma"] == cfg.sac.gamma
@@ -608,11 +612,11 @@ def test_trainer_produces_deployable_designer(tmp_path):
     torch.testing.assert_close(checkpoint["design_high"], torch.full((2,), 3.0))
 
     theta = trainer.task.sample_prior(2)
-    y_history, design_history = trainer.designer.rollout(theta)
-    assert y_history.shape == (2, 2, 1)
-    assert design_history.shape == (2, 2, 2)
-    assert torch.all(design_history >= -2.0)
-    assert torch.all(design_history <= 3.0)
+    rollout = trainer.designer.rollout(theta)
+    assert rollout.y_history.shape == (2, 2, 1)
+    assert rollout.design_history.shape == (2, 2, 2)
+    assert torch.all(rollout.design_history >= -2.0)
+    assert torch.all(rollout.design_history <= 3.0)
 
     checkpoint_path = tmp_path / "rlboed.pt"
     torch.save(trainer.build_checkpoint(), checkpoint_path)

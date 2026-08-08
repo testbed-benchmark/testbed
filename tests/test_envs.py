@@ -3,11 +3,10 @@ import typing
 import pytest
 import torch
 
+from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.envs import (
     BEDEnv,
-    BoxDesignSpace,
     CallableReward,
-    CategoricalDesignSpace,
     History,
     RLBOEDDenseReward,
     RLBOEDTerminalReward,
@@ -24,39 +23,20 @@ def make_space(task):
     return BoxDesignSpace(-1.0, 1.0, event_shape=task.event_shape_design)
 
 
-def test_box_design_space_samples_with_integer_bounds():
-    space = BoxDesignSpace(-1, 1, event_shape=(2,))
-
-    sample = space.sample((4,))
-
-    assert torch.is_floating_point(sample)
-    assert sample.shape == (4, 2)
-    assert space.contains(sample)
-
-
-def test_box_design_space_rejects_invalid_bounds_and_shapes():
-    with pytest.raises(ValueError):
-        BoxDesignSpace(torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]))
-
-    space = BoxDesignSpace(torch.tensor([-1.0, 0.0]), torch.tensor([1.0, 2.0]))
-
-    assert space.event_shape == torch.Size([2])
-    assert space.contains(torch.tensor([[0.0, 1.0], [1.0, 2.0]]))
-    assert not space.contains(torch.tensor([0.0, 1.0, 2.0]))
-    assert not space.contains(torch.tensor([0.0, 3.0]))
-    assert torch.equal(
-        space.project(torch.tensor([-2.0, 3.0])),
-        torch.tensor([-1.0, 2.0]),
-    )
+# BoxDesignSpace's own behaviour is covered in tests/test_design_spaces.py;
+# what follows exercises how BEDEnv uses a design space.
 
 
 def test_bed_env_rejects_invalid_categorical_designs_without_projection():
     task = make_task()
+    # FiniteDesignSpace.project snaps to the nearest valid design, so an invalid
+    # design only reaches validation with projection turned off.
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=CategoricalDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]])),
+        design_space=FiniteDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]])),
         batch_shape=(1,),
+        project_designs=False,
     )
     env.reset()
 

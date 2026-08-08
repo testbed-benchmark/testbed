@@ -4,13 +4,111 @@ References:
     1. https://arxiv.org/abs/2103.02438
 """
 
+import math
+
 import torch
 from torch import Tensor
 from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoulli
 
+from ..core.design_spaces import DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import normal_cdf
 from .base import Task
+
+# Constants
+# The delayed reward the participant is offered i.e. R_0.
+# Used in several places; hardcoded here to keep in sync
+DELAYED_REWARD = 100.0
+# Floor for D_1 before taking a log
+_D1_FLOOR = 1e-30
+
+
+class HTDDesignSpace(DesignSpace):
+    r"""Design space for HTD: :math:`D_1 \ge 0` and :math:`0 \le R_0 \le 100`.
+
+    Supports the raw<->design reparametrization
+    :math:`D_1 = \exp(x_d - \texttt{log_k_mean})`,
+    :math:`R_0 = 100\,\sigma(x_r)`, which maps an unconstrained
+    :math:`(x_d, x_r)` onto that domain smoothly.
+
+    Args:
+        log_k_mean (float, optional):
+            Shift applied to :math:`D_1`, so that :math:`k D_1 \sim O(1)` at a
+            raw value near zero and gradients don't vanish for an untrained
+            policy. Typically ``prior.k_loc + 0.5 * prior.k_scale**2``, i.e.
+            :math:`\log \mathbb{E}[k]` (default: 0.0).
+    """
+
+    def __init__(self, log_k_mean: float = 0.0):
+        """Initializes with the D_1 shift."""
+        super().__init__(event_shape=(2,), is_discrete=False)
+        self.log_k_mean = float(log_k_mean)
+
+    def __repr__(self) -> str:
+        """Returns a compact representation."""
+        return f"HTDDesignSpace(log_k_mean={self.log_k_mean})"
+
+    def sample(self, batch_shape=(), *, device=None) -> Tensor:
+        """Samples a standard normal raw value and maps it forward."""
+        batch_shape = torch.Size(batch_shape)
+        raw = torch.randn(*batch_shape, *self.event_shape, device=device)
+        return self.to_design(raw)
+
+    def _contains(self, design: Tensor) -> bool:
+        """Checks D_1 >= 0 and 0 <= R_0 <= 100."""
+        D1, R0 = design[..., 0], design[..., 1]
+        in_domain = (D1 >= 0) & (R0 >= 0) & (R0 <= DELAYED_REWARD)
+        return bool(torch.all(in_domain).item())
+
+    def project(self, design: Tensor) -> Tensor:
+        """Lossy fallback: clamps an arbitrary tensor into the domain."""
+        D1 = design[..., 0:1].clamp(min=0.0)
+        R0 = design[..., 1:2].clamp(min=0.0, max=DELAYED_REWARD)
+        return torch.cat((D1, R0), dim=-1)
+
+    def _to_design(self, raw_design: Tensor) -> Tensor:
+        """Maps raw (x_d, x_r) to valid (D_1, R_0).
+
+        The exponent is capped so exp cannot overflow to inf. Capping exp's
+        *output* instead would make the backward pass multiply a zero clamp
+        gradient by an infinite exp gradient, which is nan.
+        """
+        max_exponent = math.log(torch.finfo(raw_design.dtype).max) - 1.0
+        D_raw = raw_design[..., 0:1]
+        R_raw = raw_design[..., 1:2]
+
+        D1 = torch.exp((D_raw - self.log_k_mean).clamp(max=max_exponent))
+        R0 = DELAYED_REWARD * torch.sigmoid(R_raw)
+        return torch.cat((D1, R0), dim=-1)
+
+    def _to_raw(self, design: Tensor) -> Tensor:
+        """Recovers raw designs from designs; the inverse of to_design."""
+        D1 = design[..., 0:1]
+        R0 = design[..., 1:2]
+        D_raw = torch.log(D1.clamp(min=_D1_FLOOR)) + self.log_k_mean
+        R_raw = torch.logit(R0 / DELAYED_REWARD, eps=1e-6)
+        return torch.cat((D_raw, R_raw), dim=-1)
+
+    def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+        """Log-det of the exp / scaled-sigmoid reparametrisation.
+
+        The map is diagonal, so this is the sum of the two per-coordinate
+        terms: ``d D_1/d x_d = exp(x_d - log_k_mean)`` and
+        ``d R_0/d x_r = 100 * sigmoid(x_r) * sigmoid(-x_r)``.
+
+        This describes the mathematical transform; :meth:`_to_design` caps the
+        exponent against overflow, and beyond that cap the realised derivative
+        is 0 rather than what this reports.
+        """
+        D_raw = raw_design[..., 0]
+        R_raw = raw_design[..., 1]
+        log_det_D1 = D_raw - self.log_k_mean
+        log_det_R0 = (
+            math.log(DELAYED_REWARD)
+            + torch.nn.functional.logsigmoid(R_raw)
+            + torch.nn.functional.logsigmoid(-R_raw)
+        )
+        return log_det_D1 + log_det_R0
 
 
 class HTDPrior(Distribution):
@@ -104,7 +202,7 @@ class HyperbolicTemporalDiscounting(Task):
     value of the delayed reward decays hyperbolically:
 
     .. math::
-        V_1(\theta, x) = \frac{100}{1 + (k D_1)^s}
+        V_1(\theta, x) = \frac{100}{\left(1 + (k D_1)^s\right)^b}
 
     .. math::
         p(y=1 \mid \theta, x) = \epsilon + (1 - 2\epsilon)\,
@@ -112,31 +210,49 @@ class HyperbolicTemporalDiscounting(Task):
 
     Convention: design :math:`x = (D_1, R_0)`; :math:`\theta = (k, \alpha)`.
 
+    The two exponents sit on opposite sides of the parenthesis and behave
+    very differently. :math:`s` (``exponent``, Rachlin) is *inside*, and
+    :math:`b` (``outer_exponent``, Green-Myerson) is *outside*. Both default
+    to 1, recovering the standard hyperbolic model. Useful for misspecification
+    experiments.
+
     Args:
         epsilon (float, optional):
             Lapse-rate bias towards random responding (default: 0.01).
         exponent (float, optional):
-            Exponent :math:`s` in the discounting curve; ``s=1`` gives the
-            standard hyperbolic (HTD) model, other values give the Rachlin
+            Inner exponent :math:`s` in the discounting curve; ``s=1`` gives
+            the standard hyperbolic (HTD) model, other values give the Rachlin
             model (default: 1.0).
+        outer_exponent (float, optional):
+            Outer exponent :math:`b`; ``b=1`` gives the standard hyperbolic
+            (HTD) model, other values give the Green-Myerson model
+            (default: 1.0).
         temperature (float, optional):
             Relaxation temperature for reparametrized sampling. If 0,
             outcomes are sampled from a (non-reparametrized) Bernoulli;
             otherwise a RelaxedBernoulli is used (default: 0.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default HTDPrior is used.
+        design_space (DesignSpace, optional):
+            Controls the design parametrization. If None, the default HTDDesignSpace is used.
     """
 
     def __init__(
         self,
         epsilon: float = 0.01,
         exponent: float = 1.0,
+        outer_exponent: float = 1.0,
         temperature: float = 0.0,
         prior=None,
+        design_space: DesignSpace | None = None,
     ) -> None:
         """Initializes the HTD task."""
         if prior is None:
             prior = HTDPrior()
+
+        if design_space is None:
+            log_k_mean = float(prior.k_loc + 0.5 * prior.k_scale**2)
+            design_space = HTDDesignSpace(log_k_mean=log_k_mean)
 
         super().__init__(
             event_shape_y=[1],
@@ -144,6 +260,7 @@ class HyperbolicTemporalDiscounting(Task):
             event_shape_design=[2],
             prior=prior,
             discrete_y=True,
+            design_space=design_space,
         )
 
         # Acts as a bias towards y=1
@@ -152,6 +269,10 @@ class HyperbolicTemporalDiscounting(Task):
         # Aka "s" - s=1 corresponds to the HTD model
         # Other values correspond to the Rachlin model
         self.exponent = exponent
+
+        # Aka "b" - b=1 corresponds to the HTD model
+        # Other values correspond to the Green-Myerson model
+        self.outer_exponent = outer_exponent
 
         # If temperature=0, we do not have reparametrised sampling
         # Otherwise, uses a relaex categorical at sampling time
@@ -162,7 +283,10 @@ class HyperbolicTemporalDiscounting(Task):
 
     def __repr__(self) -> str:
         """Returns a compact representation."""
-        return f"HyperbolicTemporalDiscounting(exponent={self.exponent})"
+        return (
+            f"HyperbolicTemporalDiscounting(exponent={self.exponent}, "
+            f"outer_exponent={self.outer_exponent})"
+        )
 
     def make_prob(self, theta: Tensor, design: Tensor) -> Tensor:
         r"""Computes the probability of choosing the delayed reward.
@@ -185,7 +309,7 @@ class HyperbolicTemporalDiscounting(Task):
         D1 = design[:, 0].unsqueeze(-1)
         R0 = design[:, 1].unsqueeze(-1)
 
-        V1 = 100 / (1 + (k * D1).pow(self.exponent))
+        V1 = DELAYED_REWARD / (1 + (k * D1).pow(self.exponent)).pow(self.outer_exponent)
 
         # Clamp for numerical stability: normal_cdf is saturated beyond +-15
         # (phi(15) ~ 5e-50), but the unclamped backward can produce inf/nan

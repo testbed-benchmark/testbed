@@ -1,13 +1,14 @@
 import pytest
 import torch
 
+from testbed.core.design_spaces import BoxDesignSpace
 from testbed.design_nets import (
     DeepSetGaussianActor,
     GaussianPolicyActor,
     PolicySample,
     TanhGaussianPolicyNet,
 )
-from testbed.envs import BEDEnv, BoxDesignSpace, ZeroReward
+from testbed.envs import BEDEnv, ZeroReward
 from testbed.tasks import LocationFinding
 
 
@@ -123,7 +124,9 @@ def test_tanh_gaussian_policy_raw_designs_are_approximately_normal():
 
 def test_tanh_gaussian_policy_transformed_designs_follow_box_scale_and_shift():
     torch.manual_seed(0)
-    space = BoxDesignSpace(torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]))
+    space = BoxDesignSpace(
+        torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,)
+    )
     policy = TanhGaussianPolicyNet(space)
     mean = torch.tensor([0.25, -0.5])
     log_std = torch.tensor([-0.7, -0.1])

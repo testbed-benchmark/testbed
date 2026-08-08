@@ -6,6 +6,7 @@ from collections.abc import Iterable
 import torch
 import torch.nn as nn
 
+from ..core.design_spaces import DefaultDesignSpace, DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import broadcast_and_flatten
 
@@ -43,6 +44,11 @@ class Task(ABC, nn.Module):
             Whether the likelihood is implicit (default: False).
         design_space (optional):
             Constraints on the space of designs (default: None).
+        validate_designs (bool):
+            Whether outcome_logp/sample_outcome/history_logp/sample_joint check
+            incoming designs against design_space.contains(...) and raise if a
+            design lies outside it. Disable for tight loops where the caller
+            already guarantees valid designs (default: True).
 
     Shape:
         Every tensor consists of
@@ -58,8 +64,6 @@ class Task(ABC, nn.Module):
         - ``event_shape_y = [1]``
     """
 
-    design_space = None
-
     def __init__(
         self,
         event_shape_y: Iterable[int],
@@ -70,7 +74,8 @@ class Task(ABC, nn.Module):
         discrete_theta: bool = False,
         separable: bool = True,
         implicit_likelihood: bool = False,
-        design_space=None,
+        design_space: DesignSpace | None = None,
+        validate_designs: bool = True,
     ):
         """Initializes the task."""
         nn.Module.__init__(self)
@@ -95,7 +100,12 @@ class Task(ABC, nn.Module):
         self.discrete_y = discrete_y
         self.discrete_theta = discrete_theta
 
-        self.design_space = design_space
+        self.design_space = (
+            design_space
+            if design_space is not None
+            else DefaultDesignSpace(self.event_shape_design)
+        )
+        self.validate_designs = validate_designs
 
     @property
     def device(self) -> torch.device:
@@ -153,6 +163,20 @@ class Task(ABC, nn.Module):
         """
         ...
 
+    def _check_design(self, design):
+        """Raises if design lies outside self.design_space (when validate_designs)."""
+        if not self.validate_designs:
+            return
+        if not self.design_space.contains(design):
+            # contains() rejects both bad values and a bad event shape
+            design = torch.as_tensor(design)
+            raise ValueError(
+                f"Design lies outside {self.design_space} "
+                f"(expected trailing shape "
+                f"{tuple(self.design_space.event_shape)}). "
+                f"Got design of shape {tuple(design.shape)}: {design}"
+            )
+
     def outcome_logp(self, y, theta, design):
         """Evaluates outcome log probabilities with broadcasting.
 
@@ -170,6 +194,7 @@ class Task(ABC, nn.Module):
             Tensor:
                 Log probabilities, shape ``[*broadcast_batch_shape]``.
         """
+        self._check_design(design)
         (y_flat, theta_flat, design_flat), batch_shape = broadcast_and_flatten(
             (y, self.event_shape_y),
             (theta, self.event_shape_theta),
@@ -200,6 +225,7 @@ class Task(ABC, nn.Module):
             Tensor:
                 Log probabilities, shape ``[*broadcast_batch_shape]``.
         """
+        self._check_design(design_history)
         T = y_history.shape[-(len(self.event_shape_y) + 1)]
         (y_flat, design_flat, theta_flat), batch_shape = broadcast_and_flatten(
             (y_history, (T, *self.event_shape_y)),
@@ -228,6 +254,7 @@ class Task(ABC, nn.Module):
                 Sampled observations. If ``n_samples==1``, shape ``[*broadcast_batch_shape, *event_shape_y]``.
                 Otherwise, shape ``[n_samples, *broadcast_batch_shape, *event_shape_y]``.
         """
+        self._check_design(design)
         (theta_flat, design_flat), batch_shape = broadcast_and_flatten(
             (theta, self.event_shape_theta),
             (design, self.event_shape_design),
@@ -268,13 +295,17 @@ class Task(ABC, nn.Module):
                 Sampled parameters. If ``n_samples==1``, shape ``[*broadcast_batch_shape, *event_shape_theta]``.
                 Otherwise, shape ``[n_samples, *broadcast_batch_shape, *event_shape_theta]``.
         """
+        self._check_design(design)
         batch_shape = design.shape[: design.ndim - len(self.event_shape_design)]
         b_flat = 1
         for s in batch_shape:
             b_flat *= s
 
         total = n_samples * b_flat
-        theta_flat = self.sample_current_prior(total)  # [total, *event_theta]
+        # Not sample_current_prior(total): that wrapper squeezes away the
+        # leading dim when total == 1, but this code always needs a real
+        # [total, *event_theta] batch dim, even when total == 1.
+        theta_flat = self.current_prior.sample(n_samples=total)  # [total, *event_theta]
         design_flat = design.reshape(b_flat, *self.event_shape_design)
         if n_samples > 1:
             design_flat = (

@@ -32,12 +32,15 @@ grad_clip: 1.0
 eval_every: 0  # eval is expensive here; off for this recipe
 n_outer_eval: 1_024
 n_inner_eval: 100_000
+
 # design policy network
 # DeepSets net in the spirit of the DAD paper: encoder [3 -> 256 -> 256 -> 16]
 # + sum pooling, emitter [16 -> 128 -> 16 -> 2], ReLU throughout. Not an exact
 # match to the paper's HTD net (Appendix D.2): that encoder takes the design only
 # with two 16-dim heads gated by the binary outcome, uses softplus activations,
 # a [16 -> 256 -> 256 -> 2] emitter, and a fixed-zero null encoding.
+
+
 design_net:
   _target_: testbed.design_nets.DeepSetPolicyNet
   encoder_dim_h: [256, 256]
@@ -46,8 +49,3 @@ design_net:
   decoder_activation:
     _target_: torch.nn.ReLU
     _partial_: true
-# Maps the raw net output to valid HTD designs (D_1, R_0), following Step-DAD.
-# log_k_mean = k_loc + 0.5 * k_scale**2 = -4.25 + 0.5 * 1.5**2 for the default prior.
-design_net_wrapper:
-  _target_: testbed.design_nets.HTDDesignNetWrapper
-  log_k_mean: -3.125

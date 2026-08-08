@@ -4,11 +4,12 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from ..core.rollout import Rollout
 from ..tasks.base import Task
-from .base_objective import Objective
+from .base_objective import DesignObjective, RolloutObjective
 
 
-class SPCE(Objective):
+class SPCE(RolloutObjective):
     """Sequential Prior Contrastive Estimation (SPCE) lower bound on EIG.
 
     See Theorem 2 of the DAD paper (https://arxiv.org/pdf/2103.02438).
@@ -25,32 +26,32 @@ class SPCE(Objective):
 
     def __init__(self, task: Task, n_contrastive: int):
         """Initializes the SPCE estimator."""
-        super().__init__(task, is_expected_log_ratio=True)
+        super().__init__(task)
         self.n_contrastive = int(n_contrastive)
 
-    def __call__(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
-        """Estimates gain for a simulated history."""
-        return self.estimate_gain(y_history, design_history, theta_0)
+    def __call__(self, rollout: Rollout):
+        """Estimates gain for a simulated rollout."""
+        return self.estimate_gain(rollout)
 
-    def estimate_gain(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
-        """Estimates gain from batched histories.
+    def estimate_gain(self, rollout: Rollout):
+        """Estimates gain from a batched rollout.
 
-        y_history: ``[b, T, *event_shape_y]``
-        design_history: ``[b, T, *event_shape_design]``
-        theta_0: ``[b, *event_shape_theta]``; true theta used to generate the history.
         returns: scalar SPCE estimate.
         """
-        return self.per_sample_gain(y_history, design_history, theta_0).mean()
+        return self.per_sample_gain(rollout).mean()
 
-    def per_sample_gain(
-        self, y_history: Tensor, design_history: Tensor, theta_0: Tensor
-    ):
-        """Estimates per-sample gains from batched histories.
+    def per_sample_gain(self, rollout: Rollout):
+        """Estimates per-sample gains from a batched rollout.
 
-        Shapes as in estimate_gain; returns: [b] per-sample SPCE estimates.
+        returns: [b] per-sample SPCE estimates.
         """
         task = self.task
         n_contrastive = self.n_contrastive
+        y_history, design_history, theta_0 = (
+            rollout.y_history,
+            rollout.design_history,
+            rollout.theta,
+        )
         b = theta_0.shape[0]
         L_plus_1 = n_contrastive + 1
 
@@ -85,7 +86,7 @@ class SPCE(Objective):
         return logp_joint - logp_marginal
 
 
-class PCE(Objective):
+class PCE(DesignObjective):
     """Prior Contrastive Estimation (PCE) for a single fixed design.
 
     A thin wrapper around SPCE that draws the outer samples (theta, y) and
@@ -120,8 +121,12 @@ class PCE(Objective):
 
         b = self.n_outer
 
-        # y_outer: [b, *event_shape_y], theta_outer: [b, *event_shape_theta]
+        # sample_joint drops the leading batch dim when n_samples==1 (its
+        # contract for a single design/sample), so reshape explicitly rather
+        # than trusting the returned shape -- this must hold for b==1 too.
         y_outer, theta_outer = self.task.sample_joint(design, n_samples=b)
+        y_outer = y_outer.reshape(b, *self.task.event_shape_y)
+        theta_outer = theta_outer.reshape(b, *self.task.event_shape_theta)
 
         # Build T=1 histories: [b, 1, *event_shape]
         y_history = y_outer.unsqueeze(1)
@@ -129,4 +134,7 @@ class PCE(Objective):
             design.unsqueeze(0).expand(b, *self.task.event_shape_design).unsqueeze(1)
         )
 
-        return self.inner_spce(y_history, design_history, theta_outer)
+        rollout = Rollout(
+            theta=theta_outer, y_history=y_history, design_history=design_history
+        )
+        return self.inner_spce(rollout)

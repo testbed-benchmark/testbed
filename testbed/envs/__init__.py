@@ -1,7 +1,6 @@
 """Torch-native environments for Bayesian experimental design."""
 
 from .bed_env import BEDEnv
-from .design_spaces import BoxDesignSpace, CategoricalDesignSpace, DesignSpace
 from .history import History
 from .rewards import (
     CallableReward,

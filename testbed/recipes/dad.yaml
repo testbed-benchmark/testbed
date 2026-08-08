@@ -15,7 +15,6 @@ objective:
   reparameterize_policy: false
   baseline: null
   requires_policy_log_probs: false
-design_net_wrapper: null
 # training
 n_train_iter: 25_000
 n_outer: 2_048

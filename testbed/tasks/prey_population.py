@@ -4,8 +4,8 @@ import torch
 from torch import Tensor
 from torch.distributions import Binomial, LogNormal
 
+from ..core.design_spaces import FiniteDesignSpace
 from ..core.distributions import Distribution
-from ..envs.design_spaces import CategoricalDesignSpace
 from .base import Task
 
 
@@ -95,7 +95,7 @@ class PreyPopulation(Task):
         event_shape_theta: Shape of one parameter sample.
         event_shape_design: Shape of one initial-population design.
         discrete_y: Whether prey-consumption observations are discrete.
-        design_space: Categorical space of initial populations from 1 through
+        design_space: Finite space of initial populations from 1 through
             300 prey.
     """
 
@@ -125,7 +125,7 @@ class PreyPopulation(Task):
             event_shape_design=[1],
             prior=prior,
             discrete_y=True,
-            design_space=CategoricalDesignSpace(
+            design_space=FiniteDesignSpace(
                 torch.arange(1, 301, dtype=torch.get_default_dtype()).unsqueeze(-1)
             ),
         )

@@ -8,9 +8,9 @@ import torch.nn as nn
 from torch import Tensor
 from torch.distributions import Categorical, Normal
 
+from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets.base_design_net import DesignNet
 from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
-from testbed.envs.design_spaces import BoxDesignSpace, CategoricalDesignSpace
 
 
 @dataclass
@@ -576,7 +576,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
 
     def __init__(
         self,
-        design_space: CategoricalDesignSpace,
+        design_space: FiniteDesignSpace,
         actor: DeepSetCategoricalActor | None = None,
         *,
         normalize_design_history: bool = False,

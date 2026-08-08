@@ -15,6 +15,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 from omegaconf import OmegaConf
 
+from testbed.core.design_spaces import (
+    BoxDesignSpace,
+    DefaultDesignSpace,
+    DesignSpace,
+    FiniteDesignSpace,
+)
 from testbed.core.setup import setup
 from testbed.design_nets import (
     CategoricalPolicyNet,
@@ -25,13 +31,8 @@ from testbed.design_nets import (
     StochasticDesignNet,
     TanhGaussianPolicyNet,
 )
-from testbed.designers import PolicyDesigner
-from testbed.envs import (
-    BEDEnv,
-    BoxDesignSpace,
-    CategoricalDesignSpace,
-)
-from testbed.envs.design_spaces import DesignSpace
+from testbed.designers import PolicyDesigner, build_policy_designer
+from testbed.envs import BEDEnv
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
 from testbed.tasks.base import Task
@@ -341,10 +342,10 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.policy_init_std must be positive.")
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
-    if not isinstance(design_space, (BoxDesignSpace, CategoricalDesignSpace)):
+    if not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
         raise TypeError(
             "This RLBOED SAC implementation requires a BoxDesignSpace or "
-            "CategoricalDesignSpace."
+            "FiniteDesignSpace."
         )
 
 
@@ -681,7 +682,7 @@ class Trainer:
 
     def train(self):
         """Full training loop."""
-        self.designer.policy_net.train()
+        self.designer.design_net.train()
         self._start_time = time.time()
 
         for step in range(self.cfg.sac.num_training_iterations):
@@ -797,12 +798,12 @@ class Trainer:
     @torch.no_grad()
     def evaluate(self):
         """Estimates the policy-mean SPCE of the deterministic policy."""
-        was_training = self.designer.policy_net.training
+        was_training = self.designer.design_net.training
         cpu_rng_state = torch.get_rng_state()
         cuda_rng_state = (
             torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         )
-        self.designer.policy_net.eval()
+        self.designer.design_net.eval()
 
         eval_env = build_env(
             self.cfg,
@@ -813,13 +814,13 @@ class Trainer:
         obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
         returns = torch.zeros(self.cfg.sac.num_envs, device=self.device)
         for _ in range(self.env.horizon):
-            designs = self.designer.policy_net.sample_from_observation(
+            designs = self.designer.design_net.sample_from_observation(
                 obs, deterministic=True
             ).design
             obs, rewards, _, _, _ = eval_env.step(designs)
             returns += rewards
 
-        self.designer.policy_net.train(was_training)
+        self.designer.design_net.train(was_training)
         torch.set_rng_state(cpu_rng_state)
         if cuda_rng_state is not None:
             torch.cuda.set_rng_state_all(cuda_rng_state)
@@ -918,7 +919,7 @@ class Trainer:
             "training_iterations": self.cfg.sac.num_training_iterations,
             "global_step": self.cfg.sac.num_training_iterations,
         }
-        if isinstance(design_space, CategoricalDesignSpace):
+        if isinstance(design_space, FiniteDesignSpace):
             checkpoint["design_values"] = design_space.values.detach().cpu()
         if step is not None:
             checkpoint["step"] = step
@@ -933,8 +934,13 @@ class Trainer:
 
 
 def build_design_space(cfg, task):
-    """Returns the task's declared space or configures a continuous box."""
-    if task.design_space is not None:
+    """Returns the task's declared space or configures a continuous box.
+
+    Every task now carries a design space, with ``DefaultDesignSpace`` standing
+    in for "declares no real space of its own", so that -- rather than ``None``
+    -- is what falls back to the configured box.
+    """
+    if not isinstance(task.design_space, DefaultDesignSpace):
         return task.design_space
     return BoxDesignSpace(
         cfg.design_space.low,
@@ -1001,7 +1007,7 @@ def main(cfg):
 
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = PolicyDesigner(task, cfg.T, nets.actor, deterministic=False)
+    designer = build_policy_designer(task, cfg.T, nets.actor)
 
     trainer = Trainer(
         task=task,
