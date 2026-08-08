@@ -99,7 +99,7 @@ class DesignSpace(ABC):
         raise NotImplementedError
 
     def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
-        r"""Log |det d(design)/d(raw)| at ``raw_design``, summed over event dims.
+        r"""Log ``|det d(design)/d(raw)|`` at ``raw_design``, summed over event dims.
 
         Returns shape ``[*batch_shape]``, matching the ``log_prob`` that
         :meth:`to_design` corrects.

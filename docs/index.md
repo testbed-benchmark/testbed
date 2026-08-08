@@ -37,10 +37,11 @@ TestBED was designed to allow you to implement your own task easily. For some po
 | `testbed.tasks.X` | Description | API |
 |---|---|---|
 | `CES` | Constant elasticity of substitution | [API](autoapi/testbed/tasks/constant_elasticity_of_substitution/index) |
-| `HyperbolicTepmoralDiscounting` | Hyperbolic temporal discounting (note: discrete outcomes) | [API](autoapi/testbed/tasks/hyperbolic_temporal_discounting/index) |
+| `HyperbolicTemporalDiscounting` | Hyperbolic temporal discounting (note: discrete outcomes) | [API](autoapi/testbed/tasks/hyperbolic_temporal_discounting/index) |
 | `LinearRegression` | Linear regression | [API](autoapi/testbed/tasks/linear_regression/index) |
 | `LocationFinding` | Source location finding | [API](autoapi/testbed/tasks/location_finding/index) |
 | `MichaelisMenten` | Michaelis-Menten| [API](autoapi/testbed/tasks/michaelis_menten/index) |
+| `PreyPopulation` | Predator-prey population (note: discrete designs and outcomes) | [API](autoapi/testbed/tasks/prey_population/index) |
 
 ## Designers
 

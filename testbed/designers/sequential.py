@@ -122,7 +122,7 @@ class SequentialDesigner(Designer):
     def initialize_design(self):
         """Creates an initial *raw* design for optimization.
 
-        Returns [*event_shape_design] with requires_grad=True.
+        Returns ``[*event_shape_design]`` with requires_grad=True.
         Assumed to be a raw design.
         Override this method for custom initialization logic.
         """
@@ -146,7 +146,7 @@ class SequentialDesigner(Designer):
         return design_raw.requires_grad_(True)
 
     def _optimize_design(self, y_history):
-        """Runs the Adam loop; returns (constrained_design, raw_design), both [1, *event_shape_design]."""
+        """Runs the Adam loop; returns (constrained_design, raw_design), both ``[1, *event_shape_design]``."""
         if y_history.shape[0] != 1:
             raise ValueError(
                 f"SequentialDesigner only supports batch size 1; got batch {y_history.shape[0]}."

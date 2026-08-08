@@ -46,9 +46,9 @@ cd testbed
 pip install -e .[full,dev]
 ```
 
-To do a basic check of your installation, run `pytest`. A more extensive test can be run with `python tests/location_finding.py` (nb: this second test requires the `stepdad` [package](https://github.com/marcelhedman/stepdad/tree/master)).
+To do a basic check of your installation, run `pytest`. A more extensive test can be run with `python tests/manual/location_finding.py` (nb: this second test requires the `stepdad` [package](https://github.com/marcelhedman/stepdad/tree/master)).
 
-Check out `notebooks/introduction.ipynb` for a quick overview of the package.
+Check out the [Location Finding](docs/examples/location_finding.md) example for a quick overview of the package.
 
 ## Docs
 

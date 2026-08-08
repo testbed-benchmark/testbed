@@ -22,7 +22,7 @@ class Designer(ABC, nn.Module):
         T (int):
             The number of steps in the experiment.
         hooks (iterable, optional):
-            An optional iterable of ``RolloutHook``s used to modify the design process (default: ()).
+            An optional iterable of ``RolloutHook`` objects used to modify the design process (default: ()).
         transform_designs (bool):
             If True, the designer will automatically reparametrise designs using the task's DesignSpace.
             Set to False if you would prefer to handle this manually (default: True).

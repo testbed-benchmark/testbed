@@ -81,7 +81,7 @@ def plot(rollout):
 
 ## RandomDesigner
 
-A {py:class}`~testbed.designers.RandomDesigner` produces designs by randomly sampling from a fixed, pre-specified distribution. Here, we will sample designs from a standard 2D Gaussian. However, you can use any {py:class}`pytorch.distributions.Distribution` object here, as long as its shape is compatible with the {py:class}`~testbed.tasks.Task`. For instance, if we change our task to `LocationFinding(n_sources=3, dim_theta=5)`, our `design_dist` would need to return samples of shape `[..., 3, 5]`. You may also use a `testbed.core.distributions.Distribution` object. 
+A {py:class}`~testbed.designers.RandomDesigner` produces designs by randomly sampling from a fixed distribution. With no distribution given, it samples from the task's own {py:class}`~testbed.core.design_spaces.DesignSpace`, which for `LocationFinding` is a standard Gaussian over $\mathbb{R}^2$.
 
 ```{code-cell} ipython3
 :tags: [remove-output]
@@ -89,13 +89,21 @@ from testbed.designers import RandomDesigner
 
 task = LocationFinding(n_sources, dim_theta)
 
+random_designer = RandomDesigner(task, T)
+```
+
+To sample from a distribution of your own instead, pass it as `dist`. This can be any {py:class}`pytorch.distributions.Distribution` object, as long as its shape is compatible with the {py:class}`~testbed.tasks.Task`. For instance, if we change our task to `LocationFinding(n_sources=3, dim_theta=5)`, our `design_dist` would need to return samples of shape `[..., 3, 5]`. You may also use a `testbed.core.distributions.Distribution` object.
+
+```{code-cell} ipython3
+:tags: [remove-output]
+
 design_dist = MultivariateNormal(torch.zeros(2), torch.eye(2))
-random_designer = RandomDesigner(task, T, design_dist)
+random_designer_with_dist = RandomDesigner(task, T, dist=design_dist)
 ```
 
 The key functionality of any {py:class}`~testbed.designers.Designer` object is its `rollout` method. This method accepts a parameter `theta` (or a batch of parameters) and produces a sequence of designs and observations under those parameters. Depending on the nature of the {py:class}`~testbed.designers.Designer`, extra additional information may be returned which is useful downstream. 
 
-Below, we sample a batch of ten `theta` values from the task's prior and roll out the {py:class}`~testbed.designers.RandomDesigner`. Note that this returns a `Rollout` object containing the `theta` used to generate the rollout, as well as `y_history` which contains the observations and `design_hstory` which contains the designs. Here, because `RandomDesigner` is stochastic, it also produces `extra["policy_log_probs"]`. Let's also plot the first of these rollouts. 
+Below, we sample a batch of ten `theta` values from the task's prior and roll out the {py:class}`~testbed.designers.RandomDesigner`. Note that this returns a `Rollout` object containing the `theta` used to generate the rollout, as well as `y_history` which contains the observations and `design_history` which contains the designs. Anything else lives in `extra`, which is empty here: a design space exposes no density, so there are no design log-probs to report. Had we rolled out `random_designer_with_dist`, we would also get `extra["policy_log_probs"]`. Let's also plot the first of these rollouts. 
 
 
 ```{code-cell} ipython3
@@ -113,7 +121,7 @@ Picking designs randomly isn't very fun. Let's use {py:class}`~testbed.designers
 
 By default, {py:class}`~testbed.designers.SequentialDesigner` optimises its objective (here, `PCE`) by doing a basic gradient-ascent procedure using Adam. While this is often effective, there may be certain tasks where a more tailored approach is desired (e.g., different optimisers, initialisation schemes, random restarts...). You can achieve this in TestBED by either subclassing `SequentialDesigner` or by writing your own custom `Designer`. See our guide on [Implementing Custom Methods](../guides/custom_methods.md).
 
-Furthermore, `PCE` requires us to draw posterior samples at each design iteration. This is done using importance sampling by default (see `testbed.inference`). As solving Bayesian inference is not the goal of our library, determining (and implementing) an appropriate inference method is largely up to you, the user. In TestBED, the recommended way to use custom inference methods are supported using hooks; see #TODO. Alternatively, you may write your own `Designer` class.
+Furthermore, `PCE` requires us to draw posterior samples at each design iteration. This is done using importance sampling by default (see `testbed.inference`). As solving Bayesian inference is not the goal of our library, determining (and implementing) an appropriate inference method is largely up to you, the user. In TestBED, the recommended way to use custom inference methods are supported using hooks; see [Using Hooks](using_hooks.md). Alternatively, you may write your own `Designer` class.
 
 ```{warning}
 Some designers (e.g., `SequentialDesigner`) change the state of `task` during the design process. It is highly recommended to regularly create a fresh instantiation of your `task` as needed.
@@ -140,4 +148,4 @@ Notice that we now have `posterior = rollout.extra["posterior"]` available to us
 
 ## What's Next?
 
-#TODO see guide on using hooks to see how we can do a final step of posterior inference with RandomDesigner if we want
+See [Using Hooks](using_hooks.md) for how to add posterior inference to a `RandomDesigner` rollout.
