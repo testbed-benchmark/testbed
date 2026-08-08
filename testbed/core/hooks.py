@@ -1,15 +1,37 @@
 """Composable rollout hooks: the "extra bits" that run alongside a rollout."""
 
+from collections.abc import Sequence
 from typing import Any
 
 import torch
-
-from testbed.core.rollout import RolloutState
+from torch import nn
 
 from ..inference.is_sampler import run_importance_sampling
+from .rollout import RolloutState
 
 
-class RolloutHook:
+def check_hooks(hooks: Sequence["RolloutHook"]) -> list["RolloutHook"]:
+    """Returns the hooks as a list, raising if any cannot be registered.
+
+    Both failures here are the same mistake -- a hook that isn't a usable
+    nn.Module -- and both would otherwise surface much later as an obscure
+    error from inside nn.ModuleList or .to().
+    """
+    hooks = list(hooks)
+    for hook in hooks:
+        if not isinstance(hook, nn.Module):
+            raise TypeError(
+                f"Hooks must subclass RolloutHook (an nn.Module); got {type(hook).__name__}."
+            )
+        if not hasattr(hook, "_parameters"):
+            raise TypeError(
+                f"{type(hook).__name__}.__init__ does not call super().__init__(); "
+                "RolloutHook is an nn.Module and must be initialized as one."
+            )
+    return hooks
+
+
+class RolloutHook(nn.Module):
     """Interface for rollout callbacks.
 
     All methods are no-ops by default; a concrete hook overrides only the
@@ -17,7 +39,21 @@ class RolloutHook:
     `state.scratch`, not on `self`, so one instance can be reused across
     rollouts (e.g. across train/eval/warmup steps) without cross-contaminating
     calls.
+
+    A hook is an `nn.Module` so that anything it owns (an action net, a
+    buffer) is registered on the `Designer` holding it, and moved by
+    `designer.to(device)` along with the rest of the rollout. A subclass
+    defining `__init__` must therefore call `super().__init__()` before
+    assigning any module or tensor attribute -- `Designer` raises if it is
+    handed a hook that did not.
+
+    Hooks are called through their `before_propose`/`after_propose`/
+    `after_step`/`on_rollout_end` callbacks, never through `forward()`.
     """
+
+    def __init__(self):
+        """Initializes the hook."""
+        super().__init__()
 
     def before_propose(self, state: RolloutState) -> None:
         """Runs before the next design is proposed."""
@@ -47,6 +83,7 @@ class PosteriorUpdateHook(RolloutHook):
         **inference_kwargs,
     ):
         """inference_fn(task, y_history, design_history, **inference_kwargs) -> Distribution."""
+        super().__init__()
         self.inference_fn = inference_fn
         self.store_history = store_history
         self.inference_kwargs = inference_kwargs
@@ -73,6 +110,7 @@ class ActionHook(RolloutHook):
 
     def __init__(self, action_net, *, every_step: bool = False):
         """action_net(y_history, design_history) -> action, [b, *event_shape_action]."""
+        super().__init__()
         self.action_net = action_net
         self.every_step = every_step
 

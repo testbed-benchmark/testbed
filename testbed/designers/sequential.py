@@ -6,13 +6,13 @@ import torch
 from torch.distributions import Distribution as TorchDist
 
 from testbed.core.distributions import Distribution, TorchDistribution
+from testbed.core.hooks import PosteriorUpdateHook, RolloutHook
 from testbed.core.rollout import Rollout
 from testbed.design_objectives import DesignObjective
 from testbed.inference.is_sampler import run_importance_sampling
 from testbed.tasks import Task
 
 from .base import Designer
-from .hooks import PosteriorUpdateHook, RolloutHook
 
 
 class SequentialDesigner(Designer):

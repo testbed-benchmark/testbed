@@ -6,9 +6,8 @@ from collections.abc import Sequence
 import torch
 from torch import Tensor, nn
 
-from testbed.core.rollout import Rollout
-
-from .hooks import RolloutHook, RolloutState
+from testbed.core.hooks import RolloutHook, check_hooks
+from testbed.core.rollout import Rollout, RolloutState
 
 
 class Designer(ABC, nn.Module):
@@ -42,7 +41,10 @@ class Designer(ABC, nn.Module):
 
         self.task = task
         self.T = T
-        self.hooks = list(hooks)
+        # A ModuleList, not a list, so hooks (and anything they own, e.g. an
+        # ActionHook's net) are registered submodules and move with .to().
+        # Appending to it later registers the new hook too.
+        self.hooks = nn.ModuleList(check_hooks(hooks))
         self.transform_designs = bool(transform_designs)
 
     @property

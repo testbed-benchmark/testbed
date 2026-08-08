@@ -1,8 +1,10 @@
 """Tests for StaticDesigner, including the transform_designs flag."""
 
+import pytest
 import torch
+from torch import nn
 
-from testbed.designers import RolloutHook, StaticDesigner
+from testbed.designers import ActionHook, RolloutHook, StaticDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
 
 
@@ -116,3 +118,90 @@ def test_transform_designs_false_agrees_between_vectorized_and_per_step_paths():
     assert torch.equal(
         vectorized.design_history, vectorized.extra["raw_design_history"]
     )
+
+
+class _SumActionNet(nn.Module):
+    """Minimal action net: a linear map of the summed outcome history."""
+
+    def __init__(self, dim_y=1, dim_action=2):
+        super().__init__()
+        self.linear = nn.Linear(dim_y, dim_action)
+
+    def forward(self, y_history, design_history):
+        return self.linear(y_history.sum(dim=1))
+
+
+# The moves below are exercised with a dtype cast rather than a device move:
+# `.to(torch.float64)` goes through the same nn.Module._apply machinery as
+# `.to(device)`, but runs without a GPU. The CUDA move is checked separately.
+def test_to_moves_task_hooks_and_own_parameters():
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    action_net = _SumActionNet()
+    designer = StaticDesigner(task, T=3, hooks=[ActionHook(action_net)])
+
+    designer.to(torch.float64)
+
+    assert designer.raw_design.dtype == torch.float64
+    assert task.prior.loc.dtype == torch.float64
+    assert action_net.linear.weight.dtype == torch.float64
+
+
+def test_hook_appended_after_construction_is_registered():
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    designer = StaticDesigner(task, T=3)
+    action_net = _SumActionNet()
+
+    designer.hooks.append(ActionHook(action_net))
+    designer.to(torch.float64)
+
+    assert action_net in set(designer.modules())
+    assert action_net.linear.weight.dtype == torch.float64
+
+
+def test_train_eval_reaches_hook_modules():
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    action_net = _SumActionNet()
+    designer = StaticDesigner(task, T=3, hooks=[ActionHook(action_net)])
+
+    designer.eval()
+    assert not action_net.training
+
+    designer.train()
+    assert action_net.training
+
+
+def test_hook_that_skips_module_init_raises():
+    class _UninitializedHook(RolloutHook):
+        def __init__(self):
+            self.value = 1  # no super().__init__()
+
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    with pytest.raises(TypeError, match="super"):
+        StaticDesigner(task, T=3, hooks=[_UninitializedHook()])
+
+
+def test_non_module_hook_raises():
+    class _NotAHook:
+        def after_step(self, state):
+            pass
+
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    with pytest.raises(TypeError, match="RolloutHook"):
+        StaticDesigner(task, T=3, hooks=[_NotAHook()])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_to_cuda_moves_the_whole_rollout():
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    action_net = _SumActionNet()
+    designer = StaticDesigner(task, T=3, hooks=[ActionHook(action_net)])
+
+    designer.to("cuda")
+
+    assert designer.device.type == "cuda"
+    assert task.device.type == "cuda"
+    assert action_net.linear.weight.device.type == "cuda"
+
+    rollout = designer.rollout(task.sample_prior(2))
+    assert rollout.design_history.device.type == "cuda"
+    assert rollout.extra["action"].device.type == "cuda"

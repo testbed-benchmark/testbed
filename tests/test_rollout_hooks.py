@@ -28,6 +28,7 @@ class _RecordingHook(RolloutHook):
     """Records callback order and the history length seen at each callback."""
 
     def __init__(self):
+        super().__init__()
         self.calls = []
 
     def before_propose(self, state):
@@ -44,6 +45,7 @@ class _OverwriteDesignHook(RolloutHook):
     """Replaces the proposed design after it is proposed."""
 
     def __init__(self, value):
+        super().__init__()
         self.value = value
 
     def after_propose(self, state):
@@ -52,6 +54,7 @@ class _OverwriteDesignHook(RolloutHook):
 
 class _ConstantExtraHook(RolloutHook):
     def __init__(self, key, value):
+        super().__init__()
         self.key = key
         self.value = value
 
@@ -180,7 +183,7 @@ def test_hook_instance_reused_across_differently_batched_rollouts():
 def test_hooks_default_to_empty_and_are_appendable():
     task = _make_task()
     designer = _CountingDesigner(task, T=2)
-    assert designer.hooks == []
+    assert len(designer.hooks) == 0
 
     seen = []
     designer.hooks.append(ActionHook(lambda y, d: seen.append(1) or y.sum(dim=1)))

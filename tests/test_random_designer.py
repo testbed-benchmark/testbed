@@ -1,5 +1,6 @@
 """Tests for RandomDesigner's two design sources: a given dist, or the design space."""
 
+import pytest
 import torch
 
 from testbed.core.distributions import TorchDistribution
@@ -111,7 +112,7 @@ def _shapes(rollout):
 def test_hooked_and_vectorized_paths_agree_on_shapes_and_extras():
     # rollout() has a vectorized fast path taken only when no hooks are
     # attached; both must draw from the same source and report the same keys.
-    from testbed.designers.hooks import RolloutHook
+    from testbed.core.hooks import RolloutHook
 
     task = make_task()
     theta = task.sample_prior(4)
@@ -127,3 +128,37 @@ def test_hooked_and_vectorized_paths_agree_on_shapes_and_extras():
         assert _shapes(fast) == _shapes(hooked)
         assert ("policy_log_probs" in fast.extra) is expect_log_probs
         assert ("policy_log_probs" in hooked.extra) is expect_log_probs
+
+
+# ---------------------------------------------------------------------------
+# Device
+# ---------------------------------------------------------------------------
+
+
+def test_wrapped_dist_reports_the_device_it_was_built_on():
+    # A wrapper that was never moved must keep reporting where its parameters
+    # are, so wrapping a dist built on an accelerator is not a silent downgrade.
+    dist = TorchDistribution(
+        torch.distributions.Normal(
+            torch.zeros(2, device="meta"),
+            torch.ones(2, device="meta"),
+            validate_args=False,  # validation calls .item(), which meta forbids
+        )
+    )
+
+    assert dist.device.type == "meta"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_to_cuda_moves_designs_drawn_from_a_wrapped_dist():
+    # The wrapped torch distribution's own parameters stay on the CPU -- only
+    # what crosses the wrapper's interface is moved.
+    task = make_task()
+    designer = RandomDesigner(task, T=3, dist=make_dist())
+
+    designer.to("cuda")
+
+    assert designer.device.type == "cuda"
+    rollout = designer.rollout(task.sample_prior(4))
+    assert rollout.design_history.device.type == "cuda"
+    assert rollout.extra["policy_log_probs"].device.type == "cuda"

@@ -4,9 +4,9 @@ from collections.abc import Sequence
 
 import torch
 
+from ..core.hooks import RolloutHook
 from ..design_nets.stochastic import CategoricalPolicyNet, StochasticDesignNet
 from .base import Designer
-from .hooks import RolloutHook
 
 
 class PolicyDesigner(Designer):

@@ -1,6 +1,7 @@
 """Designer exports."""
 
-from testbed.core.rollout import Rollout
+from testbed.core.hooks import ActionHook, PosteriorUpdateHook, RolloutHook
+from testbed.core.rollout import Rollout, RolloutState
 
 from .amortized import (
     DeterministicPolicyDesigner,
@@ -9,7 +10,6 @@ from .amortized import (
     build_policy_designer,
 )
 from .base import Designer
-from .hooks import ActionHook, PosteriorUpdateHook, RolloutHook, RolloutState
 from .non_adaptive import RandomDesigner, StaticDesigner
 from .sequential import SequentialDesigner
 

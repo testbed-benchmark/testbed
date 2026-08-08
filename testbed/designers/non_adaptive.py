@@ -7,9 +7,9 @@ from torch import Tensor, nn
 from torch.distributions import Distribution as TorchDist
 
 from testbed.core.distributions import Distribution, TorchDistribution
+from testbed.core.hooks import RolloutHook
 from testbed.core.rollout import Rollout
 from testbed.designers.base import Designer
-from testbed.designers.hooks import RolloutHook
 from testbed.tasks import Task
 
 
