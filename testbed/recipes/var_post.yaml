@@ -31,6 +31,9 @@ n_guide_pretrain_iter: 5_000
 n_guide_outer: 1_024
 guide_lr: 1e-4
 guide_grad_clip: 1.0
+guide_betas: null  # null -> torch Adam default (0.9, 0.999)
+guide_warmup_frac: null  # null/0 -> constant guide_lr; else linear-warmup-then-cosine-decay
+guide_lr_floor: 1e-6  # only used when guide_warmup_frac is set
 # ScoreBED "random scale Gaussian" design sampler for the
 # location-finding guide pretraining: each trajectory draws its own scale
 # s ~ U(scale_low, scale_high), then all T steps of that trajectory are drawn
@@ -46,6 +49,9 @@ n_outer: 2_048
 # optimizer
 lr: 1e-4
 grad_clip: 1.0
+betas: null  # null -> torch Adam default (0.9, 0.999)
+policy_cosine_alpha: null  # null -> constant lr; else cosine decay to lr * policy_cosine_alpha
+ema_decay: null  # null -> no EMA tracking of design_net
 
 # eval
 eval_every: 0  # eval is expensive here; off for this recipe

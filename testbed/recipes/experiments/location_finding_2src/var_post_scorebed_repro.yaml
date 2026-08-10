@@ -1,0 +1,84 @@
+# @package _global_
+
+defaults:
+  - /var_post
+  - override /task: location_finding_2src
+  - override /net@design_net: null
+  - override /net@guide_net: null
+  - _self_
+
+# Close reproduction of ScoreBED's (Phillips, Kerrigan, Rainforth, UAI 2026)
+# VarPost baseline on standard location finding (d=2, K=2), P=1 protocol --
+# based on their released code
+# (github.com/angusphillips/Score_Matching_BED:
+# config/experiment/location_finding_var_post.yaml +
+# config/bed_model/location_finding.yaml + config/var_post/default.yaml +
+# run_scripts/run_var_ba.py).
+#
+# Known, deliberately accepted approximations (this repo's shared network
+# classes can't express these exactly without modifying them significantly):
+#  - Their policy emitter is a single Linear layer straight from the pooled
+#    16-dim encoding (emitter_shapes: []). By contrast, DeterministicPolicyNet always
+#    inserts >=1 hidden layer when decoder_dim_h isn't a nonempty list, so
+#    this uses one hidden layer of width 16 (dim_emb) with GELU instead.
+#  - Their guide's per-component heads read directly off the pooled
+#    transformer output. GaussianMixtureGuideNet always inserts one shared
+#    trunk hidden layer before the heads, so this has one extra hidden layer
+#    (width 256, GELU) their architecture doesn't have.
+#  - Their guide's embedding stage is a separate RFF (random Fourier
+#    features) + MLP producing a 128-dim token before projecting to
+#    model_dim=256; this repo's AttentiveEncoder embeds directly to dim_emb
+#    in one step (plain MLP, no RFF), so encoder_dim_h is set to their
+#    embed_mlp_dim (256) as the closest analogue.
+#  - Their networks additionally normalize y/design inputs using
+#    precomputed dataset statistics (`standardise=True`); this repo's
+#    encoders don't.
+
+seed: 0
+T: 30 # config/bed_model/location_finding.yaml: T
+
+
+joint: true
+n_guide_pretrain_iter: 0
+n_train_iter: 200_000 
+n_outer: 1_024 
+n_guide_outer: 1_024 # unused if no pretraining phase; kept for config completeness
+
+objective:
+  name: var_post # plain pathwise bound: deterministic policy + reparameterized likelihood
+  canonicalize_theta: true 
+
+# Policy optimizer: Adam(b1=0.9, b2=0.999), grad clip 1.0 (global norm),
+# cosine_decay_schedule(init_value=1e-5, decay_steps=num_iters, alpha=5e-6).
+lr: 1e-5
+betas: [0.9, 0.999]
+grad_clip: 1.0
+policy_cosine_alpha: 5e-6
+ema_decay: 0.99 # scoreBED reported eval bounds use policy_train_state.params_ema
+
+# Guide optimizer: Adam(b1=0.9, b2=0.999), grad clip 1.0 (global norm),
+# warmup_cosine_decay_schedule(init_value=0, peak_value=1e-3,
+# warmup_steps=0.001*num_iters, decay_steps=num_iters, end_value=1e-6).
+guide_lr: 1e-3
+guide_betas: [0.9, 0.999]
+guide_grad_clip: 1.0
+guide_warmup_frac: 0.001
+guide_lr_floor: 1e-6
+
+pretrain_design_distr: null # unused: no separate guide-pretraining phase
+
+# Trainer.evaluate() is a stub in the repo currently 
+eval_every: 0
+
+design_net:
+  _target_: testbed.design_nets.DeepSetPolicyNet
+  encoder_dim_h: [256]
+  dim_emb: 16
+
+guide_net:
+  _target_: testbed.design_nets.AttentiveGuideNet
+  n_components: 10
+  encoder_dim_h: [256]
+  dim_emb: 256
+  num_heads: 4
+  num_blocks: 3

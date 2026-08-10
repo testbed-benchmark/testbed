@@ -3,6 +3,8 @@
 Inspired by Bayesian Experimental Design via Score Matching paper.
 """
 
+import copy
+
 import hydra
 import torch
 from hydra.utils import instantiate
@@ -41,10 +43,18 @@ class Trainer:
         guide_optimizer,
         cfg,
         pretrain_designer,
-        scheduler=None,
+        policy_scheduler=None,
+        guide_scheduler=None,
+        ema_decay=None,
         manager=None,
     ):
-        """Initializes the trainer."""
+        """Initializes the trainer.
+
+        ema_decay: if set, an exponential moving average of design_net's
+        parameters is tracked (`design_net_ema = ema_decay * design_net_ema +
+        (1 - ema_decay) * design_net`, applied every policy step) and used
+        for evaluation/checkpointing. This matches ScoreBED's implementation.
+        """
         assert isinstance(designer, PolicyDesigner), (
             "This Trainer assumes your designer is a PolicyDesigner object."
         )
@@ -58,13 +68,27 @@ class Trainer:
         self.guide_optimizer = guide_optimizer
         self.cfg = cfg
         self.pretrain_designer = pretrain_designer
-        self.scheduler = scheduler
+        self.policy_scheduler = policy_scheduler
+        self.guide_scheduler = guide_scheduler
         self.manager = manager
 
         self.joint = bool(cfg.joint)
 
+        self.ema_decay = ema_decay
+        self.design_net_ema = (
+            copy.deepcopy(designer.design_net) if ema_decay is not None else None
+        )
+
         # checkpointing
         self.best_metric = -torch.inf
+
+    def _update_ema(self):
+        """Updates design_net_ema with the current design_net parameters."""
+        with torch.no_grad():
+            for p_ema, p in zip(
+                self.design_net_ema.parameters(), self.designer.design_net.parameters()
+            ):
+                p_ema.mul_(self.ema_decay).add_(p, alpha=1 - self.ema_decay)
 
     def train(self):
         """Full training loop: guide pretraining, then policy training."""
@@ -102,14 +126,14 @@ class Trainer:
             self._maybe_save_best(step, metrics, min_step=500)
 
         save_path = self.manager.path("final_step.pt")
-        torch.save(
-            {
-                "design_net": self.designer.design_net.state_dict(),
-                "guide_net": self.guide_net.state_dict(),
-                "step": step,
-            },
-            save_path,
-        )
+        checkpoint = {
+            "design_net": self.designer.design_net.state_dict(),
+            "guide_net": self.guide_net.state_dict(),
+            "step": step,
+        }
+        if self.design_net_ema is not None:
+            checkpoint["design_net_ema"] = self.design_net_ema.state_dict()
+        torch.save(checkpoint, save_path)
 
         if self.manager.metric_logger is not None:
             self.manager.metric_logger.close()
@@ -138,6 +162,8 @@ class Trainer:
             )
 
         self.guide_optimizer.step()
+        if self.guide_scheduler is not None:
+            self.guide_scheduler.step()
 
         return {"guide_pretrain/loss": loss.item()}
 
@@ -175,6 +201,10 @@ class Trainer:
                 self.designer.design_net.parameters(), cfg.grad_clip
             )
         self.policy_optimizer.step()
+        if self.policy_scheduler is not None:
+            self.policy_scheduler.step()
+        if self.ema_decay is not None:
+            self._update_ema()
 
         if self.joint:
             if cfg.guide_grad_clip is not None:
@@ -182,6 +212,8 @@ class Trainer:
                     self.guide_net.parameters(), cfg.guide_grad_clip
                 )
             self.guide_optimizer.step()
+            if self.guide_scheduler is not None:
+                self.guide_scheduler.step()
 
         return {"gain": gain.item()}
 
@@ -212,15 +244,15 @@ class Trainer:
 
             chkpt_path = self.manager.path("best.pt")
 
-            torch.save(
-                {
-                    "design_net": self.designer.design_net.state_dict(),
-                    "guide_net": self.guide_net.state_dict(),
-                    "step": step,
-                    "metric": metric_val,
-                },
-                chkpt_path,
-            )
+            checkpoint = {
+                "design_net": self.designer.design_net.state_dict(),
+                "guide_net": self.guide_net.state_dict(),
+                "step": step,
+                "metric": metric_val,
+            }
+            if self.design_net_ema is not None:
+                checkpoint["design_net_ema"] = self.design_net_ema.state_dict()
+            torch.save(checkpoint, chkpt_path)
 
             self.manager.event_logger.info(
                 f"Saving new best checkpoint : gain={metric_val} @ step={step}"
@@ -283,6 +315,55 @@ def build_objective(cfg, task, guide_net):
     return objectives[name]()
 
 
+def build_policy_optimizer(cfg, design_net):
+    """Builds the policy Adam optimizer and its (optional) cosine-decay scheduler.
+
+    cfg.betas: Adam (beta1, beta2); torch's (0.9, 0.999) default if null.
+    cfg.policy_cosine_alpha: if set, LR cosine-decays over the full run
+    (n_guide_pretrain_iter + n_train_iter) from cfg.lr down to
+    cfg.lr * cfg.policy_cosine_alpha; no scheduler (constant LR) if null.
+    """
+    betas = tuple(cfg.betas) if cfg.get("betas") else (0.9, 0.999)
+    optimizer = torch.optim.Adam(design_net.parameters(), lr=cfg.lr, betas=betas)
+
+    scheduler = None
+    if cfg.get("policy_cosine_alpha") is not None:
+        total_iters = cfg.n_guide_pretrain_iter + cfg.n_train_iter
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=total_iters, eta_min=cfg.lr * cfg.policy_cosine_alpha
+        )
+    return optimizer, scheduler
+
+
+def build_guide_optimizer(cfg, guide_net):
+    """Builds the guide Adam optimizer and its (optional) warmup-cosine scheduler.
+
+    cfg.guide_lr is the peak LR. cfg.guide_warmup_frac (fraction of the full
+    run, n_guide_pretrain_iter + n_train_iter) is the linear-warmup length;
+    no scheduler (constant LR) if null/0. After warmup, LR cosine-decays to
+    cfg.guide_lr_floor over the remaining steps of the full run.
+    """
+    betas = tuple(cfg.guide_betas) if cfg.get("guide_betas") else (0.9, 0.999)
+    optimizer = torch.optim.Adam(guide_net.parameters(), lr=cfg.guide_lr, betas=betas)
+
+    warmup_frac = cfg.get("guide_warmup_frac") or 0.0
+    if not warmup_frac:
+        return optimizer, None
+
+    total_iters = cfg.n_guide_pretrain_iter + cfg.n_train_iter
+    warmup_iters = max(1, round(warmup_frac * total_iters))
+    warmup = torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lr_lambda=lambda t: min(1.0, t / warmup_iters)
+    )
+    decay = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=total_iters - warmup_iters, eta_min=cfg.guide_lr_floor
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, decay], milestones=[warmup_iters]
+    )
+    return optimizer, scheduler
+
+
 def build_pretrain_designer(cfg, task):
     """Instantiates the RandomDesigner used to pretrain the guide net."""
     dist = (
@@ -339,8 +420,8 @@ def main(cfg):
     )
     pretrain_designer = build_pretrain_designer(cfg, task)
 
-    policy_optimizer = torch.optim.Adam(design_net.parameters(), lr=cfg.lr)
-    guide_optimizer = torch.optim.Adam(guide_net.parameters(), lr=cfg.guide_lr)
+    policy_optimizer, policy_scheduler = build_policy_optimizer(cfg, design_net)
+    guide_optimizer, guide_scheduler = build_guide_optimizer(cfg, guide_net)
 
     trainer = Trainer(
         task=task,
@@ -352,6 +433,9 @@ def main(cfg):
         guide_optimizer=guide_optimizer,
         cfg=cfg,
         pretrain_designer=pretrain_designer,
+        policy_scheduler=policy_scheduler,
+        guide_scheduler=guide_scheduler,
+        ema_decay=cfg.get("ema_decay"),
         manager=manager,
     )
 
