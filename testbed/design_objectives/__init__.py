@@ -11,9 +11,10 @@ from .loss import (
     SortedLogMSELoss,
     SortedMSELoss,
 )
-from .reinforce import LossReinforce, Reinforce, SPCEReinforce
+from .reinforce import LossReinforce, Reinforce, SPCEReinforce, VarPostReinforce
 from .snmc import NMC, SNMC
 from .spce import PCE, SPCE
+from .var_post import GuideNLL, VarPost
 
 __all__ = [
     "NMC",
@@ -21,10 +22,11 @@ __all__ = [
     "SNMC",
     "SPCE",
     "DesignObjective",
-    "LogLoss",
-    "LogMSELoss",
+    "GuideNLL",
     "LossReinforce",
     "MSELoss",
+    "LogLoss",
+    "LogMSELoss",
     "Objective",
     "PermutationInvariantMSELoss",
     "Reinforce",
@@ -32,4 +34,6 @@ __all__ = [
     "SPCEReinforce",
     "SortedLogMSELoss",
     "SortedMSELoss",
+    "VarPost",
+    "VarPostReinforce",
 ]

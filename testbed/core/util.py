@@ -128,6 +128,22 @@ def normal_cdf(x):
     return 0.5 * (1 + torch.erf(x / 2**0.5))
 
 
+def _sort_by_key(x: Tensor, key: Tensor) -> Tensor:
+    """Sorts the ``n_objects`` axis of ``x`` by ascending ``key``.
+
+    Args:
+        x: ``[batch, n_objects, *object_shape]``.
+        key: ``[batch, n_objects]``, the per-object sort key.
+
+    Returns:
+        Tensor with the same shape as ``x``, objects reordered by ``key``.
+    """
+    b, n = x.shape[:2]
+    idx = torch.argsort(key, dim=1)
+    idx = idx.view(b, n, *([1] * (x.ndim - 2))).expand_as(x)
+    return torch.gather(x, dim=1, index=idx)
+
+
 def sort_by_norm(x: Tensor) -> Tensor:
     """Sorts tensors according to their norm.
 
@@ -141,21 +157,47 @@ def sort_by_norm(x: Tensor) -> Tensor:
         increasing Euclidean norm.
     """
     unbatched = x.ndim == 2
-
     if unbatched:
         x = x.unsqueeze(0)
 
-    b, n = x.shape[:2]
-
     norms = torch.linalg.norm(x.flatten(start_dim=2), dim=-1)
-    idx = torch.argsort(norms, dim=1)
-
-    idx = idx.view(b, n, *([1] * (x.ndim - 2))).expand_as(x)
-    x = torch.gather(x, dim=1, index=idx)
+    x = _sort_by_key(x, norms)
 
     if unbatched:
         x = x.squeeze(0)
+    return x
 
+
+def sort_by_first_coordinate(x: Tensor) -> Tensor:
+    """Sorts tensors according to their first coordinate.
+
+    This is the canonicalization used by ScoreBED (Phillips, Kerrigan,
+    Rainforth, UAI 2026), to remove the label-switching symmetry
+    of multi-source location-finding-style tasks (whose likelihood is
+    invariant to the ordering of an exchangeable ``n_objects`` axis, e.g.
+    LocationFinding's ``n_sources``): sorting collapses every permutation of
+    a given configuration onto the same canonical representative, so the
+    guide only needs to fit one point per equivalence class.
+
+    Args:
+        x: Either
+            ``[batch, n_objects, *object_shape]``, or
+            ``[n_objects, *object_shape]``, with ``object_shape`` non-empty.
+
+    Returns:
+        Tensor with the same shape as ``x``, with objects sorted by
+        increasing first coordinate.
+    """
+    unbatched = x.ndim == 2
+    if unbatched:
+        x = x.unsqueeze(0)
+
+    # for each entry, what is its first coordinate?
+    first_coord = x.flatten(start_dim=2)[..., 0]
+    x = _sort_by_key(x, first_coord)
+
+    if unbatched:
+        x = x.squeeze(0)
     return x
 
 

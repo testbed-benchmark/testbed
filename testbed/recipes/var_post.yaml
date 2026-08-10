@@ -1,0 +1,53 @@
+defaults:
+  - system: default
+  - task: location_finding
+  - net@design_net: attentive_policy
+  - net@guide_net: mixture_guide
+  - wandb: default
+  - hydra_run: default
+  - _self_
+# system (device/save_dir come from the system group)
+seed: 0
+T: 10
+# frozen variant: pretrain the guide, then freeze it while training the policy
+joint: false
+# objective: plain (non-REINFORCE) Barber-Agakov bound, since the default
+# task/net pairing (location_finding + attentive_policy) is fully
+# reparameterized end to end -- switch to var_post_reinforce for tasks with a
+# non-reparameterized outcome model or a score-function design policy (see
+# experiments/temporal_discounting/var_post.yaml).
+objective:
+  name: var_post
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false
+  use_current_prior: false
+  # sources are exchangeable for multi-source LocationFinding tasks (n.b. a
+  # no-op for the default single-source task); see
+  # experiments/location_finding_2src/var_post.yaml, which turns this on.
+  canonicalize_theta: false
+# guide pretraining
+n_guide_pretrain_iter: 5_000
+n_guide_outer: 1_024
+guide_lr: 1e-4
+guide_grad_clip: 1.0
+# ScoreBED "random scale Gaussian" design sampler for the
+# location-finding guide pretraining: each trajectory draws its own scale
+# s ~ U(scale_low, scale_high), then all T steps of that trajectory are drawn
+# i.i.d. N(0, s^2). 
+pretrain_design_distr:
+  _target_: testbed.core.RandomScaleGaussianDesignDistribution
+  scale_low: 0.5
+  scale_high: 2.0
+# policy training
+n_train_iter: 25_000
+n_outer: 2_048
+
+# optimizer
+lr: 1e-4
+grad_clip: 1.0
+
+# eval
+eval_every: 0  # eval is expensive here; off for this recipe
+n_outer_eval: 2_048
+n_inner_eval: 100_000
