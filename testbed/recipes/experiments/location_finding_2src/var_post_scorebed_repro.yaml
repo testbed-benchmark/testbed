@@ -15,7 +15,7 @@ defaults:
 # config/bed_model/location_finding.yaml + config/var_post/default.yaml +
 # run_scripts/run_var_ba.py).
 #
-# Known, deliberately accepted approximations (this repo's shared network
+# Known, deliberately accepted approximations (TestBED repo's shared network
 # classes can't express these exactly without modifying them significantly):
 #  - Their policy emitter is a single Linear layer straight from the pooled
 #    16-dim encoding (emitter_shapes: []). By contrast, DeterministicPolicyNet always

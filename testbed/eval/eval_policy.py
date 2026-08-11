@@ -1,29 +1,28 @@
-"""Standalone sPCE/sNMC evaluation for a trained VarPost policy checkpoint.
+"""Standalone sPCE/sNMC evaluation for any trained BED policy checkpoint.
 
-`methods.var_post.Trainer.evaluate` is a stub (see its docstring), so final
-comparable EIG bounds -- e.g. for comparing against ScoreBED's reported
-Table 1 numbers -- are computed here instead, directly from a saved
-checkpoint, following their own evaluation procedure (App. D.6 /
-`evaluate_policies.py`): sPCE (lower bound) and sNMC (upper bound) with
-`L` contrastive/inner samples, averaged over `N` outer rollouts, evaluated on
-`design_net_ema` when the checkpoint has one (matching their use of
-`policy_train_state.params_ema`).
+General-purpose: only needs `cfg.task`, `cfg.design_net`, `cfg.T` in the run's
+saved config and a `"design_net"` key in the checkpoint.
+
+If the checkpoint has a `"design_net_ema"` key (currently only
+`methods.var_post.Trainer` saves one), it's preferred over the raw
+`"design_net"` weights, matching e.g. ScoreBED's evaluation on
+`policy_train_state.params_ema` -- pass `--use_raw_weights` to force the raw
+weights instead.
 
 `testbed.design_objectives.SPCE`/`SNMC` materialize all `L` contrastive
 samples in one tensor (`[b*(L+1), T, ...]`), which is fine for their usual
-training-time L (tens) but not for L=500_000: that would need tens of GB
-just for the repeated history tensors. This module reimplements the same
-bound formulas (SPCE: `logp_joint - logsumexp([logp_joint] + logp_contrastive)
-+ log(L+1)`; SNMC: same but excluding logp_joint from the marginal, `+ log(L)`)
-with the contrastive dimension processed in chunks, combined via the
+training-time L (tens) but not for large L (e.g. L=500_000): that would need.
+This module reimplements the same bound formulas
+(SPCE: `logp_joint - logsumexp([logp_joint] + logp_contrastive) + log(L+1)`;
+SNMC: same but excluding logp_joint from the marginal, `+ log(L)`) with the
+contrastive dimension processed in chunks, combined via the
 logsumexp-associativity identity `logsumexp(all) ==
-logsumexp(stack([logsumexp(chunk) for chunk in chunks]))` (verified
-numerically equal to the unchunked SPCE/SNMC output on small L before relying
-on it for large L) -- so results are identical to calling SPCE/SNMC directly,
+logsumexp(stack([logsumexp(chunk) for chunk in chunks]))`
+ -- so results are identical to calling SPCE/SNMC directly,
 just without ever materializing all L contrastive samples at once.
 
 Usage:
-    python -m testbed.methods.eval_var_post <run_dir> [--checkpoint final_step.pt]
+    python -m testbed.eval.eval_policy <run_dir> [--checkpoint final_step.pt]
         [--n_outer 2048] [--n_contrastive 500000] [--outer_batch_size 256]
         [--contrastive_chunk_size 2000] [--use_raw_weights]
 
@@ -40,7 +39,20 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from testbed.designers import build_policy_designer
-from testbed.methods.var_post import build_design_net
+
+
+def build_design_net(cfg, task):
+    """Instantiates a design policy net from a saved run config.
+
+    (Duplicated in dad.py/actionbed.py/var_post.py; kept local here so
+    this script has no dependency on any one method's Trainer module.)
+    """
+    return instantiate(
+        cfg.design_net,
+        event_shape_y=task.event_shape_y,
+        event_shape_design=task.event_shape_design,
+        event_shape_out=task.event_shape_design,
+    )
 
 
 def _chunked_contrastive_logsumexps(task, rollout, n_contrastive, chunk_size):
@@ -116,7 +128,7 @@ def evaluate_checkpoint(
     use_raw_weights: bool = False,
     device: str = "cpu",
 ):
-    """Computes mean +/- SEM sPCE/sNMC bounds for a saved VarPost checkpoint."""
+    """Computes mean +/- SEM sPCE/sNMC bounds for a saved policy checkpoint."""
     run_dir = Path(run_dir)
     cfg = OmegaConf.load(run_dir / ".hydra" / "config.yaml")
 
