@@ -13,6 +13,7 @@ from testbed.core.manager import Manager
 from testbed.design_nets import (
     CategoricalPolicyNet,
     DeepSetCategoricalActor,
+    DeepSetEncoder,
     DeepSetGaussianActor,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
@@ -53,8 +54,8 @@ def test_actor_initializes_requested_standard_deviation():
     _, log_std = actor(y_history, design_history)
 
     torch.testing.assert_close(log_std.exp(), torch.full_like(log_std, 0.4))
-    assert torch.count_nonzero(actor.log_std_head.weight) == 0
-    assert actor.log_std_head.weight.requires_grad
+    assert torch.count_nonzero(actor.head.log_std_head.weight) == 0
+    assert actor.head.log_std_head.weight.requires_grad
 
 
 @pytest.mark.parametrize("init_std", [0.0, -0.1, 1.0, 1e-10])
@@ -132,6 +133,37 @@ def test_soft_q_network_ignores_masked_history_entries():
     torch.testing.assert_close(actual, modified)
 
 
+def test_critics_use_the_shared_deepset_encoder_null_encoding():
+    critic = RLBOEDQNetwork(
+        dim_y=1,
+        dim_design=2,
+        design_low=-1.0,
+        design_high=1.0,
+        outcome_low=-1.0,
+        outcome_high=1.0,
+        dim_emb=5,
+    )
+    assert isinstance(critic.encoder, DeepSetEncoder)
+    with torch.no_grad():
+        critic.encoder.null_enc.fill_(0.25)
+
+    emitter_inputs = {}
+    critic.emitter_net.register_forward_pre_hook(
+        lambda _module, args: emitter_inputs.setdefault("value", args[0].detach())
+    )
+    critic(
+        History(
+            max_episode_length=0,
+            designs=torch.empty(2, 0, 2),
+            outcomes=torch.empty(2, 0, 1),
+            mask=torch.empty(2, 0, dtype=torch.bool),
+        ),
+        torch.zeros(2, 2),
+    )
+
+    torch.testing.assert_close(emitter_inputs["value"][:, :5], torch.full((2, 5), 0.25))
+
+
 def test_soft_q_network_uses_reference_history_and_design_coordinates():
     critic = SoftQNetwork(
         dim_y=1,
@@ -149,7 +181,7 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
     def record_emitter_input(module, args):
         inputs["emitter"] = args[0].detach().clone()
 
-    critic.encoder_net.register_forward_pre_hook(record_encoder_input)
+    critic.encoder.encoder_net.register_forward_pre_hook(record_encoder_input)
     critic.emitter_net.register_forward_pre_hook(record_emitter_input)
     physical_design = torch.tensor([[1.0, 4.0]])
     observation = History(
@@ -206,7 +238,7 @@ def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
         outcome_bounds=(0.0, 10.0),
     )
     with torch.no_grad():
-        actor.logits_head.bias.copy_(torch.tensor([0.0, -1.0, 2.0]))
+        actor.head.logits_head.bias.copy_(torch.tensor([0.0, -1.0, 2.0]))
     outcomes = torch.zeros(4, 0, 1)
     designs = torch.zeros(4, 0, 1)
 
@@ -215,7 +247,7 @@ def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
 
     assert design_space.contains(sampled.design)
     torch.testing.assert_close(greedy.design, torch.full((4, 1), 10.0))
-    expected_log_prob = torch.log_softmax(actor.logits_head.bias, dim=0)[2]
+    expected_log_prob = torch.log_softmax(actor.head.logits_head.bias, dim=0)[2]
     torch.testing.assert_close(greedy.log_prob, expected_log_prob.expand(4))
 
 
@@ -540,7 +572,7 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
     with torch.no_grad():
         for parameter in nets.actor.parameters():
             parameter.zero_()
-        nets.actor.actor.logits_head.bias[0] = 10.0
+        nets.actor.actor.head.logits_head.bias[0] = 10.0
     trainer = Trainer(
         task,
         build_policy_designer(task, cfg.T, nets.actor),
