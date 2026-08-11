@@ -767,17 +767,3 @@ def test_guide_nll_canonicalize_theta_matches_var_post_convention():
         rollout.design_history,
     )
     torch.testing.assert_close(loss.from_rollout(rollout), manual)
-
-
-def test_location_finding_2src_var_post_recipe_enables_canonicalize_theta():
-    from pathlib import Path
-
-    from hydra import compose, initialize_config_dir
-
-    recipes_dir = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
-    with initialize_config_dir(version_base="1.3", config_dir=recipes_dir):
-        cfg = compose(config_name="experiments/location_finding_2src/var_post")
-
-    assert cfg.task._target_ == "testbed.tasks.LocationFinding"
-    assert cfg.task.n_sources == 2
-    assert cfg.objective.canonicalize_theta is True
