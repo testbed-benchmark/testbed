@@ -8,7 +8,7 @@
 
 import pathlib
 import sys
-from datetime import date
+from datetime import datetime, timezone
 
 PROJECT_DIR = pathlib.Path(__file__).absolute().parent.parent
 sys.path.append(str(PROJECT_DIR))
@@ -16,7 +16,7 @@ sys.path.append(str(PROJECT_DIR))
 # -- Project information -----------------------------------------------------
 
 project = "testbed"
-copyright = f"{date.today().year}, The TestBED authors"
+copyright = f"{datetime.now(timezone.utc).year}, The TestBED authors"
 author = "The TestBED authors"
 
 extensions = [

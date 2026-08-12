@@ -3,8 +3,7 @@
 from math import atanh, log, prod
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 from torch.distributions import Categorical, Normal
 
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
@@ -27,7 +26,7 @@ class GaussianHead(nn.Module):
         self,
         dim_emb: int,
         dim_design: int,
-        dim_h=[128, 128],
+        dim_h=(128, 128),
         *,
         log_std_min: float = -20.0,
         log_std_max: float = 0.0,
@@ -79,16 +78,16 @@ class GaussianHead(nn.Module):
         hidden = self.actor_net(encoding)
         mean = self.mean_head(hidden)
         log_std = torch.tanh(self.log_std_head(hidden))
-        log_std = self.log_std_min + 0.5 * (
-            self.log_std_max - self.log_std_min
-        ) * (log_std + 1)
+        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
+            log_std + 1
+        )
         return mean, log_std
 
 
 class CategoricalHead(nn.Module):
     """Maps a history encoding to categorical design logits."""
 
-    def __init__(self, dim_emb: int, n_designs: int, dim_h=[128, 128]):
+    def __init__(self, dim_emb: int, n_designs: int, dim_h=(128, 128)):
         """Initializes the categorical readout."""
         super().__init__()
         self.dim_emb = int(dim_emb)
@@ -147,7 +146,7 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         *,
         dim_design: int,
         dim_y: int = 1,
-        dim_h=[128, 128],
+        dim_h=(128, 128),
         dim_emb: int = 64,
         log_std_min: float = -20.0,
         log_std_max: float = 0.0,
@@ -219,7 +218,7 @@ class DeepSetCategoricalActor(CategoricalPolicyActor):
         dim_design: int,
         n_designs: int,
         dim_y: int = 1,
-        dim_h=[128, 128],
+        dim_h=(128, 128),
         dim_emb: int = 64,
     ):
         """Initializes the actor.

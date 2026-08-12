@@ -5,7 +5,7 @@ References:
 """
 
 import itertools
-from functools import lru_cache
+from functools import cache
 
 import torch
 from torch import Tensor, nn
@@ -281,7 +281,7 @@ class SortedLogMSELoss(nn.Module):
         return _elementwise_log_mse(input, target, self.epsilon, self.reduction)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _permutation_index(n: int) -> Tensor:
     """All permutations of ``range(n)``, cached (CPU).
 

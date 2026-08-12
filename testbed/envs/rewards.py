@@ -41,11 +41,11 @@ class RewardFunction(ABC):
     requires_likelihood = True
     n_contrastive = 0
 
-    def reset(self, env: "BEDEnv", *, theta_all: "Tensor | None" = None) -> None:
+    def reset(self, env: BEDEnv, *, theta_all: Tensor | None = None) -> None:
         """Resets reward state."""
 
     @abstractmethod
-    def step(self, env: "BEDEnv", design: Tensor, outcome: Tensor) -> Tensor:
+    def step(self, env: BEDEnv, design: Tensor, outcome: Tensor) -> Tensor:
         """Computes reward for one transition."""
         ...
 
@@ -55,7 +55,7 @@ class ZeroReward(RewardFunction):
 
     requires_likelihood = False
 
-    def step(self, env: "BEDEnv", design: Tensor, outcome: Tensor) -> Tensor:
+    def step(self, env: BEDEnv, design: Tensor, outcome: Tensor) -> Tensor:
         """Returns zeros with env batch shape."""
         return torch.zeros(env.batch_shape, device=env.device)
 
@@ -65,7 +65,7 @@ class CallableReward(RewardFunction):
 
     def __init__(
         self,
-        fn: Callable[["BEDEnv", Tensor, Tensor], Tensor],
+        fn: Callable[[BEDEnv, Tensor, Tensor], Tensor],
         *,
         requires_likelihood: bool = True,
     ):
@@ -73,7 +73,7 @@ class CallableReward(RewardFunction):
         self.fn = fn
         self.requires_likelihood = requires_likelihood
 
-    def step(self, env: "BEDEnv", design: Tensor, outcome: Tensor) -> Tensor:
+    def step(self, env: BEDEnv, design: Tensor, outcome: Tensor) -> Tensor:
         """Delegates to the wrapped callable."""
         return self.fn(env, design, outcome)
 
@@ -87,7 +87,7 @@ class _ContrastiveReward(RewardFunction):
         self.log_c: Tensor | None = None
         self.theta_all: Tensor | None = None
 
-    def reset(self, env: "BEDEnv", *, theta_all: Tensor | None = None) -> None:
+    def reset(self, env: BEDEnv, *, theta_all: Tensor | None = None) -> None:
         """Initializes theta_all and accumulated contrastive log likelihoods.
 
         If *theta_all* is provided it is used directly (after shape validation).
@@ -122,7 +122,7 @@ class _ContrastiveReward(RewardFunction):
 
         self.log_c = torch.zeros(*batch_shape, L, device=env.device)
 
-    def update_log_c(self, env: "BEDEnv", design: Tensor, outcome: Tensor) -> Tensor:
+    def update_log_c(self, env: BEDEnv, design: Tensor, outcome: Tensor) -> Tensor:
         """Accumulates log likelihoods and returns the per-step increment."""
         if self.log_c is None or self.theta_all is None:
             raise RuntimeError("Reward function has not been reset.")
@@ -139,12 +139,12 @@ class RLBOEDDenseReward(_ContrastiveReward):
         super().__init__(n_contrastive)
         self.last_logsumexp: Tensor | None = None
 
-    def reset(self, env: "BEDEnv", *, theta_all: Tensor | None = None) -> None:
+    def reset(self, env: BEDEnv, *, theta_all: Tensor | None = None) -> None:
         """Initializes running contrastive likelihood products."""
         super().reset(env, theta_all=theta_all)
         self.last_logsumexp = torch.logsumexp(self.log_c, dim=-1)
 
-    def step(self, env: "BEDEnv", design: Tensor, outcome: Tensor) -> Tensor:
+    def step(self, env: BEDEnv, design: Tensor, outcome: Tensor) -> Tensor:
         """Computes the dense RL-BOED reward."""
         if self.log_c is None or self.last_logsumexp is None:
             raise RuntimeError("Reward function has not been reset.")
@@ -158,7 +158,7 @@ class RLBOEDDenseReward(_ContrastiveReward):
 class RLBOEDTerminalReward(_ContrastiveReward):
     """Terminal SPCE-style contrastive reward."""
 
-    def step(self, env: "BEDEnv", design: Tensor, outcome: Tensor) -> Tensor:
+    def step(self, env: BEDEnv, design: Tensor, outcome: Tensor) -> Tensor:
         """Returns zero until terminal, then SPCE reward."""
         if self.log_c is None:
             raise RuntimeError("Reward function has not been reset.")

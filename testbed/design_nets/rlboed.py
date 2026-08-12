@@ -1,8 +1,7 @@
 """Policy and value networks used by RL-BOED."""
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 
 from testbed.design_nets.encoder import DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
@@ -21,7 +20,7 @@ class RLBOEDQNetwork(nn.Module):
         design_high,
         outcome_low,
         outcome_high,
-        dim_h=[128, 128],
+        dim_h=(128, 128),
         dim_emb: int = 64,
         encoder: HistoryEncoder | None = None,
     ):
@@ -107,7 +106,7 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         design_high,
         outcome_low,
         outcome_high,
-        dim_h=[128, 128],
+        dim_h=(128, 128),
         dim_emb: int = 64,
         encoder: HistoryEncoder | None = None,
     ):

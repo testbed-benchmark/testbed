@@ -26,7 +26,8 @@ def set_actor_output(policy, mean, log_std):
     log_std = torch.as_tensor(log_std, dtype=policy.design_low.dtype)
     actor = policy.actor
     scaled_log_std = (
-        2 * (log_std - actor.head.log_std_min)
+        2
+        * (log_std - actor.head.log_std_min)
         / (actor.head.log_std_max - actor.head.log_std_min)
         - 1
     )
@@ -154,7 +155,9 @@ def test_tanh_gaussian_policy_normalizes_physical_histories_for_actor():
     actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
     encoder_inputs = {}
     actor.encoder.encoder_net.register_forward_pre_hook(
-        lambda _module, args: encoder_inputs.setdefault("value", args[0].detach().clone())
+        lambda _module, args: encoder_inputs.setdefault(
+            "value", args[0].detach().clone()
+        )
     )
     policy = TanhGaussianPolicyNet(
         BoxDesignSpace(-4.0, 4.0, event_shape=(2,)),
@@ -169,9 +172,7 @@ def test_tanh_gaussian_policy_normalizes_physical_histories_for_actor():
 
     torch.testing.assert_close(
         encoder_inputs["value"],
-        torch.tensor(
-            [[[0.0, -1.0, 1.0], [0.5, 0.0, 0.0], [1.0, 1.0, -1.0]]]
-        ),
+        torch.tensor([[[0.0, -1.0, 1.0], [0.5, 0.0, 0.0], [1.0, 1.0, -1.0]]]),
     )
 
 
@@ -317,9 +318,7 @@ def test_stochastic_policies_accept_shared_history_encoders():
     gaussian_policy = TanhGaussianPolicyNet(make_space(), encoder=gaussian_encoder)
 
     assert gaussian_policy.actor.encoder is gaussian_encoder
-    gaussian_raw = gaussian_policy(
-        torch.empty(3, 0, 1), torch.empty(3, 0, 2)
-    )
+    gaussian_raw = gaussian_policy(torch.empty(3, 0, 1), torch.empty(3, 0, 2))
     assert gaussian_raw.shape == (3, 2)
 
     categorical_encoder = DeepSetEncoder((1,), (1,), dim_emb=5)
@@ -328,9 +327,7 @@ def test_stochastic_policies_accept_shared_history_encoders():
         encoder=categorical_encoder,
     )
 
-    categorical_raw = categorical_policy(
-        torch.empty(3, 0, 1), torch.empty(3, 0, 1)
-    )
+    categorical_raw = categorical_policy(torch.empty(3, 0, 1), torch.empty(3, 0, 1))
 
     assert categorical_policy.actor.encoder is categorical_encoder
     assert categorical_raw.shape == (3, 1)
@@ -362,6 +359,8 @@ def test_tanh_gaussian_policy_rejects_invalid_mask_shape():
             torch.randn(2, 3, 2),
             mask=torch.ones(2, 2, dtype=torch.bool),
         )
+
+
 def test_tanh_gaussian_policy_rejects_invalid_actor_output_shape():
     policy = TanhGaussianPolicyNet(make_space(), actor=BadShapeGaussianActor())
 

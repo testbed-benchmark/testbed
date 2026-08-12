@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from ..core.design_spaces import DefaultDesignSpace, DesignSpace
 from ..core.distributions import Distribution
