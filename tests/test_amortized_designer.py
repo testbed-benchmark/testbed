@@ -10,7 +10,7 @@ from testbed.design_nets import (
     TanhGaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner, build_policy_designer
-from testbed.tasks import HyperbolicTemporalDiscounting
+from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
 
 
 def _make_task():
@@ -47,6 +47,26 @@ def test_default_transform_designs_matches_task_design_space():
     )
     # HTDDesignSpace.to_design is a real (non-identity) transform.
     assert not torch.allclose(raw_design_history, rollout.design_history)
+
+
+def test_explicit_design_space_transforms_instead_of_task_default():
+    torch.manual_seed(0)
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    design_space = BoxDesignSpace(low=-2.0, high=3.0, event_shape=(2,))
+    policy_net = TanhGaussianPolicyNet(design_space)
+    designer = PolicyDesigner(
+        task,
+        T=2,
+        design_net=policy_net,
+        design_space=design_space,
+    )
+    y_history, design_history = designer.make_empty_history(1)
+
+    design, raw_design, _ = designer.design_from_history(y_history, design_history)
+
+    torch.testing.assert_close(design, design_space.to_design(raw_design))
+    assert not torch.equal(design, task.design_space.to_design(raw_design))
+    assert design_space.contains(design)
 
 
 def test_transform_designs_false_opts_out():
@@ -158,6 +178,20 @@ def test_use_raw_history_false_is_honored_for_a_stochastic_net():
     assert designer.use_raw_history is False
 
 
+def test_raw_history_rejected_when_policy_normalizes_physical_history():
+    task = _make_task()
+    space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
+    policy_net = TanhGaussianPolicyNet(space, normalize_design_history=True)
+
+    with pytest.raises(ValueError, match="normalizes physical design histories"):
+        build_policy_designer(
+            task,
+            T=2,
+            design_net=policy_net,
+            use_raw_history=True,
+        )
+
+
 def test_categorical_policy_net_can_condition_on_design_shaped_raw_history():
     task = _make_task()
     space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
@@ -168,6 +202,16 @@ def test_categorical_policy_net_can_condition_on_design_shaped_raw_history():
 
     assert designer.use_raw_history is True
     assert rollout.extra["raw_design_history"].shape == rollout.design_history.shape
+
+
+def test_categorical_physical_raw_history_can_still_be_normalized():
+    task = _make_task()
+    space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
+    net = CategoricalPolicyNet(space, normalize_design_history=True)
+
+    designer = build_policy_designer(task, T=2, design_net=net, use_raw_history=True)
+
+    assert designer.use_raw_history is True
 
 
 def test_policy_log_prob_requirement_is_a_designer_capability():

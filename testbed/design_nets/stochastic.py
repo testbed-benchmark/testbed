@@ -16,6 +16,7 @@ class StochasticDesignNet(DesignNet):
     """Design network that samples raw proposals with policy log probabilities."""
 
     produces_policy_log_probs = True
+    raw_designs_are_physical = False
 
 
 class GaussianPolicyActor(nn.Module):
@@ -462,6 +463,8 @@ class CategoricalPolicyNet(StochasticDesignNet):
         outcome_low: Lower bound used to normalize outcome histories.
         outcome_high: Upper bound used to normalize outcome histories.
     """
+
+    raw_designs_are_physical = True
 
     def __init__(
         self,

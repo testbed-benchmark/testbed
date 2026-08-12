@@ -426,7 +426,7 @@ def _build_trainer(cfg, *, manager=None):
     nets = make_networks(task, design_space, cfg, task.device)
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = build_policy_designer(task, cfg.T, nets.actor)
+    designer = build_policy_designer(task, cfg.T, nets.actor, design_space=design_space)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
 
 

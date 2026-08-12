@@ -1036,7 +1036,12 @@ def main(cfg):
 
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = build_policy_designer(task, cfg.T, nets.actor)
+    designer = build_policy_designer(
+        task,
+        cfg.T,
+        nets.actor,
+        design_space=design_space,
+    )
 
     trainer = Trainer(
         task=task,
