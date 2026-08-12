@@ -109,15 +109,19 @@ class GaussianMixtureGuideNet(GuideNet):
     Known limitation: `event_shape_theta` is flattened before being modeled
     (see `GuideNet.log_prob`/`sample`), with no structural awareness of any
     permutation symmetry within that shape. For tasks like multi-source
-    LocationFinding, whose likelihood is exactly invariant to permuting the
+    LocationFinding, whose likelihood is invariant to permuting the
     n_sources axis of theta, the true posterior is multimodal via this
-    label-switching symmetry -- this guide has no inductive bias encouraging
-    it to spread mixture components across those symmetric modes, so the
-    resulting Barber-Agakov bound (still valid, since it holds for any guide)
-    may be needlessly loose on such tasks. Not addressed here; a cheap
-    mitigation would be randomly permuting the source axis of the target
-    theta during GuideNLL pretraining (a valid augmentation, since the
-    likelihood doesn't depend on source ordering).
+    label-switching symmetry -- this class itself has no inductive bias
+    encouraging it to spread mixture components across those symmetric
+    modes. If using the Barber-Agakov bound it remains valid, since it holds
+    for any guide, but it may be needlessly loose on such tasks if used as-is.
+
+    Limitation is addressed at the caller: pass
+    `canonicalize_theta=True` to `VarPost`/`VarPostReinforce`/`GuideNLL` to
+    sort theta by first coordinate before it ever reaches this guide,
+    collapsing the label-switching symmetry to one canonical representative
+    per equivalence class.
+    A guide used without that flag still has this limitation.
 
     Args:
         encoder: HistoryEncoder object.
