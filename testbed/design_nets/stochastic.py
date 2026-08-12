@@ -9,6 +9,7 @@ from torch.distributions import Categorical, Normal
 
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets.base_design_net import DesignNet, DesignProposal
+from testbed.design_nets.encoder import DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
 
 
@@ -19,8 +20,107 @@ class StochasticDesignNet(DesignNet):
     raw_designs_are_physical = False
 
 
+class GaussianHead(nn.Module):
+    """Maps a history encoding to Gaussian policy parameters."""
+
+    def __init__(
+        self,
+        dim_emb: int,
+        dim_design: int,
+        dim_h=[128, 128],
+        *,
+        log_std_min: float = -20.0,
+        log_std_max: float = 0.0,
+        init_std: float = 3**-0.5,
+    ):
+        """Initializes the Gaussian readout.
+
+        Args:
+            dim_emb: Dimension of the input history encoding.
+            dim_design: Flattened design dimension.
+            dim_h: Hidden layer widths; an int specifies one layer.
+            log_std_min: Lower bound for Gaussian log standard deviations.
+            log_std_max: Upper bound for Gaussian log standard deviations.
+            init_std: Initial unsquashed Gaussian standard deviation.
+        """
+        super().__init__()
+        self.dim_emb = int(dim_emb)
+        self.dim_design = int(dim_design)
+        self.log_std_min = float(log_std_min)
+        self.log_std_max = float(log_std_max)
+        self.init_std = float(init_std)
+        if self.init_std <= 0:
+            raise ValueError("init_std must be positive.")
+        init_log_std = log(self.init_std)
+        if not self.log_std_min < init_log_std < self.log_std_max:
+            raise ValueError(
+                "init_std must have a logarithm strictly between "
+                "log_std_min and log_std_max."
+            )
+
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
+        self.actor_net = MLP([self.dim_emb] + hidden_widths, activation=nn.ReLU)
+        self.mean_head = nn.Linear(hidden_widths[-1], self.dim_design)
+        self.log_std_head = nn.Linear(hidden_widths[-1], self.dim_design)
+        _initialize_linear_layers(self)
+        nn.init.zeros_(self.log_std_head.weight)
+        scaled_log_std = (
+            2.0
+            * (
+                (init_log_std - self.log_std_min)
+                / (self.log_std_max - self.log_std_min)
+            )
+            - 1.0
+        )
+        nn.init.constant_(self.log_std_head.bias, atanh(scaled_log_std))
+
+    def forward(self, encoding: Tensor) -> tuple[Tensor, Tensor]:
+        """Returns the Gaussian mean and log standard deviation."""
+        hidden = self.actor_net(encoding)
+        mean = self.mean_head(hidden)
+        log_std = torch.tanh(self.log_std_head(hidden))
+        log_std = self.log_std_min + 0.5 * (
+            self.log_std_max - self.log_std_min
+        ) * (log_std + 1)
+        return mean, log_std
+
+
+class CategoricalHead(nn.Module):
+    """Maps a history encoding to categorical design logits."""
+
+    def __init__(self, dim_emb: int, n_designs: int, dim_h=[128, 128]):
+        """Initializes the categorical readout."""
+        super().__init__()
+        self.dim_emb = int(dim_emb)
+        self.n_designs = int(n_designs)
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
+        self.actor_net = MLP([self.dim_emb] + hidden_widths, activation=nn.ReLU)
+        self.logits_head = nn.Linear(hidden_widths[-1], self.n_designs)
+        _initialize_linear_layers(self)
+
+    def forward(self, encoding: Tensor) -> Tensor:
+        """Returns one categorical logit per design."""
+        return self.logits_head(self.actor_net(encoding))
+
+
 class GaussianPolicyActor(nn.Module):
-    """Maps flattened experimental histories to Gaussian policy parameters."""
+    """History encoder followed by a Gaussian policy head."""
+
+    def __init__(
+        self,
+        encoder: HistoryEncoder,
+        head: GaussianHead,
+    ):
+        """Initializes an encoder and Gaussian head pair.
+
+        The encoder and head must produce and consume the same embedding
+        dimension.
+        """
+        super().__init__()
+        if encoder.dim_emb != head.dim_emb:
+            raise ValueError("encoder and head embedding dimensions must match.")
+        self.encoder = encoder
+        self.head = head
 
     def forward(
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
@@ -36,11 +136,11 @@ class GaussianPolicyActor(nn.Module):
             Gaussian mean and log standard deviation, both with shape
             ``[batch, dim_design]``.
         """
-        raise NotImplementedError
+        return self.head(self.encoder(y_history, design_history, mask=mask))
 
 
 class DeepSetGaussianActor(GaussianPolicyActor):
-    """DeepSets-style Gaussian actor using masked sum pooling over history."""
+    """Preset: ``DeepSetEncoder`` followed by a ``GaussianHead``."""
 
     def __init__(
         self,
@@ -64,75 +164,43 @@ class DeepSetGaussianActor(GaussianPolicyActor):
             log_std_max: Upper bound for Gaussian log standard deviations.
             init_std: Initial unsquashed Gaussian standard deviation.
         """
-        super().__init__()
-
         self.dim_y = int(dim_y)
-        self.dim_design = int(dim_design)
-        self.dim_emb = int(dim_emb)
-        self.log_std_min = float(log_std_min)
-        self.log_std_max = float(log_std_max)
-        self.init_std = float(init_std)
-        if self.init_std <= 0:
-            raise ValueError("init_std must be positive.")
-        init_log_std = log(self.init_std)
-        if not self.log_std_min < init_log_std < self.log_std_max:
-            raise ValueError(
-                "init_std must have a logarithm strictly between "
-                "log_std_min and log_std_max."
-            )
+        encoder = DeepSetEncoder(
+            (self.dim_y,),
+            (int(dim_design),),
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+        )
+        head = GaussianHead(
+            encoder.dim_emb,
+            dim_design,
+            dim_h=dim_h,
+            log_std_min=log_std_min,
+            log_std_max=log_std_max,
+            init_std=init_std,
+        )
+        super().__init__(encoder, head)
 
-        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
-        self.encoder_net = MLP(
-            [self.dim_design + self.dim_y] + hidden_widths + [dim_emb],
-            activation=nn.ReLU,
-        )
-        self.actor_net = MLP([dim_emb] + hidden_widths, activation=nn.ReLU)
-        self.mean_head = nn.Linear(hidden_widths[-1], self.dim_design)
-        self.log_std_head = nn.Linear(hidden_widths[-1], self.dim_design)
-        _initialize_linear_layers(self)
-        nn.init.zeros_(self.log_std_head.weight)
-        scaled_log_std = (
-            2.0
-            * (
-                (init_log_std - self.log_std_min)
-                / (self.log_std_max - self.log_std_min)
-            )
-            - 1.0
-        )
-        nn.init.constant_(self.log_std_head.bias, atanh(scaled_log_std))
+
+class CategoricalPolicyActor(nn.Module):
+    """History encoder followed by a categorical policy head."""
+
+    def __init__(self, encoder: HistoryEncoder, head: CategoricalHead):
+        """Initializes an encoder and categorical head pair."""
+        super().__init__()
+        if encoder.dim_emb != head.dim_emb:
+            raise ValueError("encoder and head embedding dimensions must match.")
+        self.encoder = encoder
+        self.head = head
 
     def forward(
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
-    ) -> tuple[Tensor, Tensor]:
-        """Computes Gaussian parameters from flattened histories."""
-        b_flat, T, _ = design_history.shape
-
-        if T == 0:
-            summary = torch.zeros(
-                b_flat,
-                self.dim_emb,
-                device=design_history.device,
-                dtype=design_history.dtype,
-            )
-        else:
-            enc_input = torch.cat([y_history, design_history], dim=-1)
-            enc = self.encoder_net(enc_input)
-
-            if mask is not None:
-                enc = enc * mask.to(dtype=enc.dtype).unsqueeze(-1)
-
-            summary = enc.sum(dim=1)
-
-        hidden = self.actor_net(summary)
-        mean = self.mean_head(hidden)
-        log_std = torch.tanh(self.log_std_head(hidden))
-        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
-            log_std + 1
-        )
-        return mean, log_std
+    ) -> Tensor:
+        """Computes design logits from a history."""
+        return self.head(self.encoder(y_history, design_history, mask=mask))
 
 
-class DeepSetCategoricalActor(nn.Module):
+class DeepSetCategoricalActor(CategoricalPolicyActor):
     """DeepSets actor that returns categorical design logits.
 
     Attributes:
@@ -163,47 +231,16 @@ class DeepSetCategoricalActor(nn.Module):
             dim_h: Per-layer hidden widths as a list; an int is a single layer.
             dim_emb: History summary dimension.
         """
-        super().__init__()
         self.dim_design = int(dim_design)
         self.dim_y = int(dim_y)
-        self.n_designs = int(n_designs)
-        self.dim_emb = int(dim_emb)
-        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
-        self.encoder_net = MLP(
-            [self.dim_design + self.dim_y] + hidden_widths + [self.dim_emb],
-            activation=nn.ReLU,
+        encoder = DeepSetEncoder(
+            (self.dim_y,),
+            (self.dim_design,),
+            dim_h=dim_h,
+            dim_emb=dim_emb,
         )
-        self.actor_net = MLP([self.dim_emb] + hidden_widths, activation=nn.ReLU)
-        self.logits_head = nn.Linear(hidden_widths[-1], self.n_designs)
-        _initialize_linear_layers(self)
-
-    def forward(
-        self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
-    ) -> Tensor:
-        """Computes design logits from flattened histories.
-
-        Args:
-            y_history: Outcomes with shape ``[batch, T, dim_y]``.
-            design_history: Designs with shape ``[batch, T, dim_design]``.
-            mask: Optional padding mask with shape ``[batch, T]``.
-
-        Returns:
-            Design logits with shape ``[batch, n_designs]``.
-        """
-        batch_size, history_length, _ = design_history.shape
-        if history_length == 0:
-            summary = torch.zeros(
-                batch_size,
-                self.dim_emb,
-                device=design_history.device,
-                dtype=design_history.dtype,
-            )
-        else:
-            encoded = self.encoder_net(torch.cat([y_history, design_history], dim=-1))
-            if mask is not None:
-                encoded = encoded * mask.to(dtype=encoded.dtype).unsqueeze(-1)
-            summary = encoded.sum(dim=1)
-        return self.logits_head(self.actor_net(summary))
+        head = CategoricalHead(encoder.dim_emb, n_designs, dim_h=dim_h)
+        super().__init__(encoder, head)
 
 
 class TanhGaussianPolicyNet(StochasticDesignNet):
@@ -220,6 +257,8 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         design_space: BoxDesignSpace,
         actor: GaussianPolicyActor | None = None,
         *,
+        encoder: HistoryEncoder | None = None,
+        head: GaussianHead | None = None,
         normalize_design_history: bool = False,
         design_history_bounds: tuple[float, float] = (-1.0, 1.0),
         outcome_bounds: tuple[float, float] | None = None,
@@ -231,6 +270,10 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 the proposal and whose bounds support history normalization.
             actor: Optional module mapping flattened histories to Gaussian
                 mean and log standard deviation.
+            encoder: Optional history encoder used to build a default Gaussian
+                actor. Cannot be combined with ``actor``.
+            head: Optional Gaussian policy head paired with ``encoder``. If
+                omitted, a default head is created for the encoder.
             normalize_design_history: If True, affinely map physical design
                 histories to `design_history_bounds` before actor evaluation.
             design_history_bounds: Target bounds for normalized design history.
@@ -249,9 +292,19 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             or self.design_history_bounds[0] >= self.design_history_bounds[1]
         ):
             raise ValueError("design_history_bounds must satisfy low < high.")
-        self.actor = actor or DeepSetGaussianActor(
-            dim_design=self.dim_design,
-        )
+        if actor is not None and (encoder is not None or head is not None):
+            raise ValueError("actor cannot be combined with encoder or head.")
+        if actor is not None:
+            self.actor = actor
+        elif encoder is not None:
+            self.actor = GaussianPolicyActor(
+                encoder,
+                head or GaussianHead(encoder.dim_emb, self.dim_design),
+            )
+        elif head is not None:
+            raise ValueError("head requires an encoder.")
+        else:
+            self.actor = DeepSetGaussianActor(dim_design=self.dim_design)
 
         low = design_space.low.reshape(self.dim_design)
         high = design_space.high.reshape(self.dim_design)
@@ -469,8 +522,10 @@ class CategoricalPolicyNet(StochasticDesignNet):
     def __init__(
         self,
         design_space: FiniteDesignSpace,
-        actor: DeepSetCategoricalActor | None = None,
+        actor: CategoricalPolicyActor | None = None,
         *,
+        encoder: HistoryEncoder | None = None,
+        head: CategoricalHead | None = None,
         normalize_design_history: bool = False,
         design_history_bounds: tuple[float, float] = (0.0, 1.0),
         outcome_bounds: tuple[float, float] | None = None,
@@ -480,6 +535,10 @@ class CategoricalPolicyNet(StochasticDesignNet):
         Args:
             design_space: Finite physical designs returned by policy proposals.
             actor: Optional module returning one logit per action.
+            encoder: Optional history encoder used to build a default
+                categorical actor. Cannot be combined with ``actor``.
+            head: Optional categorical policy head paired with ``encoder``.
+                If omitted, a default head is created for the encoder.
             normalize_design_history: Whether to rescale design histories.
             design_history_bounds: Bounds used when design histories are rescaled.
             outcome_bounds: Optional bounds used to rescale outcomes to [0, 1].
@@ -496,11 +555,23 @@ class CategoricalPolicyNet(StochasticDesignNet):
         self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
         if self.design_history_bounds[0] >= self.design_history_bounds[1]:
             raise ValueError("design_history_bounds must satisfy low < high.")
-        self.actor = actor or DeepSetCategoricalActor(
-            dim_design=self.dim_design,
-            n_designs=design_space.n_designs,
-        )
-        if self.actor.n_designs != design_space.n_designs:
+        if actor is not None and (encoder is not None or head is not None):
+            raise ValueError("actor cannot be combined with encoder or head.")
+        if actor is not None:
+            self.actor = actor
+        elif encoder is not None:
+            self.actor = CategoricalPolicyActor(
+                encoder,
+                head or CategoricalHead(encoder.dim_emb, design_space.n_designs),
+            )
+        elif head is not None:
+            raise ValueError("head requires an encoder.")
+        else:
+            self.actor = DeepSetCategoricalActor(
+                dim_design=self.dim_design,
+                n_designs=design_space.n_designs,
+            )
+        if self.actor.head.n_designs != design_space.n_designs:
             raise ValueError("actor n_designs must match the categorical design space.")
 
         self.register_buffer("design_values", design_space.values.clone())
