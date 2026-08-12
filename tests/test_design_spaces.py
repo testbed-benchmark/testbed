@@ -7,7 +7,6 @@ from testbed.core.design_spaces import (
     DesignSpace,
     FiniteDesignSpace,
 )
-from testbed.design_nets.stochastic import TanhGaussianPolicyNet
 from testbed.tasks.hyperbolic_temporal_discounting import HTDDesignSpace
 
 
@@ -501,23 +500,21 @@ def test_htd_to_design_round_trips():
 
 
 # ---------------------------------------------------------------------------
-# BoxDesignSpace squash agrees with the copy inside TanhGaussianPolicyNet
+# BoxDesignSpace tanh squash
 # ---------------------------------------------------------------------------
 
 
-def test_box_squash_matches_tanh_gaussian_policy_net():
-    # The net predates BoxDesignSpace.to_design and still owns its own copy of
-    # this transform; the two must not drift apart.
+def test_box_to_design_corrects_log_prob_for_tanh_affine_jacobian():
     space = BoxDesignSpace(
         torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,)
     )
-    policy = TanhGaussianPolicyNet(space)
     raw = torch.randn(8, 2)
+    raw_log_prob = torch.randn(8)
 
-    assert torch.allclose(space.to_design(raw), policy._squash(raw))
-    assert torch.allclose(
-        space._log_det_jacobian(raw), policy._squash_log_det(raw).sum(-1)
-    )
+    design, log_prob = space.to_design(raw, raw_log_prob)
+
+    assert torch.allclose(design, space.to_design(raw))
+    assert torch.allclose(log_prob, raw_log_prob - space._log_det_jacobian(raw))
 
 
 def test_box_to_design_lands_in_the_box_and_round_trips():

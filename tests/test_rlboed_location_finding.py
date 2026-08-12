@@ -18,11 +18,7 @@ from testbed.design_nets import (
     RLBOEDQNetwork,
     TanhGaussianPolicyNet,
 )
-from testbed.designers import (
-    PolicyDesigner,
-    StochasticPolicyDesigner,
-    build_policy_designer,
-)
+from testbed.designers import PolicyDesigner, build_policy_designer
 from testbed.envs.history import History
 from testbed.methods.rlboed import (
     Trainer,
@@ -171,7 +167,7 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
     )
 
 
-def test_deployable_policy_maps_raw_history_to_physical_designs():
+def test_gaussian_policy_maps_physical_history_to_raw_proposal():
     design_space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
     actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
     policy = TanhGaussianPolicyNet(
@@ -188,12 +184,11 @@ def test_deployable_policy_maps_raw_history_to_physical_designs():
         torch.tensor([[[0.5]]]),
         torch.tensor([[[0.0, 1.0]]]),
     )
-    expected = torch.tanh(mean) * 4.0
+    expected = mean
     actual = policy(raw_y, raw_designs)
 
     torch.testing.assert_close(actual, expected)
-    assert torch.all(actual >= -4.0)
-    assert torch.all(actual <= 4.0)
+    assert design_space.contains(design_space.to_design(actual))
 
 
 def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
@@ -210,13 +205,18 @@ def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
     outcomes = torch.zeros(4, 0, 1)
     designs = torch.zeros(4, 0, 1)
 
-    sampled = policy.sample(outcomes, designs)
-    greedy = policy.sample(outcomes, designs, deterministic=True)
+    proposal = policy.propose(outcomes, designs)
+    greedy = policy(outcomes, designs)
 
-    assert design_space.contains(sampled.design)
-    torch.testing.assert_close(greedy.design, torch.full((4, 1), 10.0))
-    expected_log_prob = torch.log_softmax(actor.logits_head.bias, dim=0)[2]
-    torch.testing.assert_close(greedy.log_prob, expected_log_prob.expand(4))
+    assert design_space.contains(proposal.raw_design)
+    torch.testing.assert_close(greedy, torch.full((4, 1), 10.0))
+    torch.testing.assert_close(
+        proposal.deterministic_raw_design, torch.full((4, 1), 10.0)
+    )
+    selected_log_probs = torch.log_softmax(actor.logits_head.bias, dim=0)[
+        proposal.info["design_index"]
+    ]
+    torch.testing.assert_close(proposal.log_prob, selected_log_probs)
 
 
 def test_discrete_q_network_is_masked_and_permutation_invariant():
@@ -596,7 +596,7 @@ def test_trainer_produces_deployable_designer(tmp_path):
 
     assert isinstance(trainer.designer, PolicyDesigner)
     assert isinstance(trainer.designer.design_net, TanhGaussianPolicyNet)
-    assert isinstance(trainer.designer, StochasticPolicyDesigner)
+    assert trainer.designer.requires_policy_log_probs
     assert trainer.designer.design_net.design_history_bounds == (0.0, 1.0)
 
     checkpoint = trainer.build_checkpoint(step=cfg.sac.num_training_iterations - 1)
