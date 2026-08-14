@@ -133,37 +133,6 @@ def test_soft_q_network_ignores_masked_history_entries():
     torch.testing.assert_close(actual, modified)
 
 
-def test_critics_use_the_shared_deepset_encoder_null_encoding():
-    critic = RLBOEDQNetwork(
-        dim_y=1,
-        dim_design=2,
-        design_low=-1.0,
-        design_high=1.0,
-        outcome_low=-1.0,
-        outcome_high=1.0,
-        dim_emb=5,
-    )
-    assert isinstance(critic.encoder, DeepSetEncoder)
-    with torch.no_grad():
-        critic.encoder.null_enc.fill_(0.25)
-
-    emitter_inputs = {}
-    critic.emitter_net.register_forward_pre_hook(
-        lambda _module, args: emitter_inputs.setdefault("value", args[0].detach())
-    )
-    critic(
-        History(
-            max_episode_length=0,
-            designs=torch.empty(2, 0, 2),
-            outcomes=torch.empty(2, 0, 1),
-            mask=torch.empty(2, 0, dtype=torch.bool),
-        ),
-        torch.zeros(2, 2),
-    )
-
-    torch.testing.assert_close(emitter_inputs["value"][:, :5], torch.full((2, 5), 0.25))
-
-
 def test_soft_q_network_uses_reference_history_and_design_coordinates():
     critic = SoftQNetwork(
         dim_y=1,

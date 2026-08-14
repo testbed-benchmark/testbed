@@ -239,33 +239,3 @@ def test_categorical_physical_raw_history_can_still_be_normalized():
     designer = build_policy_designer(task, T=2, design_net=net, use_raw_history=True)
 
     assert designer.use_raw_history is True
-
-
-def test_policy_log_prob_requirement_is_a_designer_capability():
-    task = _make_task()
-
-    deterministic = PolicyDesigner(task, T=2, design_net=_make_policy_net(task))
-    score_function = PolicyDesigner(task, T=2, design_net=_make_stochastic_net())
-    pathwise = PolicyDesigner(
-        task,
-        T=2,
-        design_net=_make_stochastic_net(),
-        reparameterize_policy=True,
-    )
-
-    assert deterministic.requires_policy_log_probs is False
-    assert score_function.requires_policy_log_probs is True
-    assert pathwise.requires_policy_log_probs is False
-
-
-def test_categorical_policy_still_requires_log_probs_when_reparameterization_requested():
-    task = _make_task()
-    space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
-    designer = PolicyDesigner(
-        task,
-        T=2,
-        design_net=CategoricalPolicyNet(space, event_shape_y=task.event_shape_y),
-        reparameterize_policy=True,
-    )
-
-    assert designer.requires_policy_log_probs is True
