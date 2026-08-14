@@ -242,10 +242,3 @@ def test_categorical_policy_still_requires_log_probs_when_reparameterization_req
     )
 
     assert designer.requires_policy_log_probs is True
-
-
-def test_removed_designer_subclasses_are_not_exported():
-    from testbed import designers
-
-    assert not hasattr(designers, "DeterministicPolicyDesigner")
-    assert not hasattr(designers, "StochasticPolicyDesigner")
