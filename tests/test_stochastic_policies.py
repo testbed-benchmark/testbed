@@ -347,7 +347,9 @@ def test_default_stochastic_actors_support_multidimensional_outcome_events(
         (CategoricalPolicyNet, FiniteDesignSpace(torch.tensor([[0.0], [1.0]]))),
     ],
 )
-def test_default_stochastic_actor_requires_outcome_event_shape(policy_cls, design_space):
+def test_default_stochastic_actor_requires_outcome_event_shape(
+    policy_cls, design_space
+):
     with pytest.raises(ValueError, match="event_shape_y is required"):
         policy_cls(design_space)
 
@@ -373,9 +375,7 @@ def test_stochastic_policies_accept_shared_history_encoders():
 
 
 def test_deepset_gaussian_actor_uses_shared_null_encoding_for_empty_histories():
-    actor = DeepSetGaussianActor(
-        event_shape_y=(1,), event_shape_design=(2,), dim_emb=5
-    )
+    actor = DeepSetGaussianActor(event_shape_y=(1,), event_shape_design=(2,), dim_emb=5)
     with torch.no_grad():
         actor.encoder.null_enc.fill_(0.25)
 

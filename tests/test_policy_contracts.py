@@ -81,10 +81,14 @@ def make_categorical_policy(actor=None):
     if actor is not None:
         return CategoricalPolicyNet(space, actor=actor)
     encoder = DeepSetEncoder(EVENT_SHAPE, EVENT_SHAPE, dim_emb=7, dim_h=8)
-    return CategoricalPolicyNet(space, encoder=encoder, head=CategoricalHead(7, 5, dim_h=8))
+    return CategoricalPolicyNet(
+        space, encoder=encoder, head=CategoricalHead(7, 5, dim_h=8)
+    )
 
 
-@pytest.mark.parametrize("make_policy", [make_deepset_policy, make_gaussian_policy, make_categorical_policy])
+@pytest.mark.parametrize(
+    "make_policy", [make_deepset_policy, make_gaussian_policy, make_categorical_policy]
+)
 def test_policies_preserve_arbitrary_batch_and_event_shapes(make_policy):
     policy = make_policy()
     y_history, design_history = make_histories()
@@ -95,7 +99,9 @@ def test_policies_preserve_arbitrary_batch_and_event_shapes(make_policy):
     assert result.shape == (*BATCH_SHAPE, *EVENT_SHAPE)
 
 
-@pytest.mark.parametrize("make_policy", [make_deepset_policy, make_gaussian_policy, make_categorical_policy])
+@pytest.mark.parametrize(
+    "make_policy", [make_deepset_policy, make_gaussian_policy, make_categorical_policy]
+)
 def test_policies_support_scalar_batches_and_empty_histories(make_policy):
     policy = make_policy()
     y_history, design_history = make_histories(batch_shape=(), history_length=0)
@@ -130,7 +136,9 @@ def test_deepset_learned_null_history_agrees_for_empty_and_fully_masked_rows():
     design_history = torch.randn(2, 3, 1)
 
     empty = encoder(torch.empty(2, 0, 1), torch.empty(2, 0, 1))
-    fully_masked = encoder(y_history, design_history, mask=torch.zeros(2, 3, dtype=torch.bool))
+    fully_masked = encoder(
+        y_history, design_history, mask=torch.zeros(2, 3, dtype=torch.bool)
+    )
 
     torch.testing.assert_close(empty, fully_masked)
     assert "null_enc" in dict(encoder.named_parameters())
@@ -146,7 +154,9 @@ def test_deepset_partially_masked_rows_pool_only_valid_tokens():
     expected = torch.stack(
         [
             encoder(y_history[0, [0, 2]], design_history[0, [0, 2]]),
-            encoder(y_history[1, [1]].unsqueeze(0), design_history[1, [1]].unsqueeze(0))[0],
+            encoder(
+                y_history[1, [1]].unsqueeze(0), design_history[1, [1]].unsqueeze(0)
+            )[0],
         ]
     )
 
@@ -188,7 +198,9 @@ def test_gaussian_sampling_and_reparameterized_sampling_contracts():
         (make_categorical_policy, RecordingCategoricalActor(5)),
     ],
 )
-def test_custom_actors_receive_flattened_histories_and_propagated_dtype(make_policy, actor):
+def test_custom_actors_receive_flattened_histories_and_propagated_dtype(
+    make_policy, actor
+):
     policy = make_policy(actor=actor).double()
     y_history, design_history = make_histories()
     mask = torch.tensor([[True, False, True, False]]).expand(*BATCH_SHAPE, -1)
@@ -245,7 +257,9 @@ def test_gaussian_policy_flattens_multidimensional_outcome_bounds():
     )
 
 
-@pytest.mark.parametrize("make_policy", [make_deepset_policy, make_gaussian_policy, make_categorical_policy])
+@pytest.mark.parametrize(
+    "make_policy", [make_deepset_policy, make_gaussian_policy, make_categorical_policy]
+)
 @pytest.mark.parametrize(
     ("y_shape", "design_shape", "mask_shape"),
     [
@@ -260,4 +274,8 @@ def test_policies_reject_invalid_history_and_mask_shapes(
     policy = make_policy()
 
     with pytest.raises(ValueError):
-        policy(torch.randn(*y_shape), torch.randn(*design_shape), mask=torch.ones(*mask_shape, dtype=torch.bool))
+        policy(
+            torch.randn(*y_shape),
+            torch.randn(*design_shape),
+            mask=torch.ones(*mask_shape, dtype=torch.bool),
+        )

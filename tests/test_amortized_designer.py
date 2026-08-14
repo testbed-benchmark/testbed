@@ -53,9 +53,7 @@ def test_explicit_design_space_transforms_instead_of_task_default():
     torch.manual_seed(0)
     task = LocationFinding(n_sources=1, dim_theta=2)
     design_space = BoxDesignSpace(low=-2.0, high=3.0, event_shape=(2,))
-    policy_net = GaussianPolicyNet(
-        design_space, event_shape_y=task.event_shape_y
-    )
+    policy_net = GaussianPolicyNet(design_space, event_shape_y=task.event_shape_y)
     designer = PolicyDesigner(
         task,
         T=2,
@@ -147,9 +145,7 @@ def test_categorical_policy_physical_proposals_bypass_task_transform():
     torch.manual_seed(0)
     task = _make_task()
     policy_space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
-    policy_net = CategoricalPolicyNet(
-        policy_space, event_shape_y=task.event_shape_y
-    )
+    policy_net = CategoricalPolicyNet(policy_space, event_shape_y=task.event_shape_y)
     designer = PolicyDesigner(task, T=2, design_net=policy_net)
     y_history, design_history = designer.make_empty_history(8)
 

@@ -1,8 +1,8 @@
 """Shared validation and flattening for experiment histories."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import prod
-from typing import Sequence
 
 import torch
 from torch import Tensor
@@ -87,8 +87,7 @@ def prepare_history(
             *y_event_shape,
         ):
             raise ValueError(
-                "y_history must have shape "
-                f"[*batch_shape, T, {tuple(y_event_shape)}]."
+                f"y_history must have shape [*batch_shape, T, {tuple(y_event_shape)}]."
             )
 
     if (

@@ -1,7 +1,7 @@
 """Stochastic policy networks for reinforcement learning BED agents."""
 
+from collections.abc import Sequence
 from math import atanh, log
-from typing import Sequence
 
 import torch
 from torch import Tensor, nn
@@ -55,7 +55,9 @@ class StochasticDesignNet(DesignNet):
                 0.0,
                 1.0,
             )
-        return PreparedHistory(prepared.batch_shape, y_flat, design_flat, prepared.mask_flat)
+        return PreparedHistory(
+            prepared.batch_shape, y_flat, design_flat, prepared.mask_flat
+        )
 
 
 class GaussianHead(nn.Module):
@@ -368,9 +370,7 @@ class GaussianPolicyNet(StochasticDesignNet):
         low = design_space.low.reshape(self.dim_design)
         high = design_space.high.reshape(self.dim_design)
         if torch.any(low >= high):
-            raise ValueError(
-                "GaussianPolicyNet requires finite-width design bounds."
-            )
+            raise ValueError("GaussianPolicyNet requires finite-width design bounds.")
         self.register_buffer("design_low", low.clone())
         self.register_buffer("design_high", high.clone())
 
@@ -593,9 +593,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
             Most probable designs with shape
             ``[*batch_shape, *event_shape_design]``.
         """
-        history = self._prepare_histories(
-            y_history, design_history, mask=mask
-        )
+        history = self._prepare_histories(y_history, design_history, mask=mask)
         logits = self._validated_logits(
             history.y_flat, history.design_flat, history.mask_flat
         )
@@ -628,9 +626,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
             with the selected index in ``info["design_index"]``.
         """
         del reparameterize_policy
-        history = self._prepare_histories(
-            y_history, design_history, mask=mask
-        )
+        history = self._prepare_histories(y_history, design_history, mask=mask)
         logits = self._validated_logits(
             history.y_flat, history.design_flat, history.mask_flat
         )
@@ -678,9 +674,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
         Returns:
             Logits with shape ``[batch, n_designs]`` after flattening batches.
         """
-        history = self._prepare_histories(
-            y_history, design_history, mask=mask
-        )
+        history = self._prepare_histories(y_history, design_history, mask=mask)
         return self._validated_logits(
             history.y_flat, history.design_flat, history.mask_flat
         )
