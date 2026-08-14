@@ -120,7 +120,14 @@ class PolicyDesigner(Designer):
             reparameterize_policy=self.reparameterize_policy,
         )
 
-        if not self.transform_designs:
+        # Some policies, such as CategoricalPolicyNet, choose directly from a
+        # finite set of physical designs.  Their log_prob is a categorical
+        # log-mass, not a density in the task's raw coordinates, so neither
+        # the task transform nor its Jacobian correction applies.
+        raw_designs_are_physical = bool(
+            getattr(self.design_net, "raw_designs_are_physical", False)
+        )
+        if not self.transform_designs or raw_designs_are_physical:
             return proposal.raw_design, proposal.raw_design, proposal.log_prob
 
         if proposal.log_prob is None:

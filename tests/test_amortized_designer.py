@@ -143,6 +143,31 @@ def test_build_policy_designer_stochastic_exposes_raw_design():
     assert "raw_design_history" in rollout.extra
 
 
+def test_categorical_policy_physical_proposals_bypass_task_transform():
+    torch.manual_seed(0)
+    task = _make_task()
+    policy_space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
+    policy_net = CategoricalPolicyNet(
+        policy_space, event_shape_y=task.event_shape_y
+    )
+    designer = PolicyDesigner(task, T=2, design_net=policy_net)
+    y_history, design_history = designer.make_empty_history(8)
+
+    design, raw_design, log_prob = designer.design_from_history(
+        y_history, design_history
+    )
+
+    # CategoricalPolicyNet returns an element of its finite physical space;
+    # applying HTDDesignSpace.to_design here would alter both its action and
+    # its categorical log-mass.
+    torch.testing.assert_close(design, raw_design)
+    assert policy_space.contains(design)
+    expected_log_prob = torch.log_softmax(
+        policy_net.logits(y_history, design_history), dim=-1
+    )[torch.arange(design.shape[0]), policy_space.encode(design)]
+    torch.testing.assert_close(log_prob, expected_log_prob)
+
+
 # ============================================================================
 # design history convention
 # ============================================================================
