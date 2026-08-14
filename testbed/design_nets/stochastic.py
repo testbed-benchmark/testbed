@@ -1,6 +1,6 @@
 """Stochastic policy networks for reinforcement learning BED agents."""
 
-from math import atanh, log, prod
+from math import atanh, log
 
 import torch
 from torch import Tensor, nn
@@ -9,6 +9,7 @@ from torch.distributions import Categorical, Normal
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets.base_design_net import DesignNet, DesignProposal
 from testbed.design_nets.encoder import DeepSetEncoder, HistoryEncoder
+from testbed.design_nets.history import PreparedHistory, prepare_history
 from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
 
 
@@ -17,6 +18,39 @@ class StochasticDesignNet(DesignNet):
 
     produces_policy_log_probs = True
     raw_designs_are_physical = False
+
+    def _prepare_histories(
+        self, y_history, design_history, *, mask: Tensor | None = None
+    ) -> PreparedHistory:
+        """Prepare histories and apply this policy's optional normalization."""
+        encoder = getattr(self.actor, "encoder", None)
+        event_shape_y = getattr(self.actor, "event_shape_y", None)
+        if event_shape_y is None and encoder is not None:
+            event_shape_y = encoder.event_shape_y
+        prepared = prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=event_shape_y,
+            event_shape_design=self.event_shape_design,
+            mask=mask,
+            device=self.design_low.device,
+            dtype=self.design_low.dtype,
+        )
+
+        y_flat = prepared.y_flat
+        design_flat = prepared.design_flat
+        if self.normalize_design_history:
+            low, high = self.design_history_bounds
+            width = self.design_high - self.design_low
+            normalized = low + (design_flat - self.design_low) * (high - low) / width
+            design_flat = torch.where(
+                width == 0, torch.zeros_like(normalized), normalized
+            )
+        if self._normalize_outcomes:
+            y_flat = affine_rescale(
+                y_flat, self.outcome_low, self.outcome_high, 0.0, 1.0
+            )
+        return PreparedHistory(prepared.batch_shape, y_flat, design_flat, prepared.mask_flat)
 
 
 class GaussianHead(nn.Module):
@@ -135,7 +169,7 @@ class GaussianPolicyActor(nn.Module):
             Gaussian mean and log standard deviation, both with shape
             ``[batch, dim_design]``.
         """
-        return self.head(self.encoder(y_history, design_history, mask=mask))
+        return self.head(self.encoder.encode_flat(y_history, design_history, mask=mask))
 
 
 class DeepSetGaussianActor(GaussianPolicyActor):
@@ -196,7 +230,7 @@ class CategoricalPolicyActor(nn.Module):
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
     ) -> Tensor:
         """Computes design logits from a history."""
-        return self.head(self.encoder(y_history, design_history, mask=mask))
+        return self.head(self.encoder.encode_flat(y_history, design_history, mask=mask))
 
 
 class DeepSetCategoricalActor(CategoricalPolicyActor):
@@ -344,13 +378,15 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             Gaussian mean with shape
             ``[*batch_shape, *event_shape_design]``.
         """
-        batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
+        history = self._prepare_histories(
             y_history,
             design_history,
             mask=mask,
         )
-        mean, _ = self._normal_params(y_flat, design_flat, mask_flat)
-        return mean.reshape(*batch_shape, *self.event_shape_design)
+        mean, _ = self._normal_params(
+            history.y_flat, history.design_flat, history.mask_flat
+        )
+        return mean.reshape(*history.batch_shape, *self.event_shape_design)
 
     def propose(
         self,
@@ -361,12 +397,14 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         reparameterize_policy: bool = False,
     ) -> DesignProposal:
         """Samples an unconstrained Gaussian proposal and its raw density."""
-        batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
+        history = self._prepare_histories(
             y_history,
             design_history,
             mask=mask,
         )
-        mean, log_std = self._normal_params(y_flat, design_flat, mask_flat)
+        mean, log_std = self._normal_params(
+            history.y_flat, history.design_flat, history.mask_flat
+        )
         normal = Normal(mean, log_std.exp())
         if reparameterize_policy:
             raw_design = normal.rsample()
@@ -374,12 +412,14 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             raw_design = normal.sample()
 
         log_prob = normal.log_prob(raw_design).sum(dim=-1)
-        raw_design = raw_design.reshape(*batch_shape, *self.event_shape_design)
-        deterministic_raw_design = mean.reshape(*batch_shape, *self.event_shape_design)
+        raw_design = raw_design.reshape(*history.batch_shape, *self.event_shape_design)
+        deterministic_raw_design = mean.reshape(
+            *history.batch_shape, *self.event_shape_design
+        )
 
         return DesignProposal(
             raw_design=raw_design,
-            log_prob=log_prob.reshape(batch_shape),
+            log_prob=log_prob.reshape(history.batch_shape),
             deterministic_raw_design=deterministic_raw_design,
         )
 
@@ -393,92 +433,6 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         mean, log_std = self.actor(y_flat, design_flat, mask=mask_flat)
         self._validate_actor_params(mean, log_std, batch_size=design_flat.shape[0])
         return mean, log_std
-
-    def _prepare_histories(
-        self,
-        y_history,
-        design_history,
-        *,
-        mask: Tensor | None = None,
-    ) -> tuple[torch.Size, Tensor, Tensor, Tensor | None]:
-        """Validates histories and flattens arbitrary batch shapes.
-
-        Args:
-            y_history: Outcome history with shape
-                ``[*batch_shape, T, *event_shape_y]``.
-            design_history: Design history with shape
-                ``[*batch_shape, T, *event_shape_design]``.
-            mask: Optional boolean tensor for padded histories with shape
-                ``[*batch_shape, T]``.
-
-        Returns:
-            The original batch shape, flattened outcome history, flattened design
-            history, and optional flattened mask.
-        """
-        dtype = self.design_low.dtype
-        device = self.design_low.device
-        y_history = torch.as_tensor(y_history, device=device, dtype=dtype)
-        design_history = torch.as_tensor(design_history, device=device, dtype=dtype)
-
-        design_event_ndim = len(self.event_shape_design)
-        design_t_dim = design_history.ndim - design_event_ndim - 1
-        if design_t_dim < 0:
-            raise ValueError(
-                "design_history must have shape "
-                f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
-            )
-
-        batch_shape = torch.Size(design_history.shape[:design_t_dim])
-        T = design_history.shape[design_t_dim]
-
-        expected_design_suffix = (T, *self.event_shape_design)
-        if (
-            design_history.shape[-len(expected_design_suffix) :]
-            != expected_design_suffix
-        ):
-            raise ValueError(
-                "design_history must have shape "
-                f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
-            )
-
-        if (
-            y_history.ndim < len(batch_shape) + 2
-            or y_history.shape[: len(batch_shape)] != batch_shape
-            or y_history.shape[len(batch_shape)] != T
-        ):
-            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
-
-        b_flat = prod(batch_shape) if batch_shape else 1
-        dim_y = prod(y_history.shape[len(batch_shape) + 1 :])
-        y_flat = y_history.reshape(b_flat, T, dim_y)
-        design_flat = design_history.reshape(b_flat, T, self.dim_design)
-
-        if self.normalize_design_history:
-            target_low, target_high = self.design_history_bounds
-            design_flat = affine_rescale(
-                design_flat,
-                self.design_low,
-                self.design_high,
-                target_low,
-                target_high,
-            )
-        if self._normalize_outcomes:
-            y_flat = affine_rescale(
-                y_flat, self.outcome_low, self.outcome_high, 0.0, 1.0
-            )
-
-        mask_flat = None
-        if mask is not None:
-            mask = torch.as_tensor(mask, device=device)
-            expected_mask_shape = (*batch_shape, T)
-            if mask.shape != expected_mask_shape:
-                raise ValueError(
-                    "mask must have shape "
-                    f"[*batch_shape, T]; expected {expected_mask_shape}."
-                )
-            mask_flat = mask.reshape(b_flat, T)
-
-        return batch_shape, y_flat, design_flat, mask_flat
 
     def _validate_actor_params(
         self, mean: Tensor, log_std: Tensor, *, batch_size: int
@@ -608,13 +562,15 @@ class CategoricalPolicyNet(StochasticDesignNet):
             Most probable designs with shape
             ``[*batch_shape, *event_shape_design]``.
         """
-        batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
+        history = self._prepare_histories(
             y_history, design_history, mask=mask
         )
-        logits = self._validated_logits(y_flat, design_flat, mask_flat)
+        logits = self._validated_logits(
+            history.y_flat, history.design_flat, history.mask_flat
+        )
         design_index = logits.argmax(dim=-1)
         return self.design_values[design_index].reshape(
-            *batch_shape, *self.event_shape_design
+            *history.batch_shape, *self.event_shape_design
         )
 
     def propose(
@@ -641,24 +597,26 @@ class CategoricalPolicyNet(StochasticDesignNet):
             with the selected index in ``info["design_index"]``.
         """
         del reparameterize_policy
-        batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
+        history = self._prepare_histories(
             y_history, design_history, mask=mask
         )
-        logits = self._validated_logits(y_flat, design_flat, mask_flat)
+        logits = self._validated_logits(
+            history.y_flat, history.design_flat, history.mask_flat
+        )
         distribution = Categorical(logits=logits)
         design_index = distribution.sample()
         deterministic_design_index = logits.argmax(dim=-1)
         design = self.design_values[design_index].reshape(
-            *batch_shape, *self.event_shape_design
+            *history.batch_shape, *self.event_shape_design
         )
         deterministic_design = self.design_values[deterministic_design_index].reshape(
-            *batch_shape, *self.event_shape_design
+            *history.batch_shape, *self.event_shape_design
         )
         return DesignProposal(
             raw_design=design,
-            log_prob=distribution.log_prob(design_index).reshape(batch_shape),
+            log_prob=distribution.log_prob(design_index).reshape(history.batch_shape),
             deterministic_raw_design=deterministic_design,
-            info={"design_index": design_index.reshape(batch_shape)},
+            info={"design_index": design_index.reshape(history.batch_shape)},
         )
 
     def _validated_logits(
@@ -689,10 +647,10 @@ class CategoricalPolicyNet(StochasticDesignNet):
         Returns:
             Logits with shape ``[batch, n_designs]`` after flattening batches.
         """
-        _, y_flat, design_flat, mask_flat = self._prepare_histories(
+        history = self._prepare_histories(
             y_history, design_history, mask=mask
         )
-        return self.actor(y_flat, design_flat, mask=mask_flat)
+        return self.actor(history.y_flat, history.design_flat, mask=history.mask_flat)
 
     def logits_from_observation(self, obs) -> Tensor:
         """Returns categorical logits for a ``History`` observation.
@@ -717,70 +675,3 @@ class CategoricalPolicyNet(StochasticDesignNet):
         """
         log_probs = torch.log_softmax(self.logits_from_observation(obs), dim=-1)
         return log_probs.exp(), log_probs
-
-    def _prepare_histories(
-        self, y_history, design_history, *, mask: Tensor | None = None
-    ) -> tuple[torch.Size, Tensor, Tensor, Tensor | None]:
-        """Validates, flattens, and optionally normalizes histories.
-
-        Args:
-            y_history: Outcome history with shape
-                ``[*batch_shape, T, *event_shape_y]``.
-            design_history: Design history with shape
-                ``[*batch_shape, T, *event_shape_design]``.
-            mask: Optional padding mask with shape ``[*batch_shape, T]``.
-
-        Returns:
-            The batch shape, flattened outcome history, flattened design
-            history, and flattened mask.
-
-        Raises:
-            ValueError: If a history or mask has an incompatible shape.
-        """
-        dtype = self.design_low.dtype
-        device = self.design_low.device
-        y_history = torch.as_tensor(y_history, device=device, dtype=dtype)
-        design_history = torch.as_tensor(design_history, device=device, dtype=dtype)
-        event_ndim = len(self.event_shape_design)
-        t_dim = design_history.ndim - event_ndim - 1
-        if t_dim < 0:
-            raise ValueError(
-                "design_history must have shape [*batch_shape, T, *event_shape]."
-            )
-        batch_shape = torch.Size(design_history.shape[:t_dim])
-        history_length = design_history.shape[t_dim]
-        if design_history.shape[-(event_ndim + 1) :] != (
-            history_length,
-            *self.event_shape_design,
-        ):
-            raise ValueError("design_history has the wrong shape.")
-        if (
-            y_history.ndim < len(batch_shape) + 2
-            or y_history.shape[: len(batch_shape)] != batch_shape
-            or y_history.shape[len(batch_shape)] != history_length
-        ):
-            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
-        batch_size = prod(batch_shape) if batch_shape else 1
-        dim_y = prod(y_history.shape[len(batch_shape) + 1 :])
-        y_flat = y_history.reshape(batch_size, history_length, dim_y)
-        design_flat = design_history.reshape(
-            batch_size, history_length, self.dim_design
-        )
-        if self.normalize_design_history:
-            low, high = self.design_history_bounds
-            width = self.design_high - self.design_low
-            normalized = low + (design_flat - self.design_low) * (high - low) / width
-            design_flat = torch.where(
-                width == 0, torch.zeros_like(normalized), normalized
-            )
-        if self._normalize_outcomes:
-            y_flat = affine_rescale(
-                y_flat, self.outcome_low, self.outcome_high, 0.0, 1.0
-            )
-        mask_flat = None
-        if mask is not None:
-            mask = torch.as_tensor(mask, device=device)
-            if mask.shape != (*batch_shape, history_length):
-                raise ValueError("mask must have shape [*batch_shape, T].")
-            mask_flat = mask.reshape(batch_size, history_length)
-        return batch_shape, y_flat, design_flat, mask_flat

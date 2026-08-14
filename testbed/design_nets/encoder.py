@@ -6,6 +6,7 @@ from math import prod
 import torch
 from torch import nn
 
+from testbed.design_nets.history import prepare_history
 from testbed.design_nets.modules import MLP, TransformerEncoderBlock
 
 
@@ -26,7 +27,12 @@ class HistoryEncoder(nn.Module, ABC):
     Flattens x, y if they have multi-dimensional event shapes.
     """
 
-    def __init__(self, event_shape_y, event_shape_design, dim_emb):
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        dim_emb,
+    ):
         """Initialize the encoder.
 
         Args:
@@ -45,7 +51,7 @@ class HistoryEncoder(nn.Module, ABC):
         self.dim_in = self.dim_y + self.dim_design
         self.dim_emb = int(dim_emb)
 
-        # Embedding for T=0; initalized to zero but learnable
+        # Embedding for an empty or fully masked history; initialized to zero.
         self.null_enc = nn.Parameter(torch.zeros(self.dim_emb))
 
     @property
@@ -64,15 +70,58 @@ class HistoryEncoder(nn.Module, ABC):
 
     def forward(self, y_history, design_history, mask=None):
         """Runs the forward pass of the encoder."""
-        b, T = y_history.shape[0], y_history.shape[1]
+        reference = self.null_enc
+        prepared = prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=self.event_shape_y,
+            event_shape_design=self.event_shape_design,
+            mask=mask,
+            device=reference.device,
+            dtype=reference.dtype,
+        )
+        return self._encode_prepared(
+            prepared.y_flat,
+            prepared.design_flat,
+            prepared.mask_flat,
+            prepared.batch_shape,
+        )
+
+    def encode_flat(self, y_history, design_history, mask=None):
+        """Encode histories already flattened to ``[batch, T, dim_event]``.
+
+        Policy actors use this method after shared policy preparation. External
+        callers should use :meth:`forward`, which accepts arbitrary event and
+        batch shapes.
+        """
+        reference = self.null_enc
+        prepared = prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=(self.dim_y,),
+            event_shape_design=(self.dim_design,),
+            mask=mask,
+            device=reference.device,
+            dtype=reference.dtype,
+        )
+        return self._encode_prepared(
+            prepared.y_flat,
+            prepared.design_flat,
+            prepared.mask_flat,
+            prepared.batch_shape,
+        )
+
+    def _encode_prepared(self, y_flat, design_flat, mask, batch_shape):
+        """Encode validated, flattened histories and restore ``batch_shape``."""
         tokens = torch.cat(
             [
-                y_history.reshape(b, T, self.dim_y),
-                design_history.reshape(b, T, self.dim_design),
+                y_flat,
+                design_flat,
             ],
             dim=-1,
         )  # [b, T, dim_in]
-        return self.encode_tokens(tokens, mask)
+        encoding = self.encode_tokens(tokens, mask)
+        return encoding.reshape(*batch_shape, self.dim_emb)
 
 
 class AttentiveEncoder(HistoryEncoder):
@@ -92,7 +141,11 @@ class AttentiveEncoder(HistoryEncoder):
         use_type_embedding: bool = False,
     ):
         """Initializes."""
-        super().__init__(event_shape_y, event_shape_design, dim_emb)
+        super().__init__(
+            event_shape_y,
+            event_shape_design,
+            dim_emb,
+        )
 
         # Learnable query, used as the readout
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim_emb))
@@ -182,9 +235,19 @@ class AttentiveEncoder(HistoryEncoder):
 class DeepSetEncoder(HistoryEncoder):
     """Per-step MLP + masked sum pooling (DeepSets style). Permutation invariant."""
 
-    def __init__(self, event_shape_y, event_shape_design, dim_h=(128, 128), dim_emb=64):
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        dim_h=(128, 128),
+        dim_emb=64,
+    ):
         """dim_h: per-layer hidden widths as a list; an int is a single layer."""
-        super().__init__(event_shape_y, event_shape_design, dim_emb)
+        super().__init__(
+            event_shape_y,
+            event_shape_design,
+            dim_emb,
+        )
 
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         layer_widths = [self.dim_in] + hidden_widths + [dim_emb]
