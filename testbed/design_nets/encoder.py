@@ -6,7 +6,7 @@ from math import prod
 import torch
 from torch import nn
 
-from testbed.design_nets.history import prepare_history
+from testbed.design_nets.history import PreparedHistory, prepare_history
 from testbed.design_nets.modules import MLP, TransformerEncoderBlock
 
 
@@ -70,22 +70,14 @@ class HistoryEncoder(nn.Module, ABC):
 
     def forward(self, y_history, design_history, mask=None):
         """Runs the forward pass of the encoder."""
-        reference = self.null_enc
-        prepared = prepare_history(
+        prepared = self._prepare_history(
             y_history,
             design_history,
             event_shape_y=self.event_shape_y,
             event_shape_design=self.event_shape_design,
             mask=mask,
-            device=reference.device,
-            dtype=reference.dtype,
         )
-        return self._encode_prepared(
-            prepared.y_flat,
-            prepared.design_flat,
-            prepared.mask_flat,
-            prepared.batch_shape,
-        )
+        return self._encode_prepared(prepared)
 
     def encode_flat(self, y_history, design_history, mask=None):
         """Encode histories already flattened to ``[batch, T, dim_event]``.
@@ -94,34 +86,47 @@ class HistoryEncoder(nn.Module, ABC):
         callers should use :meth:`forward`, which accepts arbitrary event and
         batch shapes.
         """
-        reference = self.null_enc
-        prepared = prepare_history(
+        prepared = self._prepare_history(
             y_history,
             design_history,
             event_shape_y=(self.dim_y,),
             event_shape_design=(self.dim_design,),
             mask=mask,
+        )
+        return self._encode_prepared(prepared)
+
+    def _prepare_history(
+        self,
+        y_history,
+        design_history,
+        *,
+        event_shape_y,
+        event_shape_design,
+        mask,
+    ) -> PreparedHistory:
+        """Validates and flattens a history in this encoder's dtype and device."""
+        reference = self.null_enc
+        return prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
+            mask=mask,
             device=reference.device,
             dtype=reference.dtype,
         )
-        return self._encode_prepared(
-            prepared.y_flat,
-            prepared.design_flat,
-            prepared.mask_flat,
-            prepared.batch_shape,
-        )
 
-    def _encode_prepared(self, y_flat, design_flat, mask, batch_shape):
+    def _encode_prepared(self, history: PreparedHistory):
         """Encode validated, flattened histories and restore ``batch_shape``."""
         tokens = torch.cat(
             [
-                y_flat,
-                design_flat,
+                history.y_flat,
+                history.design_flat,
             ],
             dim=-1,
         )  # [b, T, dim_in]
-        encoding = self.encode_tokens(tokens, mask)
-        return encoding.reshape(*batch_shape, self.dim_emb)
+        encoding = self.encode_tokens(tokens, history.mask_flat)
+        return encoding.reshape(*history.batch_shape, self.dim_emb)
 
 
 class AttentiveEncoder(HistoryEncoder):

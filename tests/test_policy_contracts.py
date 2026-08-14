@@ -2,7 +2,6 @@
 
 import pytest
 import torch
-from torch import nn
 
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets import (
@@ -16,37 +15,6 @@ from testbed.design_nets import (
 
 EVENT_SHAPE = (2, 2)
 BATCH_SHAPE = (2, 3)
-
-
-class RecordingGaussianActor(nn.Module):
-    """Minimal custom actor used to assert the flattened actor contract."""
-
-    def __init__(self, dim_design):
-        super().__init__()
-        self.dim_design = dim_design
-        self.last_inputs = None
-        self.register_buffer("mean", torch.arange(dim_design, dtype=torch.float32))
-
-    def forward(self, y_history, design_history, *, mask=None):
-        self.last_inputs = (y_history, design_history, mask)
-        return self.mean.expand(design_history.shape[0], -1), torch.zeros_like(
-            design_history[:, 0]
-        )
-
-
-class RecordingCategoricalActor(nn.Module):
-    """Minimal custom categorical actor with no implementation metadata."""
-
-    def __init__(self, n_designs):
-        super().__init__()
-        self.n_designs = n_designs
-        self.last_inputs = None
-
-    def forward(self, y_history, design_history, *, mask=None):
-        self.last_inputs = (y_history, design_history, mask)
-        return torch.arange(
-            self.n_designs, device=design_history.device, dtype=design_history.dtype
-        ).expand(design_history.shape[0], -1)
 
 
 def make_histories(batch_shape=BATCH_SHAPE, history_length=4):

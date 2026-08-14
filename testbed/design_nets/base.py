@@ -32,10 +32,6 @@ class DesignNet(torch.nn.Module, ABC):
     produces_policy_log_probs = False
     supports_reparameterized_proposals = False
 
-    def __init__(self):
-        """Initializes the network."""
-        super().__init__()
-
     @property
     def device(self) -> torch.device:
         """Returns the network device."""
