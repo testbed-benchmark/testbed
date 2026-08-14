@@ -5,7 +5,7 @@ from math import prod
 import torch
 from torch import nn
 
-from testbed.design_nets.base_design_net import DesignNet
+from testbed.design_nets.base import DesignNet
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP
 

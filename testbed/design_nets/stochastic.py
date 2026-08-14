@@ -8,7 +8,7 @@ from torch import Tensor, nn
 from torch.distributions import Categorical, Normal
 
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
-from testbed.design_nets.base_design_net import DesignNet, DesignProposal
+from testbed.design_nets.base import DesignNet, DesignProposal
 from testbed.design_nets.encoder import DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.history import PreparedHistory, prepare_history
 from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
