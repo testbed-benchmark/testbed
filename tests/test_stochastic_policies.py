@@ -7,7 +7,7 @@ from testbed.design_nets import (
     DeepSetEncoder,
     DeepSetGaussianActor,
     DesignProposal,
-    TanhGaussianPolicyNet,
+    GaussianPolicyNet,
 )
 from testbed.envs import BEDEnv, ZeroReward
 from testbed.tasks import LocationFinding
@@ -18,7 +18,7 @@ def make_space():
 
 
 def make_policy():
-    return TanhGaussianPolicyNet(make_space())
+    return GaussianPolicyNet(make_space(), event_shape_y=(1,))
 
 
 def set_actor_output(policy, mean, log_std):
@@ -128,7 +128,7 @@ def test_tanh_gaussian_policy_transformed_designs_follow_box_scale_and_shift():
     space = BoxDesignSpace(
         torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,)
     )
-    policy = TanhGaussianPolicyNet(space)
+    policy = GaussianPolicyNet(space, event_shape_y=(1,))
     mean = torch.tensor([0.25, -0.5])
     log_std = torch.tensor([-0.7, -0.1])
     set_actor_output(policy, mean, log_std)
@@ -152,14 +152,14 @@ def test_tanh_gaussian_policy_transformed_designs_follow_box_scale_and_shift():
 
 
 def test_tanh_gaussian_policy_normalizes_physical_histories_for_actor():
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
+    actor = DeepSetGaussianActor(event_shape_y=(1,), event_shape_design=(2,))
     encoder_inputs = {}
     actor.encoder.encoder_net.register_forward_pre_hook(
         lambda _module, args: encoder_inputs.setdefault(
             "value", args[0].detach().clone()
         )
     )
-    policy = TanhGaussianPolicyNet(
+    policy = GaussianPolicyNet(
         BoxDesignSpace(-4.0, 4.0, event_shape=(2,)),
         actor=actor,
         normalize_design_history=True,
@@ -235,7 +235,7 @@ def test_tanh_gaussian_forward_forwards_mask():
 
 def test_categorical_forward_forwards_mask():
     space = FiniteDesignSpace(torch.tensor([[-1.0], [1.0]]))
-    policy = CategoricalPolicyNet(space)
+    policy = CategoricalPolicyNet(space, event_shape_y=(1,))
 
     with pytest.raises(ValueError, match="mask must have shape"):
         policy(
@@ -255,7 +255,7 @@ def test_tanh_gaussian_policy_accepts_history_tensors_from_observation():
         reward_fn=ZeroReward(),
         batch_shape=(4,),
     )
-    policy = TanhGaussianPolicyNet(space)
+    policy = GaussianPolicyNet(space, event_shape_y=task.event_shape_y)
 
     obs, _ = env.reset(seed=0)
     proposal0 = policy.propose(obs.outcomes, obs.designs, mask=obs.mask)
@@ -313,9 +313,48 @@ def test_tanh_gaussian_policy_uses_deepset_actor_by_default():
     assert not hasattr(policy, "log_std_head")
 
 
+@pytest.mark.parametrize(
+    ("policy_cls", "design_space"),
+    [
+        (GaussianPolicyNet, BoxDesignSpace(-1.0, 1.0, event_shape=(2, 2))),
+        (
+            CategoricalPolicyNet,
+            FiniteDesignSpace(torch.arange(12, dtype=torch.float32).reshape(3, 2, 2)),
+        ),
+    ],
+)
+def test_default_stochastic_actors_support_multidimensional_outcome_events(
+    policy_cls, design_space
+):
+    event_shape_y = (2, 3)
+    policy = policy_cls(design_space, event_shape_y=event_shape_y)
+    outcomes = torch.randn(4, 5, *event_shape_y)
+    designs = torch.randn(4, 5, 2, 2)
+
+    proposal = policy.propose(outcomes, designs)
+
+    assert policy.actor.event_shape_y == torch.Size(event_shape_y)
+    assert policy.actor.event_shape_design == torch.Size((2, 2))
+    assert policy.actor.dim_y == 6
+    assert policy.actor.dim_design == 4
+    assert proposal.raw_design.shape == (4, 2, 2)
+
+
+@pytest.mark.parametrize(
+    ("policy_cls", "design_space"),
+    [
+        (GaussianPolicyNet, BoxDesignSpace(-1.0, 1.0, event_shape=(2,))),
+        (CategoricalPolicyNet, FiniteDesignSpace(torch.tensor([[0.0], [1.0]]))),
+    ],
+)
+def test_default_stochastic_actor_requires_outcome_event_shape(policy_cls, design_space):
+    with pytest.raises(ValueError, match="event_shape_y is required"):
+        policy_cls(design_space)
+
+
 def test_stochastic_policies_accept_shared_history_encoders():
     gaussian_encoder = DeepSetEncoder((1,), (2,), dim_emb=5)
-    gaussian_policy = TanhGaussianPolicyNet(make_space(), encoder=gaussian_encoder)
+    gaussian_policy = GaussianPolicyNet(make_space(), encoder=gaussian_encoder)
 
     assert gaussian_policy.actor.encoder is gaussian_encoder
     gaussian_raw = gaussian_policy(torch.empty(3, 0, 1), torch.empty(3, 0, 2))
@@ -334,7 +373,9 @@ def test_stochastic_policies_accept_shared_history_encoders():
 
 
 def test_deepset_gaussian_actor_uses_shared_null_encoding_for_empty_histories():
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2, dim_emb=5)
+    actor = DeepSetGaussianActor(
+        event_shape_y=(1,), event_shape_design=(2,), dim_emb=5
+    )
     with torch.no_grad():
         actor.encoder.null_enc.fill_(0.25)
 
@@ -362,7 +403,7 @@ def test_tanh_gaussian_policy_rejects_invalid_mask_shape():
 
 
 def test_tanh_gaussian_policy_rejects_invalid_actor_output_shape():
-    policy = TanhGaussianPolicyNet(make_space(), actor=BadShapeGaussianActor())
+    policy = GaussianPolicyNet(make_space(), actor=BadShapeGaussianActor())
 
     with pytest.raises(ValueError, match="actor mean"):
         policy.propose(torch.randn(2, 3, 1), torch.randn(2, 3, 2))

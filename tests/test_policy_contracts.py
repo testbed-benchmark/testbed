@@ -11,7 +11,7 @@ from testbed.design_nets import (
     DeepSetEncoder,
     DeepSetPolicyNet,
     GaussianHead,
-    TanhGaussianPolicyNet,
+    GaussianPolicyNet,
 )
 
 EVENT_SHAPE = (2, 2)
@@ -35,17 +35,17 @@ class RecordingGaussianActor(nn.Module):
 
 
 class RecordingCategoricalActor(nn.Module):
-    """Minimal custom categorical actor with the public actor-head metadata."""
+    """Minimal custom categorical actor with no implementation metadata."""
 
     def __init__(self, n_designs):
         super().__init__()
-        self.head = CategoricalHead(dim_emb=1, n_designs=n_designs, dim_h=1)
+        self.n_designs = n_designs
         self.last_inputs = None
 
     def forward(self, y_history, design_history, *, mask=None):
         self.last_inputs = (y_history, design_history, mask)
         return torch.arange(
-            self.head.n_designs, device=design_history.device, dtype=design_history.dtype
+            self.n_designs, device=design_history.device, dtype=design_history.dtype
         ).expand(design_history.shape[0], -1)
 
 
@@ -70,9 +70,9 @@ def make_deepset_policy():
 def make_gaussian_policy(actor=None):
     space = BoxDesignSpace(-1.0, 1.0, event_shape=EVENT_SHAPE)
     if actor is not None:
-        return TanhGaussianPolicyNet(space, actor=actor)
+        return GaussianPolicyNet(space, actor=actor)
     encoder = DeepSetEncoder(EVENT_SHAPE, EVENT_SHAPE, dim_emb=7, dim_h=8)
-    return TanhGaussianPolicyNet(space, encoder=encoder, head=GaussianHead(7, 4, dim_h=8))
+    return GaussianPolicyNet(space, encoder=encoder, head=GaussianHead(7, 4, dim_h=8))
 
 
 def make_categorical_policy(actor=None):
@@ -202,6 +202,8 @@ def test_custom_actors_receive_flattened_histories_and_propagated_dtype(make_pol
     assert design_flat.shape == (BATCH_SHAPE[0] * BATCH_SHAPE[1], 4, 4)
     assert y_flat.dtype == design_flat.dtype == torch.float64
     assert mask_flat.shape == (BATCH_SHAPE[0] * BATCH_SHAPE[1], 4)
+    if isinstance(actor, RecordingCategoricalActor):
+        assert not hasattr(policy.actor, "head")
 
 
 @pytest.mark.parametrize("make_policy", [make_deepset_policy, make_gaussian_policy, make_categorical_policy])

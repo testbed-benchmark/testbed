@@ -15,9 +15,9 @@ from testbed.design_nets import (
     DeepSetCategoricalActor,
     DeepSetEncoder,
     DeepSetGaussianActor,
+    GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
-    TanhGaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner, build_policy_designer
 from testbed.envs.history import History
@@ -43,7 +43,9 @@ SoftQNetwork = RLBOEDQNetwork
 
 
 def test_actor_initializes_requested_standard_deviation():
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2, init_std=0.4)
+    actor = DeepSetGaussianActor(
+        event_shape_y=(1,), event_shape_design=(2,), init_std=0.4
+    )
     y_history = torch.randn(3, 4, 1)
     design_history = torch.randn(3, 4, 2)
 
@@ -57,7 +59,9 @@ def test_actor_initializes_requested_standard_deviation():
 @pytest.mark.parametrize("init_std", [0.0, -0.1, 1.0, 1e-10])
 def test_actor_rejects_initial_std_outside_log_std_bounds(init_std):
     with pytest.raises(ValueError, match="init_std"):
-        DeepSetGaussianActor(dim_y=1, dim_design=2, init_std=init_std)
+        DeepSetGaussianActor(
+            event_shape_y=(1,), event_shape_design=(2,), init_std=init_std
+        )
 
 
 def test_soft_q_network_is_permutation_invariant():
@@ -201,8 +205,8 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
 
 def test_gaussian_policy_maps_physical_history_to_raw_proposal():
     design_space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
-    policy = TanhGaussianPolicyNet(
+    actor = DeepSetGaussianActor(event_shape_y=(1,), event_shape_design=(2,))
+    policy = GaussianPolicyNet(
         design_space,
         actor=actor,
         normalize_design_history=True,
@@ -225,7 +229,9 @@ def test_gaussian_policy_maps_physical_history_to_raw_proposal():
 
 def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
     design_space = FiniteDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
-    actor = DeepSetCategoricalActor(dim_y=1, dim_design=1, n_designs=3)
+    actor = DeepSetCategoricalActor(
+        event_shape_y=(1,), event_shape_design=(1,), n_designs=3
+    )
     policy = CategoricalPolicyNet(
         design_space,
         actor=actor,
@@ -627,7 +633,7 @@ def test_trainer_produces_deployable_designer(tmp_path):
     trainer.train()
 
     assert isinstance(trainer.designer, PolicyDesigner)
-    assert isinstance(trainer.designer.design_net, TanhGaussianPolicyNet)
+    assert isinstance(trainer.designer.design_net, GaussianPolicyNet)
     assert trainer.designer.requires_policy_log_probs
     assert trainer.designer.design_net.design_history_bounds == (0.0, 1.0)
 

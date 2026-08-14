@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from testbed.core.design_spaces import BoxDesignSpace
-from testbed.design_nets import DeepSetPolicyNet, TanhGaussianPolicyNet
+from testbed.design_nets import DeepSetPolicyNet, GaussianPolicyNet
 from testbed.design_objectives import SPCE, Reinforce, SPCEReinforce
 from testbed.design_objectives.reinforce import leave_one_out_baseline
 from testbed.designers import Rollout, build_policy_designer
@@ -42,7 +42,7 @@ def _make_design_net(task):
 def _make_stochastic_net(task):
     # Box over valid (D_1, R_0); centered near k * D_1 ~ 1 so it is non-saturating.
     space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
-    return TanhGaussianPolicyNet(space)
+    return GaussianPolicyNet(space, event_shape_y=task.event_shape_y)
 
 
 def _make_rollout(task, policy_net, b=8, T=3, **kwargs):

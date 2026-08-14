@@ -1,6 +1,7 @@
 """Stochastic policy networks for reinforcement learning BED agents."""
 
 from math import atanh, log
+from typing import Sequence
 
 import torch
 from torch import Tensor, nn
@@ -178,8 +179,8 @@ class DeepSetGaussianActor(GaussianPolicyActor):
     def __init__(
         self,
         *,
-        dim_design: int,
-        dim_y: int = 1,
+        event_shape_y: Sequence[int],
+        event_shape_design: Sequence[int],
         dim_h=(128, 128),
         dim_emb: int = 64,
         log_std_min: float = -20.0,
@@ -189,30 +190,35 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         """Initializes the actor network.
 
         Args:
-            dim_y: Flattened outcome dimension.
-            dim_design: Flattened design dimension.
+            event_shape_y: Shape of one outcome event.
+            event_shape_design: Shape of one design event.
             dim_h: Per-layer hidden widths as a list; an int is a single layer.
             dim_emb: History summary dimension.
             log_std_min: Lower bound for Gaussian log standard deviations.
             log_std_max: Upper bound for Gaussian log standard deviations.
             init_std: Initial unsquashed Gaussian standard deviation.
         """
-        self.dim_y = int(dim_y)
+        event_shape_y = torch.Size(event_shape_y)
+        event_shape_design = torch.Size(event_shape_design)
         encoder = DeepSetEncoder(
-            (self.dim_y,),
-            (int(dim_design),),
+            event_shape_y,
+            event_shape_design,
             dim_h=dim_h,
             dim_emb=dim_emb,
         )
         head = GaussianHead(
             encoder.dim_emb,
-            dim_design,
+            event_shape_design.numel(),
             dim_h=dim_h,
             log_std_min=log_std_min,
             log_std_max=log_std_max,
             init_std=init_std,
         )
         super().__init__(encoder, head)
+        self.event_shape_y = event_shape_y
+        self.event_shape_design = event_shape_design
+        self.dim_y = event_shape_y.numel()
+        self.dim_design = event_shape_design.numel()
 
 
 class CategoricalPolicyActor(nn.Module):
@@ -237,6 +243,8 @@ class DeepSetCategoricalActor(CategoricalPolicyActor):
     """DeepSets actor that returns categorical design logits.
 
     Attributes:
+        event_shape_design: Shape of one design event.
+        event_shape_y: Shape of one outcome event.
         dim_design: Flattened design dimension.
         dim_y: Flattened outcome dimension.
         n_designs: Number of categorical designs.
@@ -249,34 +257,38 @@ class DeepSetCategoricalActor(CategoricalPolicyActor):
     def __init__(
         self,
         *,
-        dim_design: int,
+        event_shape_y: Sequence[int],
+        event_shape_design: Sequence[int],
         n_designs: int,
-        dim_y: int = 1,
         dim_h=(128, 128),
         dim_emb: int = 64,
     ):
         """Initializes the actor.
 
         Args:
-            dim_design: Flattened design dimension.
+            event_shape_y: Shape of one outcome event.
+            event_shape_design: Shape of one design event.
             n_designs: Number of categorical designs.
-            dim_y: Flattened outcome dimension.
             dim_h: Per-layer hidden widths as a list; an int is a single layer.
             dim_emb: History summary dimension.
         """
-        self.dim_design = int(dim_design)
-        self.dim_y = int(dim_y)
+        event_shape_y = torch.Size(event_shape_y)
+        event_shape_design = torch.Size(event_shape_design)
         encoder = DeepSetEncoder(
-            (self.dim_y,),
-            (self.dim_design,),
+            event_shape_y,
+            event_shape_design,
             dim_h=dim_h,
             dim_emb=dim_emb,
         )
         head = CategoricalHead(encoder.dim_emb, n_designs, dim_h=dim_h)
         super().__init__(encoder, head)
+        self.event_shape_y = event_shape_y
+        self.event_shape_design = event_shape_design
+        self.dim_y = event_shape_y.numel()
+        self.dim_design = event_shape_design.numel()
 
 
-class TanhGaussianPolicyNet(StochasticDesignNet):
+class GaussianPolicyNet(StochasticDesignNet):
     """Gaussian policy for continuous box design spaces.
 
     The network proposes values in unconstrained Gaussian coordinates. The
@@ -288,10 +300,11 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
     def __init__(
         self,
         design_space: BoxDesignSpace,
-        actor: GaussianPolicyActor | None = None,
+        actor: nn.Module | None = None,
         *,
         encoder: HistoryEncoder | None = None,
         head: GaussianHead | None = None,
+        event_shape_y: Sequence[int] | None = None,
         normalize_design_history: bool = False,
         design_history_bounds: tuple[float, float] = (-1.0, 1.0),
         outcome_bounds: tuple[float, float] | None = None,
@@ -307,6 +320,8 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 actor. Cannot be combined with ``actor``.
             head: Optional Gaussian policy head paired with ``encoder``. If
                 omitted, a default head is created for the encoder.
+            event_shape_y: Shape of one outcome event. Required when creating
+                the default actor without an explicit ``encoder``.
             normalize_design_history: If True, affinely map physical design
                 histories to `design_history_bounds` before actor evaluation.
             design_history_bounds: Target bounds for normalized design history.
@@ -337,13 +352,20 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         elif head is not None:
             raise ValueError("head requires an encoder.")
         else:
-            self.actor = DeepSetGaussianActor(dim_design=self.dim_design)
+            if event_shape_y is None:
+                raise ValueError(
+                    "event_shape_y is required when creating the default actor."
+                )
+            self.actor = DeepSetGaussianActor(
+                event_shape_y=event_shape_y,
+                event_shape_design=self.event_shape_design,
+            )
 
         low = design_space.low.reshape(self.dim_design)
         high = design_space.high.reshape(self.dim_design)
         if torch.any(low >= high):
             raise ValueError(
-                "TanhGaussianPolicyNet requires finite-width design bounds."
+                "GaussianPolicyNet requires finite-width design bounds."
             )
         self.register_buffer("design_low", low.clone())
         self.register_buffer("design_high", high.clone())
@@ -475,10 +497,11 @@ class CategoricalPolicyNet(StochasticDesignNet):
     def __init__(
         self,
         design_space: FiniteDesignSpace,
-        actor: CategoricalPolicyActor | None = None,
+        actor: nn.Module | None = None,
         *,
         encoder: HistoryEncoder | None = None,
         head: CategoricalHead | None = None,
+        event_shape_y: Sequence[int] | None = None,
         normalize_design_history: bool = False,
         design_history_bounds: tuple[float, float] = (0.0, 1.0),
         outcome_bounds: tuple[float, float] | None = None,
@@ -492,13 +515,14 @@ class CategoricalPolicyNet(StochasticDesignNet):
                 categorical actor. Cannot be combined with ``actor``.
             head: Optional categorical policy head paired with ``encoder``.
                 If omitted, a default head is created for the encoder.
+            event_shape_y: Shape of one outcome event. Required when creating
+                the default actor without an explicit ``encoder``.
             normalize_design_history: Whether to rescale design histories.
             design_history_bounds: Bounds used when design histories are rescaled.
             outcome_bounds: Optional bounds used to rescale outcomes to [0, 1].
 
         Raises:
-            ValueError: If history or outcome bounds are invalid, or the actor
-                has a different number of actions than ``design_space``.
+            ValueError: If history or outcome bounds are invalid.
         """
         super().__init__()
         self.design_space = design_space
@@ -520,12 +544,15 @@ class CategoricalPolicyNet(StochasticDesignNet):
         elif head is not None:
             raise ValueError("head requires an encoder.")
         else:
+            if event_shape_y is None:
+                raise ValueError(
+                    "event_shape_y is required when creating the default actor."
+                )
             self.actor = DeepSetCategoricalActor(
-                dim_design=self.dim_design,
+                event_shape_y=event_shape_y,
+                event_shape_design=self.event_shape_design,
                 n_designs=design_space.n_designs,
             )
-        if self.actor.head.n_designs != design_space.n_designs:
-            raise ValueError("actor n_designs must match the categorical design space.")
 
         self.register_buffer("design_values", design_space.values.clone())
         values = self.design_values.reshape(design_space.n_designs, self.dim_design)
@@ -650,7 +677,9 @@ class CategoricalPolicyNet(StochasticDesignNet):
         history = self._prepare_histories(
             y_history, design_history, mask=mask
         )
-        return self.actor(history.y_flat, history.design_flat, mask=history.mask_flat)
+        return self._validated_logits(
+            history.y_flat, history.design_flat, history.mask_flat
+        )
 
     def logits_from_observation(self, obs) -> Tensor:
         """Returns categorical logits for a ``History`` observation.

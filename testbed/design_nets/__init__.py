@@ -14,6 +14,6 @@ from .stochastic import (
     DeepSetGaussianActor,
     GaussianHead,
     GaussianPolicyActor,
+    GaussianPolicyNet,
     StochasticDesignNet,
-    TanhGaussianPolicyNet,
 )

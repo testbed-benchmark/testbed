@@ -26,10 +26,10 @@ from testbed.design_nets import (
     CategoricalPolicyNet,
     DeepSetCategoricalActor,
     DeepSetGaussianActor,
+    GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
     StochasticDesignNet,
-    TanhGaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner, build_policy_designer
 from testbed.envs import BEDEnv
@@ -371,16 +371,18 @@ def make_networks(
 ) -> _SACNetworks:
     """Builds the SAC actor, twin critics, target networks, optimizers, and alpha."""
     sac = cfg.sac
-    dim_y = task.event_shape_y.numel()
-    dim_design = task.event_shape_design.numel()
+    event_shape_y = task.event_shape_y
+    event_shape_design = task.event_shape_design
+    dim_y = event_shape_y.numel()
+    dim_design = event_shape_design.numel()
 
     if isinstance(design_space, BoxDesignSpace):
         actor_module = DeepSetGaussianActor(
-            dim_y=dim_y,
-            dim_design=dim_design,
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
             init_std=sac.policy_init_std,
         )
-        actor = TanhGaussianPolicyNet(
+        actor = GaussianPolicyNet(
             design_space,
             actor=actor_module,
             normalize_design_history=True,
@@ -400,8 +402,8 @@ def make_networks(
     else:
         values = design_space.values.reshape(design_space.n_designs, dim_design)
         actor_module = DeepSetCategoricalActor(
-            dim_y=dim_y,
-            dim_design=dim_design,
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
             n_designs=design_space.n_designs,
         )
         actor = CategoricalPolicyNet(

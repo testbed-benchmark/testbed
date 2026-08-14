@@ -7,7 +7,7 @@ from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets import (
     CategoricalPolicyNet,
     DeepSetPolicyNet,
-    TanhGaussianPolicyNet,
+    GaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner, build_policy_designer
 from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
@@ -27,7 +27,7 @@ def _make_policy_net(task):
 
 def _make_stochastic_net():
     space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
-    return TanhGaussianPolicyNet(space)
+    return GaussianPolicyNet(space, event_shape_y=_make_task().event_shape_y)
 
 
 def test_default_transform_designs_matches_task_design_space():
@@ -53,7 +53,9 @@ def test_explicit_design_space_transforms_instead_of_task_default():
     torch.manual_seed(0)
     task = LocationFinding(n_sources=1, dim_theta=2)
     design_space = BoxDesignSpace(low=-2.0, high=3.0, event_shape=(2,))
-    policy_net = TanhGaussianPolicyNet(design_space)
+    policy_net = GaussianPolicyNet(
+        design_space, event_shape_y=task.event_shape_y
+    )
     designer = PolicyDesigner(
         task,
         T=2,
@@ -181,7 +183,9 @@ def test_use_raw_history_false_is_honored_for_a_stochastic_net():
 def test_raw_history_rejected_when_policy_normalizes_physical_history():
     task = _make_task()
     space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
-    policy_net = TanhGaussianPolicyNet(space, normalize_design_history=True)
+    policy_net = GaussianPolicyNet(
+        space, event_shape_y=task.event_shape_y, normalize_design_history=True
+    )
 
     with pytest.raises(ValueError, match="normalizes physical design histories"):
         build_policy_designer(
@@ -195,7 +199,7 @@ def test_raw_history_rejected_when_policy_normalizes_physical_history():
 def test_categorical_policy_net_can_condition_on_design_shaped_raw_history():
     task = _make_task()
     space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
-    net = CategoricalPolicyNet(space)
+    net = CategoricalPolicyNet(space, event_shape_y=task.event_shape_y)
 
     designer = build_policy_designer(task, T=2, design_net=net, use_raw_history=True)
     rollout = designer.rollout(task.sample_prior(3))
@@ -207,7 +211,9 @@ def test_categorical_policy_net_can_condition_on_design_shaped_raw_history():
 def test_categorical_physical_raw_history_can_still_be_normalized():
     task = _make_task()
     space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
-    net = CategoricalPolicyNet(space, normalize_design_history=True)
+    net = CategoricalPolicyNet(
+        space, event_shape_y=task.event_shape_y, normalize_design_history=True
+    )
 
     designer = build_policy_designer(task, T=2, design_net=net, use_raw_history=True)
 
@@ -237,7 +243,7 @@ def test_categorical_policy_still_requires_log_probs_when_reparameterization_req
     designer = PolicyDesigner(
         task,
         T=2,
-        design_net=CategoricalPolicyNet(space),
+        design_net=CategoricalPolicyNet(space, event_shape_y=task.event_shape_y),
         reparameterize_policy=True,
     )
 
