@@ -49,7 +49,11 @@ class StochasticDesignNet(DesignNet):
             )
         if self._normalize_outcomes:
             y_flat = affine_rescale(
-                y_flat, self.outcome_low, self.outcome_high, 0.0, 1.0
+                y_flat,
+                self.outcome_low.reshape(-1),
+                self.outcome_high.reshape(-1),
+                0.0,
+                1.0,
             )
         return PreparedHistory(prepared.batch_shape, y_flat, design_flat, prepared.mask_flat)
 

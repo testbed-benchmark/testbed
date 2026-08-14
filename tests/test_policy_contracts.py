@@ -206,6 +206,45 @@ def test_custom_actors_receive_flattened_histories_and_propagated_dtype(make_pol
         assert not hasattr(policy.actor, "head")
 
 
+@pytest.mark.parametrize(
+    ("make_policy", "actor"),
+    [
+        (make_gaussian_policy, RecordingGaussianActor(4)),
+        (make_categorical_policy, RecordingCategoricalActor(5)),
+    ],
+)
+def test_custom_actors_infer_scalar_outcome_events(make_policy, actor):
+    policy = make_policy(actor=actor)
+    design_history = torch.randn(*BATCH_SHAPE, 4, *EVENT_SHAPE)
+
+    policy(torch.randn(*BATCH_SHAPE, 4), design_history)
+
+    y_flat, _, _ = policy.actor.last_inputs
+    assert y_flat.shape == (BATCH_SHAPE[0] * BATCH_SHAPE[1], 4, 1)
+
+
+def test_gaussian_policy_flattens_multidimensional_outcome_bounds():
+    actor = RecordingGaussianActor(4)
+    policy = make_gaussian_policy(actor=actor)
+    outcome_low = torch.tensor([[0.0, 10.0], [20.0, 30.0]])
+    outcome_high = outcome_low + 10.0
+    policy = GaussianPolicyNet(
+        policy.design_space,
+        actor=actor,
+        outcome_bounds=(outcome_low, outcome_high),
+    )
+    y_history = torch.stack((outcome_low, outcome_high)).reshape(1, 2, 2, 2)
+    design_history = torch.randn(1, 2, *EVENT_SHAPE)
+
+    policy(y_history, design_history)
+
+    y_flat, _, _ = actor.last_inputs
+    torch.testing.assert_close(
+        y_flat,
+        torch.tensor([[[0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0]]]),
+    )
+
+
 @pytest.mark.parametrize("make_policy", [make_deepset_policy, make_gaussian_policy, make_categorical_policy])
 @pytest.mark.parametrize(
     ("y_shape", "design_shape", "mask_shape"),

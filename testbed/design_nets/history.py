@@ -76,7 +76,7 @@ def prepare_history(
 
     if y_event_shape is None:
         y_t_dim = len(batch_shape)
-        if y_history.ndim < y_t_dim + 2:
+        if y_history.ndim < y_t_dim + 1:
             raise ValueError(
                 "y_history must have shape [*batch_shape, T, *event_shape_y]."
             )
