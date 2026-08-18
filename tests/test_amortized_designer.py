@@ -1,24 +1,15 @@
-"""Tests for the amortized policy designers, including the
-transform_designs flags on PolicyDesigner/DeterministicPolicyDesigner/
-StochasticPolicyDesigner/build_policy_designer."""
+"""Tests for the unified amortized PolicyDesigner."""
 
-import warnings
-
-import pytest
 import torch
 
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets import (
     CategoricalPolicyNet,
     DeepSetPolicyNet,
-    TanhGaussianPolicyNet,
+    GaussianPolicyNet,
 )
-from testbed.designers import (
-    DeterministicPolicyDesigner,
-    StochasticPolicyDesigner,
-    build_policy_designer,
-)
-from testbed.tasks import HyperbolicTemporalDiscounting
+from testbed.designers import PolicyDesigner
+from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
 
 
 def _make_task():
@@ -35,14 +26,14 @@ def _make_policy_net(task):
 
 def _make_stochastic_net():
     space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
-    return TanhGaussianPolicyNet(space)
+    return GaussianPolicyNet(space, event_shape_y=_make_task().event_shape_y)
 
 
 def test_default_transform_designs_matches_task_design_space():
     torch.manual_seed(0)
     task = _make_task()
     policy_net = _make_policy_net(task)
-    designer = DeterministicPolicyDesigner(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
 
     assert designer.transform_designs is True
 
@@ -57,6 +48,26 @@ def test_default_transform_designs_matches_task_design_space():
     assert not torch.allclose(raw_design_history, rollout.design_history)
 
 
+def test_explicit_design_space_transforms_instead_of_task_default():
+    torch.manual_seed(0)
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    design_space = BoxDesignSpace(low=-2.0, high=3.0, event_shape=(2,))
+    policy_net = GaussianPolicyNet(design_space, event_shape_y=task.event_shape_y)
+    designer = PolicyDesigner(
+        task,
+        T=2,
+        design_net=policy_net,
+        design_space=design_space,
+    )
+    y_history, design_history = designer.make_empty_history(1)
+
+    design, raw_design, _ = designer.design_from_history(y_history, design_history)
+
+    torch.testing.assert_close(design, design_space.to_design(raw_design))
+    assert not torch.equal(design, task.design_space.to_design(raw_design))
+    assert design_space.contains(design)
+
+
 def test_transform_designs_false_opts_out():
     torch.manual_seed(0)
     task = _make_task()
@@ -66,9 +77,7 @@ def test_transform_designs_false_opts_out():
     # this test is only about the designer-level opt-out.
     task.validate_designs = False
     policy_net = _make_policy_net(task)
-    designer = DeterministicPolicyDesigner(
-        task, T=3, design_net=policy_net, transform_designs=False
-    )
+    designer = PolicyDesigner(task, T=3, design_net=policy_net, transform_designs=False)
 
     theta = task.sample_prior(4)
     rollout = designer.rollout(theta)
@@ -80,111 +89,56 @@ def test_transform_designs_false_opts_out():
     )
 
 
-def test_raw_design_history_is_always_exposed():
-    # The net's raw output is computed either way, so it is always reported.
-    torch.manual_seed(0)
+def test_policy_designer_forwards_transform_designs_to_stochastic():
     task = _make_task()
-    policy_net = _make_policy_net(task)
-    designer = DeterministicPolicyDesigner(task, T=2, design_net=policy_net)
-
-    rollout = designer.rollout(task.sample_prior(3))
-
-    assert "raw_design_history" in rollout.extra
-
-
-def test_build_policy_designer_forwards_transform_designs_to_deterministic():
-    torch.manual_seed(0)
-    task = _make_task()
-    policy_net = _make_policy_net(task)
-    designer = build_policy_designer(
-        task, T=2, design_net=policy_net, transform_designs=False
+    task.validate_designs = False
+    stochastic_net = _make_stochastic_net()
+    designer = PolicyDesigner(
+        task, T=2, design_net=stochastic_net, transform_designs=False
     )
 
-    assert isinstance(designer, DeterministicPolicyDesigner)
-    assert designer.transform_designs is False
-
-
-def test_build_policy_designer_rejects_transform_designs_false_for_stochastic_net():
-    task = _make_task()
-    stochastic_net = _make_stochastic_net()
-
-    try:
-        build_policy_designer(
-            task, T=2, design_net=stochastic_net, transform_designs=False
-        )
-    except TypeError:
-        pass
-    else:
-        raise AssertionError(
-            "expected TypeError for transform_designs=False with a StochasticDesignNet"
-        )
-
-
-def test_build_policy_designer_stochastic_exposes_raw_design():
-    torch.manual_seed(0)
-    task = _make_task()
-    stochastic_net = _make_stochastic_net()
-    designer = build_policy_designer(task, T=2, design_net=stochastic_net)
-
     rollout = designer.rollout(task.sample_prior(3))
 
-    assert "raw_design_history" in rollout.extra
+    torch.testing.assert_close(
+        rollout.design_history, rollout.extra["raw_design_history"]
+    )
+
+
+def test_categorical_policy_physical_proposals_bypass_task_transform():
+    torch.manual_seed(0)
+    task = _make_task()
+    policy_space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
+    policy_net = CategoricalPolicyNet(policy_space, event_shape_y=task.event_shape_y)
+    designer = PolicyDesigner(task, T=2, design_net=policy_net)
+    y_history, design_history = designer.make_empty_history(8)
+
+    design, raw_design, log_prob = designer.design_from_history(
+        y_history, design_history
+    )
+
+    # CategoricalPolicyNet returns an element of its finite physical space;
+    # applying HTDDesignSpace.to_design here would alter both its action and
+    # its categorical log-mass.
+    torch.testing.assert_close(design, raw_design)
+    assert policy_space.contains(design)
+    expected_log_prob = torch.log_softmax(
+        policy_net.logits(y_history, design_history), dim=-1
+    )[torch.arange(design.shape[0]), policy_space.encode(design)]
+    torch.testing.assert_close(log_prob, expected_log_prob)
 
 
 # ============================================================================
-# use_raw_history dispatch
+# design history convention
 # ============================================================================
 
 
-def test_use_raw_history_defaults_per_designer_kind():
-    # Left unset, each branch keeps its own default: the raw history is a
-    # sensible conditioning target for a deterministic net, but a stochastic
-    # net's raw value is an internal pre-squash coordinate.
-    task = _make_task()
-
-    deterministic = build_policy_designer(task, T=2, design_net=_make_policy_net(task))
-    stochastic = build_policy_designer(task, T=2, design_net=_make_stochastic_net())
-
-    assert deterministic.use_raw_history is True
-    assert stochastic.use_raw_history is False
-
-
-def test_use_raw_history_true_is_downgraded_for_a_stochastic_net():
-    task = _make_task()
-    stochastic_net = _make_stochastic_net()
-
-    with pytest.warns(UserWarning, match="use_raw_history=True is not supported"):
-        designer = build_policy_designer(
-            task, T=2, design_net=stochastic_net, use_raw_history=True
-        )
-
-    assert isinstance(designer, StochasticPolicyDesigner)
-    assert designer.use_raw_history is False
-
-
-def test_use_raw_history_does_not_warn_when_not_requested():
-    # The flag defaults to a value the caller never asked for, so building a
-    # stochastic designer the usual way must stay quiet.
-    task = _make_task()
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        build_policy_designer(task, T=2, design_net=_make_stochastic_net())
-        build_policy_designer(
-            task, T=2, design_net=_make_stochastic_net(), use_raw_history=False
-        )
-
-
-def test_categorical_policy_net_never_conditions_on_raw_history():
-    # Its raw_design is a design *index*, not a design, so feeding the raw
-    # history back to the net would hand it the wrong thing entirely.
+def test_categorical_policy_net_can_condition_on_design_shaped_raw_history():
     task = _make_task()
     space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
-    net = CategoricalPolicyNet(space)
+    net = CategoricalPolicyNet(space, event_shape_y=task.event_shape_y)
 
-    with pytest.warns(UserWarning, match="use_raw_history=True is not supported"):
-        designer = build_policy_designer(
-            task, T=2, design_net=net, use_raw_history=True
-        )
+    designer = PolicyDesigner(task, T=2, design_net=net, use_raw_history=True)
+    rollout = designer.rollout(task.sample_prior(3))
 
-    assert designer.use_raw_history is False
+    assert designer.use_raw_history is True
+    assert rollout.extra["raw_design_history"].shape == rollout.design_history.shape

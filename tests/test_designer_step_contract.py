@@ -4,12 +4,13 @@ import pytest
 import torch
 
 from testbed.core.rollout import RolloutState
+from testbed.design_nets import DesignNet, DesignProposal
 from testbed.design_nets.deterministic import DeepSetPolicyNet
 from testbed.designers import (
     Designer,
+    PolicyDesigner,
     RandomDesigner,
     StaticDesigner,
-    build_policy_designer,
 )
 from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
 
@@ -24,10 +25,10 @@ def _policy_designer(task, **kwargs):
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
     )
-    return build_policy_designer(task, T=3, design_net=net, **kwargs)
+    return PolicyDesigner(task, T=3, design_net=net, **kwargs)
 
 
-class _HistorySpy(torch.nn.Module):
+class _HistorySpy(DesignNet):
     """Records the design history each net call receives."""
 
     def __init__(self, inner):
@@ -39,9 +40,20 @@ class _HistorySpy(torch.nn.Module):
     def device(self):
         return self.inner.device
 
-    def forward(self, y_history, design_history):
+    def forward(self, y_history, design_history, *, mask=None):
         self.seen.append(design_history.clone())
-        return self.inner(y_history, design_history)
+        return self.inner(y_history, design_history, mask=mask)
+
+    def propose(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask=None,
+        reparameterize_policy=False,
+    ):
+        del reparameterize_policy
+        return DesignProposal(raw_design=self(y_history, design_history, mask=mask))
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +193,8 @@ def test_step_design_is_a_thin_adapter_over_a_semantic_method():
     via_state = policy._step_design(_step_state(policy, task))
     via_semantic = policy.design_from_history(y_history, design_history)
     assert torch.equal(via_state[0], via_semantic[0])
+    assert torch.equal(via_state[1], via_semantic[1])
+    assert via_state[2] is via_semantic[2] is None
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +203,9 @@ def test_step_design_is_a_thin_adapter_over_a_semantic_method():
 
 
 def test_stochastic_designer_base_class_is_gone():
-    # RandomDesigner and StochasticPolicyDesigner returning a log-prob from
-    # _step_design is all that "stochastic" needs to mean.
-    import testbed.designers as designers
+    # RandomDesigner and PolicyDesigner returning a log-prob from _step_design
+    # is all that "stochastic" needs to mean.
+    from testbed import designers
 
     assert not hasattr(designers, "StochasticDesigner")
     assert isinstance(RandomDesigner(_htd(), T=2), Designer)
@@ -218,7 +232,7 @@ def test_policy_designer_conditions_on_the_requested_history(use_raw_history):
         event_shape_out=task.event_shape_design,
     )
     spy = _HistorySpy(net)
-    designer = build_policy_designer(
+    designer = PolicyDesigner(
         task, T=3, design_net=spy, use_raw_history=use_raw_history
     )
 
@@ -239,7 +253,7 @@ def test_policy_designer_gets_the_constrained_history_at_t0():
         event_shape_out=task.event_shape_design,
     )
     spy = _HistorySpy(net)
-    designer = build_policy_designer(task, T=2, design_net=spy, use_raw_history=True)
+    designer = PolicyDesigner(task, T=2, design_net=spy, use_raw_history=True)
 
     designer.rollout(task.sample_prior(2))
 

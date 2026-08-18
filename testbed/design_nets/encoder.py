@@ -4,8 +4,9 @@ from abc import ABC, abstractmethod
 from math import prod
 
 import torch
-import torch.nn as nn
+from torch import nn
 
+from testbed.design_nets.history import PreparedHistory, prepare_history
 from testbed.design_nets.modules import MLP, TransformerEncoderBlock
 
 
@@ -18,21 +19,33 @@ class HistoryEncoder(nn.Module, ABC):
         ``mask``: ``[b, T]`` or None
         ``encoding``: ``[b, dim_emb]``
 
-    Subclasses implement ``encode_tokens``.
+    Subclasses implement ``encode_tokens``. They may override
+    :meth:`make_tokens` to encode outcomes and designs separately before the
+    sequence encoder.
     T=0 is passed through so each architecture supplies its
     own "null history" representation.
 
-    Concatenates (x, y) before passing to the encoder.
-    Flattens x, y if they have multi-dimensional event shapes.
+    By default, concatenates (x, y) before passing to the encoder. Flattens
+    x, y if they have multi-dimensional event shapes.
     """
 
-    def __init__(self, event_shape_y, event_shape_design, dim_emb):
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        dim_emb,
+        dim_token=None,
+    ):
         """Initialize the encoder.
 
         Args:
             event_shape_y (tuple | torch.Size): Shape of the observation event.
             event_shape_design (tuple | torch.Size): Shape of the design event.
             dim_emb (int): Embedding dimension.
+            dim_token (int | None): Width returned by :meth:`make_tokens` and
+                supplied to :meth:`encode_tokens`. Defaults to the concatenated
+                outcome and design width. A subclass that overrides
+                :meth:`make_tokens` must set this to its output width.
         """
         super().__init__()
 
@@ -43,9 +56,12 @@ class HistoryEncoder(nn.Module, ABC):
         self.dim_design = prod(self.event_shape_design)
 
         self.dim_in = self.dim_y + self.dim_design
+        self.dim_token = self.dim_in if dim_token is None else int(dim_token)
+        if self.dim_token <= 0:
+            raise ValueError("dim_token must be positive.")
         self.dim_emb = int(dim_emb)
 
-        # Embedding for T=0; initalized to zero but learnable
+        # Embedding for an empty or fully masked history; initialized to zero.
         self.null_enc = nn.Parameter(torch.zeros(self.dim_emb))
 
     @property
@@ -55,24 +71,113 @@ class HistoryEncoder(nn.Module, ABC):
 
     @abstractmethod
     def encode_tokens(self, tokens, mask):
-        """[b, T, dim_in] (T may be 0) -> [b, dim_emb]."""
+        """[b, T, dim_token] (T may be 0) -> [b, dim_emb]."""
         ...
 
+    def make_tokens(self, y_flat, design_flat):
+        """Combines flattened outcomes and designs into sequence tokens.
+
+        The default implementation concatenates them. Subclasses can override
+        this method, for example to pass each input through a separate MLP,
+        provided they specify the resulting width with ``dim_token``.
+
+        Args:
+            y_flat: Flattened outcomes with shape ``[batch, T, dim_y]``.
+            design_flat: Flattened designs with shape
+                ``[batch, T, dim_design]``.
+
+        Returns:
+            Tensor: Tokens with shape ``[batch, T, dim_token]``.
+        """
+        return torch.cat([y_flat, design_flat], dim=-1)
+
     def empty_encoding(self, b):
-        """Encoding for the empty history (T=0) case."""
+        """Returns the learned encoding for empty histories.
+
+        Args:
+            b: Flattened batch size.
+
+        Returns:
+            Tensor: Empty-history encodings with shape ``[b, dim_emb]``.
+        """
         return self.null_enc.unsqueeze(0).expand(b, -1)  # [b, dim_emb]
 
     def forward(self, y_history, design_history, mask=None):
-        """Runs the forward pass of the encoder."""
-        b, T = y_history.shape[0], y_history.shape[1]
-        tokens = torch.cat(
-            [
-                y_history.reshape(b, T, self.dim_y),
-                design_history.reshape(b, T, self.dim_design),
-            ],
-            dim=-1,
-        )  # [b, T, dim_in]
-        return self.encode_tokens(tokens, mask)
+        """Encodes histories with arbitrary event and batch shapes.
+
+        Args:
+            y_history: Outcomes shaped ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Designs shaped
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional validity mask shaped ``[*batch_shape, T]``.
+
+        Returns:
+            Tensor: Encodings shaped ``[*batch_shape, dim_emb]``.
+        """
+        prepared = self._prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=self.event_shape_y,
+            event_shape_design=self.event_shape_design,
+            mask=mask,
+        )
+        return self._encode_prepared(prepared)
+
+    def encode_flat(self, y_history, design_history, mask=None):
+        """Encodes histories already flattened to ``[batch, T, dim_event]``.
+
+        Policy actors use this method after shared policy preparation. External
+        callers should use :meth:`forward`, which accepts arbitrary event and
+        batch shapes.
+
+        Args:
+            y_history: Outcomes with shape ``[batch, T, dim_y]``.
+            design_history: Designs with shape ``[batch, T, dim_design]``.
+            mask: Optional validity mask with shape ``[batch, T]``.
+
+        Returns:
+            Tensor: Encodings with shape ``[batch, dim_emb]``.
+        """
+        prepared = self._prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=(self.dim_y,),
+            event_shape_design=(self.dim_design,),
+            mask=mask,
+        )
+        return self._encode_prepared(prepared)
+
+    def _prepare_history(
+        self,
+        y_history,
+        design_history,
+        *,
+        event_shape_y,
+        event_shape_design,
+        mask,
+    ) -> PreparedHistory:
+        """Validates and flattens a history in this encoder's dtype and device."""
+        reference = self.null_enc
+        return prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
+            mask=mask,
+            device=reference.device,
+            dtype=reference.dtype,
+        )
+
+    def _encode_prepared(self, history: PreparedHistory):
+        """Encode validated, flattened histories and restore ``batch_shape``."""
+        tokens = self.make_tokens(history.y_flat, history.design_flat)
+        if tokens.shape != (*history.y_flat.shape[:2], self.dim_token):
+            raise ValueError(
+                "make_tokens must return shape [b, T, dim_token]; "
+                f"got {tuple(tokens.shape)} with dim_token={self.dim_token}."
+            )
+        encoding = self.encode_tokens(tokens, history.mask_flat)
+        return encoding.reshape(*history.batch_shape, self.dim_emb)
 
 
 class AttentiveEncoder(HistoryEncoder):
@@ -82,7 +187,7 @@ class AttentiveEncoder(HistoryEncoder):
         self,
         event_shape_y,
         event_shape_design,
-        dim_h=[64],
+        dim_h=(64,),
         dim_emb=64,
         num_heads=4,
         num_blocks=2,
@@ -90,16 +195,22 @@ class AttentiveEncoder(HistoryEncoder):
         use_time_embedding: bool = True,
         max_T: int = 128,
         use_type_embedding: bool = False,
+        dim_token=None,
     ):
         """Initializes."""
-        super().__init__(event_shape_y, event_shape_design, dim_emb)
+        super().__init__(
+            event_shape_y,
+            event_shape_design,
+            dim_emb,
+            dim_token=dim_token,
+        )
 
         # Learnable query, used as the readout
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim_emb))
 
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         self.input_encoder = MLP(
-            [self.dim_in] + hidden_widths + [dim_emb], activation=nn.GELU
+            [self.dim_token] + hidden_widths + [dim_emb], activation=nn.GELU
         )
 
         # Transformer encoder blocks
@@ -182,12 +293,24 @@ class AttentiveEncoder(HistoryEncoder):
 class DeepSetEncoder(HistoryEncoder):
     """Per-step MLP + masked sum pooling (DeepSets style). Permutation invariant."""
 
-    def __init__(self, event_shape_y, event_shape_design, dim_h=[128, 128], dim_emb=64):
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        dim_h=(128, 128),
+        dim_emb=64,
+        dim_token=None,
+    ):
         """dim_h: per-layer hidden widths as a list; an int is a single layer."""
-        super().__init__(event_shape_y, event_shape_design, dim_emb)
+        super().__init__(
+            event_shape_y,
+            event_shape_design,
+            dim_emb,
+            dim_token=dim_token,
+        )
 
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
-        layer_widths = [self.dim_in] + hidden_widths + [dim_emb]
+        layer_widths = [self.dim_token] + hidden_widths + [dim_emb]
         self.encoder_net = MLP(layer_widths, activation=nn.ReLU)
 
     def encode_tokens(self, tokens, mask=None):

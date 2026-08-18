@@ -235,10 +235,8 @@ class BoxDesignSpace(DesignSpace):
 
     The raw<->design reparametrisation is the tanh squash
     ``design = bias + scale * tanh(raw)``, with ``bias = (high + low) / 2`` and
-    ``scale = (high - low) / 2``. This is the same transform
-    :class:`~testbed.design_nets.stochastic.TanhGaussianPolicyNet` applies
-    internally; that net predates this method and still owns its own copy,
-    because its squash has to enter the sampled log-prob.
+    ``scale = (high - low) / 2``. It also applies the corresponding
+    change-of-variables correction when passed a raw log-density.
 
     Args:
         low (Tensor or float):

@@ -1,22 +1,19 @@
 """Amortized (policy-net-backed) designer abstractions."""
 
-import warnings
 from collections.abc import Sequence
 
 import torch
 
 from ..core.hooks import RolloutHook
-from ..design_nets.stochastic import StochasticDesignNet
 from .base import Designer
 
 
 class PolicyDesigner(Designer):
-    """Common base for designers backed by a trainable policy network.
+    """Designer backed by a trainable design network.
 
-    Construct via build_policy_designer(...), which dispatches to
-    DeterministicPolicyDesigner or StochasticPolicyDesigner based on the
-    policy net's type -- there is no runtime "run this stochastic net
-    deterministically" mode; a net is one or the other.
+    Every design network supplies a raw :class:`DesignProposal`. This class is
+    the single owner of the task design-space transform and any corresponding
+    log-probability correction.
     """
 
     def __init__(
@@ -25,18 +22,28 @@ class PolicyDesigner(Designer):
         T,
         design_net,
         *,
+        design_space=None,
+        reparameterize_policy: bool = False,
         hooks: Sequence[RolloutHook] = (),
+        use_raw_history: bool = False,
         transform_designs: bool = True,
-        use_raw_history: bool = True,
     ):
-        """Stores the policy network.
+        """Stores the policy network and proposal options.
 
-        use_raw_history: if True (default), condition the net on the raw
-        design history once one is available, instead of the constrained
-        history -- for numerically stable conditioning when a task's
-        raw<->design transform has a large dynamic range. Lives here rather
-        than on Designer because a policy net is the only kind of designer
-        that conditions on the design history at all; the others ignore it.
+        Args:
+            task: Task for which designs are produced.
+            T: Number of experimental steps.
+            design_net: Network implementing the common ``propose()`` API.
+            design_space: Space used to transform proposals. Defaults to the
+                task's design space.
+            reparameterize_policy: Request reparameterized samples from policy
+                networks that support them.
+            hooks: Optional rollout hooks.
+            use_raw_history: Condition on raw rather than physical design
+                history. This is an advanced opt-in; physical designs are the
+                common public history convention.
+            transform_designs: Map raw proposals through the task design space
+                and correct proposal log probabilities.
         """
         super().__init__(
             task,
@@ -45,175 +52,105 @@ class PolicyDesigner(Designer):
             transform_designs=transform_designs,
         )
         self.design_net = design_net
+        self.design_space = task.design_space if design_space is None else design_space
+        if self.design_space.event_shape != task.event_shape_design:
+            raise ValueError(
+                "design_space.event_shape must match task.event_shape_design."
+            )
+        self.reparameterize_policy = bool(reparameterize_policy)
         self.use_raw_history = bool(use_raw_history)
+        normalizes_physical_history = bool(self.design_net.normalize_design_history)
+        raw_designs_are_physical = bool(self.design_net.raw_designs_are_physical)
+        if (
+            self.use_raw_history
+            and normalizes_physical_history
+            and not raw_designs_are_physical
+        ):
+            raise ValueError(
+                "use_raw_history=True is incompatible with a design network "
+                "that normalizes physical design histories."
+            )
 
     @property
     def device(self) -> torch.device:
         """Returns the policy network device."""
         return self.design_net.device
 
-    def design_history_for_step(self, state) -> torch.Tensor:
-        """Returns the design history to condition the net on.
+    @property
+    def requires_policy_log_probs(self) -> bool:
+        """Whether training must use proposal score-function log probabilities."""
+        produces_log_probs = bool(self.design_net.produces_policy_log_probs)
+        supports_reparameterization = bool(
+            self.design_net.supports_reparameterized_proposals
+        )
+        uses_pathwise_samples = (
+            self.reparameterize_policy and supports_reparameterization
+        )
+        return produces_log_probs and not uses_pathwise_samples
 
-        The raw history when use_raw_history is set and one exists (so from
-        t=1 onwards); the constrained history otherwise, including at t=0,
-        when no design has been produced yet.
+    def design_history_for_step(self, state) -> torch.Tensor:
+        """Returns the history passed to the policy for a rollout step.
+
+        Args:
+            state: Mutable rollout state maintained by :class:`Designer`.
+
+        Returns:
+            Tensor: Raw history when ``use_raw_history`` is enabled and
+            available; otherwise, physical design history.
         """
         if self.use_raw_history and state.raw_design_history is not None:
             return state.raw_design_history
         return state.design_history
 
-
-class DeterministicPolicyDesigner(PolicyDesigner):
-    """Policy designer backed by a plain deterministic net (forward() only)."""
-
-    def design_from_history(self, y_history, design_history):
-        """Evaluates the policy net on a history and constrains its output.
-
-        No mask argument: a deterministic policy net's ``forward()`` has none.
-        For padded-history evaluation, call the net directly.
+    def design_from_history(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask=None,
+    ):
+        """Proposes and transforms one design for the supplied history.
 
         Args:
-            y_history (Tensor):
-                Outcomes so far, ``[b, t, *event_shape_y]``.
-            design_history (Tensor):
-                Designs so far, ``[b, t, *event_shape_design]``, in whichever
-                coordinates the net expects (see ``use_raw_history``).
+            y_history: Outcome history accepted by the design network.
+            design_history: Physical or raw design history accepted by the
+                design network according to ``use_raw_history``.
+            mask: Optional validity mask for padded history positions.
 
         Returns:
-            Tensor:
-                The design, ``[b, *event_shape_design]``.
-            Tensor:
-                The net's raw output it was mapped from, same shape.
+            tuple[Tensor, Tensor, Tensor | None]: Physical design, raw design,
+            and physical-space log probability. The log probability is ``None``
+            for deterministic proposals.
         """
-        raw_design = self.design_net(y_history, design_history)
-        return self._to_design(raw_design), raw_design
-
-    def _step_design(self, state):
-        """Adapts design_from_history to the rollout state."""
-        design, raw_design = self.design_from_history(
-            state.y_history, self.design_history_for_step(state)
-        )
-        return design, raw_design, None
-
-
-class StochasticPolicyDesigner(PolicyDesigner):
-    """Policy designer backed by a StochasticDesignNet."""
-
-    def __init__(
-        self,
-        task,
-        T,
-        design_net,
-        *,
-        reparameterize_policy: bool = False,
-        hooks: Sequence[RolloutHook] = (),
-        use_raw_history: bool = False,
-    ):
-        """Stores the policy network.
-
-        reparameterize_policy: sample designs with the reparameterization
-        trick so they carry the graph (pathwise gradients); False gives pure
-        score log probs (score-function/REINFORCE gradients).
-        Note there is no transform_designs param here -- this net owns its own squash
-        transform (baked into its sampled log-prob), so it can't be swapped
-        out at the designer level; use build_policy_designer if you want a
-        clear error when transform_designs=False is combined with a
-        StochasticDesignNet.
-        """
-        super().__init__(
-            task,
-            T,
-            design_net,
-            hooks=hooks,
-            use_raw_history=use_raw_history,
-        )
-        self.reparameterize_policy = bool(reparameterize_policy)
-
-    def _sample(self, y_history, design_history, *, mask=None):
-        """Evaluates the net's sample() once."""
-        return self.design_net.sample(
+        proposal = self.design_net.propose(
             y_history,
             design_history,
             mask=mask,
             reparameterize_policy=self.reparameterize_policy,
         )
 
+        # Some policies, such as CategoricalPolicyNet, choose directly from a
+        # finite set of physical designs.  Their log_prob is a categorical
+        # log-mass, not a density in the task's raw coordinates, so neither
+        # the task transform nor its Jacobian correction applies.
+        raw_designs_are_physical = bool(self.design_net.raw_designs_are_physical)
+        if not self.transform_designs or raw_designs_are_physical:
+            return proposal.raw_design, proposal.raw_design, proposal.log_prob
+
+        if proposal.log_prob is None:
+            design = self.design_space.to_design(proposal.raw_design)
+            return design, proposal.raw_design, None
+
+        design, log_prob = self.design_space.to_design(
+            proposal.raw_design,
+            proposal.log_prob,
+        )
+        return design, proposal.raw_design, log_prob
+
     def _step_design(self, state):
-        """Adapts the net's sample() to the rollout state.
-
-        Returns sample.raw_design (the pre-squash Gaussian value) alongside the
-        design; that is what lets rollout() feed the raw value back as history
-        instead of the squashed design.
-        """
-        sample = self._sample(
-            state.y_history, self.design_history_for_step(state), mask=state.mask
+        """Adapts the common proposal path to the rollout state."""
+        return self.design_from_history(
+            state.y_history,
+            self.design_history_for_step(state),
+            mask=state.mask,
         )
-        return sample.design, sample.raw_design, sample.log_prob
-
-
-def build_policy_designer(
-    task,
-    T,
-    design_net,
-    *,
-    reparameterize_policy: bool = False,
-    hooks: Sequence[RolloutHook] = (),
-    use_raw_history: bool | None = None,
-    transform_designs: bool = True,
-):
-    """Constructs the PolicyDesigner matching the policy net's type.
-
-    Dispatches to StochasticPolicyDesigner for a StochasticDesignNet, else
-    DeterministicPolicyDesigner. reparameterize_policy is only meaningful
-    (and only forwarded) for the stochastic case. transform_designs is only
-    meaningful (and only forwarded) for the deterministic case.
-    StochasticDesignNet owns its own transforms, baked into its
-    sampled log-prob, so it can't be swapped out; passing
-    transform_designs=False alongside a StochasticDesignNet raises, rather
-    than silently ignoring it.
-
-    use_raw_history defaults to each designer's own default when left as None:
-    True for the deterministic case, False for the stochastic one, whose net
-    always conditions on the constrained history. Passing True explicitly
-    alongside a StochasticDesignNet warns and falls back to False rather than
-    raising, so a caller can hand the same flag to either kind of net.
-    """
-    if isinstance(design_net, StochasticDesignNet):
-        if not transform_designs:
-            raise TypeError(
-                "transform_designs=False is not supported for "
-                "StochasticPolicyDesigner: its net always owns its own "
-                "transform, baked into the sampled log-prob, so there is no "
-                "designer-level way to bypass it."
-            )
-
-        # Unlike transform_designs, this one is a request we can honour the
-        # spirit of: the constrained history is a valid thing to condition on,
-        # so downgrade instead of refusing to build the designer.
-        if use_raw_history:
-            warnings.warn(
-                "use_raw_history=True is not supported for "
-                "StochasticPolicyDesigner: its net samples through its own "
-                "squash, so the raw value is an internal pre-squash "
-                "coordinate. Conditioning on the constrained design history "
-                "instead.",
-            )
-
-        return StochasticPolicyDesigner(
-            task,
-            T,
-            design_net,
-            reparameterize_policy=reparameterize_policy,
-            hooks=hooks,
-            use_raw_history=False,
-        )
-
-    return DeterministicPolicyDesigner(
-        task,
-        T,
-        design_net,
-        hooks=hooks,
-        use_raw_history=True if use_raw_history is None else use_raw_history,
-        transform_designs=transform_designs,
-    )

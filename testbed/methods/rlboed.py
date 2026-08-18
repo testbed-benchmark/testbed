@@ -12,8 +12,8 @@ import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.optim as optim
 from omegaconf import OmegaConf
+from torch import optim
 
 from testbed.core.design_spaces import (
     BoxDesignSpace,
@@ -26,12 +26,12 @@ from testbed.design_nets import (
     CategoricalPolicyNet,
     DeepSetCategoricalActor,
     DeepSetGaussianActor,
+    GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
     StochasticDesignNet,
-    TanhGaussianPolicyNet,
 )
-from testbed.designers import PolicyDesigner, build_policy_designer
+from testbed.designers import PolicyDesigner
 from testbed.envs import BEDEnv
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
@@ -352,6 +352,7 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
 @dataclass
 class _SACNetworks:
     actor: StochasticDesignNet
+    design_space: DesignSpace
     qf1: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
     qf2: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
     qf1_target: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
@@ -370,16 +371,18 @@ def make_networks(
 ) -> _SACNetworks:
     """Builds the SAC actor, twin critics, target networks, optimizers, and alpha."""
     sac = cfg.sac
-    dim_y = task.event_shape_y.numel()
-    dim_design = task.event_shape_design.numel()
+    event_shape_y = task.event_shape_y
+    event_shape_design = task.event_shape_design
+    dim_y = event_shape_y.numel()
+    dim_design = event_shape_design.numel()
 
     if isinstance(design_space, BoxDesignSpace):
         actor_module = DeepSetGaussianActor(
-            dim_y=dim_y,
-            dim_design=dim_design,
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
             init_std=sac.policy_init_std,
         )
-        actor = TanhGaussianPolicyNet(
+        actor = GaussianPolicyNet(
             design_space,
             actor=actor_module,
             normalize_design_history=True,
@@ -399,8 +402,8 @@ def make_networks(
     else:
         values = design_space.values.reshape(design_space.n_designs, dim_design)
         actor_module = DeepSetCategoricalActor(
-            dim_y=dim_y,
-            dim_design=dim_design,
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
             n_designs=design_space.n_designs,
         )
         actor = CategoricalPolicyNet(
@@ -444,6 +447,7 @@ def make_networks(
 
     return _SACNetworks(
         actor=actor,
+        design_space=design_space,
         qf1=qf1,
         qf2=qf2,
         qf1_target=qf1_target,
@@ -463,6 +467,25 @@ class _EpisodeBatch:
     rewards: torch.Tensor
     dones: torch.Tensor
     episodic_return: torch.Tensor
+
+
+def _propose_design(
+    actor: StochasticDesignNet,
+    design_space: DesignSpace,
+    obs: History,
+    *,
+    reparameterize_policy: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Samples a raw policy proposal and maps it into the environment space."""
+    proposal = actor.propose(
+        obs.outcomes,
+        obs.designs,
+        mask=obs.mask,
+        reparameterize_policy=reparameterize_policy,
+    )
+    if proposal.log_prob is None:
+        raise RuntimeError("A stochastic RLBOED actor must return a log probability.")
+    return design_space.to_design(proposal.raw_design, proposal.log_prob)
 
 
 def collect_episode_batch(
@@ -486,8 +509,7 @@ def collect_episode_batch(
 
     for _ in range(horizon):
         with torch.no_grad():
-            policy_sample = actor.sample_from_observation(obs)
-            designs = policy_sample.design
+            designs, _ = _propose_design(actor, env.design_space, obs)
         next_obs, rewards, terminations, truncations, _ = env.step(designs)
 
         dones = terminations | truncations
@@ -556,9 +578,13 @@ def sac_update(
                 next_probs * (min_qf_next_target - alpha * next_log_probs)
             ).sum(dim=-1)
         else:
-            next_policy_sample = nets.actor.sample_from_observation(data_next_obs)
-            next_designs = next_policy_sample.design
-            next_log_pi = next_policy_sample.log_prob.unsqueeze(-1)
+            next_designs, next_log_prob = _propose_design(
+                nets.actor,
+                nets.design_space,
+                data_next_obs,
+                reparameterize_policy=True,
+            )
+            next_log_pi = next_log_prob.unsqueeze(-1)
             qf1_next_target = nets.qf1_target(data_next_obs, next_designs)
             qf2_next_target = nets.qf2_target(data_next_obs, next_designs)
             next_value = (
@@ -596,9 +622,13 @@ def sac_update(
             min_qf_pi = torch.min(nets.qf1(data_obs), nets.qf2(data_obs))
             actor_loss = (probs * (alpha * log_probs - min_qf_pi)).sum(dim=-1).mean()
         else:
-            policy_sample = nets.actor.sample_from_observation(data_obs)
-            pi = policy_sample.design
-            log_pi = policy_sample.log_prob.unsqueeze(-1)
+            pi, policy_log_prob = _propose_design(
+                nets.actor,
+                nets.design_space,
+                data_obs,
+                reparameterize_policy=True,
+            )
+            log_pi = policy_log_prob.unsqueeze(-1)
             min_qf_pi = torch.min(nets.qf1(data_obs, pi), nets.qf2(data_obs, pi))
             actor_loss = (alpha * log_pi - min_qf_pi).mean()
 
@@ -814,9 +844,10 @@ class Trainer:
         obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
         returns = torch.zeros(self.cfg.sac.num_envs, device=self.device)
         for _ in range(self.env.horizon):
-            designs = self.designer.design_net.sample_from_observation(
-                obs, deterministic=True
-            ).design
+            raw_designs = self.designer.design_net(
+                obs.outcomes, obs.designs, mask=obs.mask
+            )
+            designs = eval_env.design_space.to_design(raw_designs)
             obs, rewards, _, _, _ = eval_env.step(designs)
             returns += rewards
 
@@ -1007,7 +1038,12 @@ def main(cfg):
 
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = build_policy_designer(task, cfg.T, nets.actor)
+    designer = PolicyDesigner(
+        task,
+        cfg.T,
+        nets.actor,
+        design_space=design_space,
+    )
 
     trainer = Trainer(
         task=task,

@@ -6,11 +6,7 @@ from hydra.utils import instantiate
 
 from testbed.core.setup import setup
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
-from testbed.designers import (
-    PolicyDesigner,
-    StochasticPolicyDesigner,
-    build_policy_designer,
-)
+from testbed.designers import PolicyDesigner
 
 # ============================================================================
 # Training class
@@ -196,18 +192,14 @@ def main(cfg):
 
     policy_net = build_design_net(cfg, task)
     policy_net = policy_net.to(cfg.device)
-    designer = build_policy_designer(
+    designer = PolicyDesigner(
         task,
         cfg.T,
         policy_net,
         reparameterize_policy=cfg.objective.reparameterize_policy,
     )
-    # Update config to match designer: only a stochastic policy sampled without
-    # reparameterization needs the score-function form of REINFORCE.
-    cfg.objective.requires_policy_log_probs = (
-        isinstance(designer, StochasticPolicyDesigner)
-        and not designer.reparameterize_policy
-    )
+    # Update config to match the designer's proposal/gradient capability.
+    cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
 
     objective = build_objective(cfg, task)
 

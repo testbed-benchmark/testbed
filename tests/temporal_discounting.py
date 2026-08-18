@@ -18,7 +18,7 @@ from rich.table import Table
 
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
-from testbed.designers import RandomDesigner, build_policy_designer
+from testbed.designers import PolicyDesigner, RandomDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
 
 # Reference sPCE for HTD at T=20: 5.021 +- 0.013, DAD paper (Foster et al. 2021).
@@ -53,7 +53,7 @@ def make_policy_designer(task, device):
         dim_emb=16,
         decoder_dim_h=[128, 128],
     ).to(device)
-    return build_policy_designer(task, T, design_net)
+    return PolicyDesigner(task, T, design_net)
 
 
 def make_random_designer(task):

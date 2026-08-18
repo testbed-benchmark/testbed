@@ -6,10 +6,10 @@ import pytest
 import torch
 
 from testbed.core.design_spaces import BoxDesignSpace
-from testbed.design_nets import DeepSetPolicyNet, TanhGaussianPolicyNet
+from testbed.design_nets import DeepSetPolicyNet, GaussianPolicyNet
 from testbed.design_objectives import SPCE, Reinforce, SPCEReinforce
 from testbed.design_objectives.reinforce import leave_one_out_baseline
-from testbed.designers import Rollout, build_policy_designer
+from testbed.designers import PolicyDesigner, Rollout
 from testbed.methods.dad import Trainer, build_objective
 from testbed.tasks import HyperbolicTemporalDiscounting
 
@@ -42,11 +42,11 @@ def _make_design_net(task):
 def _make_stochastic_net(task):
     # Box over valid (D_1, R_0); centered near k * D_1 ~ 1 so it is non-saturating.
     space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
-    return TanhGaussianPolicyNet(space)
+    return GaussianPolicyNet(space, event_shape_y=task.event_shape_y)
 
 
 def _make_rollout(task, policy_net, b=8, T=3, **kwargs):
-    designer = build_policy_designer(task, T=T, design_net=policy_net, **kwargs)
+    designer = PolicyDesigner(task, T=T, design_net=policy_net, **kwargs)
     theta0 = task.sample_prior(b)
     return designer.rollout(theta0)
 
@@ -102,7 +102,7 @@ def test_deterministic_value_equals_mean_spce_gain():
     task = _make_task()
     policy_net = _make_design_net(task)
     theta0 = task.sample_prior(8)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
     rollout = designer.rollout(theta0)
 
     spce = SPCE(task, n_contrastive=16)
@@ -124,7 +124,7 @@ def test_deterministic_matches_dad_eq16(baseline):
     task = _make_task()
     policy_net = _make_design_net(task)
     theta0 = task.sample_prior(8)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
     rollout = designer.rollout(theta0)
 
     spce = SPCE(task, n_contrastive=16)
@@ -160,7 +160,7 @@ def test_deterministic_constant_value():
     task = _make_task()
     policy_net = _make_design_net(task)
     theta0 = task.sample_prior(8)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
     rollout = designer.rollout(theta0)
 
     def constant_value(rollout):
@@ -217,7 +217,7 @@ def test_stochastic_value_equals_mean_spce_gain():
     task = _make_task()
     policy_net = _make_stochastic_net(task)
     theta0 = task.sample_prior(8)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
     rollout = designer.rollout(theta0)
 
     spce = SPCE(task, n_contrastive=16)
@@ -238,7 +238,7 @@ def test_stochastic_grad_comes_from_score_term():
     task = _make_task()
     policy_net = _make_stochastic_net(task)
     theta0 = task.sample_prior(8)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
     rollout = designer.rollout(theta0)
 
     spce = SPCE(task, n_contrastive=4)
@@ -257,7 +257,7 @@ def test_stochastic_constant_value_loo_baseline_zero_grad():
     task = _make_task()
     policy_net = _make_stochastic_net(task)
     theta0 = task.sample_prior(8)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
     rollout = designer.rollout(theta0)
 
     def constant_value(rollout):
@@ -281,7 +281,7 @@ def test_stochastic_baseline_does_not_change_value():
     task = _make_task()
     policy_net = _make_stochastic_net(task)
     theta0 = task.sample_prior(8)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
     rollout = designer.rollout(theta0)
 
     spce = SPCE(task, n_contrastive=16)
@@ -306,7 +306,7 @@ def test_stochastic_reparameterized_pathwise_grad():
     task = _make_task()
     policy_net = _make_stochastic_net(task)
     theta0 = task.sample_prior(8)
-    designer = build_policy_designer(
+    designer = PolicyDesigner(
         task, T=3, design_net=policy_net, reparameterize_policy=True
     )
     rollout = designer.rollout(theta0)
@@ -339,7 +339,7 @@ def test_spce_per_sample_gain_matches_estimate_gain():
     task = _make_task()
     policy_net = _make_design_net(task)
     theta0 = task.sample_prior(8)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
     rollout = designer.rollout(theta0)
 
     spce = SPCE(task, n_contrastive=16)
@@ -360,7 +360,7 @@ def test_train_step_with_reinforce(net_factory, requires_policy_log_probs):
     torch.manual_seed(0)
     task = _make_task()
     policy_net = net_factory(task)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = PolicyDesigner(task, T=3, design_net=policy_net)
     cfg = SimpleNamespace(
         n_outer=4,
         grad_clip=1.0,

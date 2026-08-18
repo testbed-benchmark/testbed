@@ -13,16 +13,13 @@ from testbed.core.manager import Manager
 from testbed.design_nets import (
     CategoricalPolicyNet,
     DeepSetCategoricalActor,
+    DeepSetEncoder,
     DeepSetGaussianActor,
+    GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
-    TanhGaussianPolicyNet,
 )
-from testbed.designers import (
-    PolicyDesigner,
-    StochasticPolicyDesigner,
-    build_policy_designer,
-)
+from testbed.designers import PolicyDesigner
 from testbed.envs.history import History
 from testbed.methods.rlboed import (
     Trainer,
@@ -46,21 +43,25 @@ SoftQNetwork = RLBOEDQNetwork
 
 
 def test_actor_initializes_requested_standard_deviation():
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2, init_std=0.4)
+    actor = DeepSetGaussianActor(
+        event_shape_y=(1,), event_shape_design=(2,), init_std=0.4
+    )
     y_history = torch.randn(3, 4, 1)
     design_history = torch.randn(3, 4, 2)
 
     _, log_std = actor(y_history, design_history)
 
     torch.testing.assert_close(log_std.exp(), torch.full_like(log_std, 0.4))
-    assert torch.count_nonzero(actor.log_std_head.weight) == 0
-    assert actor.log_std_head.weight.requires_grad
+    assert torch.count_nonzero(actor.head.log_std_head.weight) == 0
+    assert actor.head.log_std_head.weight.requires_grad
 
 
 @pytest.mark.parametrize("init_std", [0.0, -0.1, 1.0, 1e-10])
 def test_actor_rejects_initial_std_outside_log_std_bounds(init_std):
     with pytest.raises(ValueError, match="init_std"):
-        DeepSetGaussianActor(dim_y=1, dim_design=2, init_std=init_std)
+        DeepSetGaussianActor(
+            event_shape_y=(1,), event_shape_design=(2,), init_std=init_std
+        )
 
 
 def test_soft_q_network_is_permutation_invariant():
@@ -149,7 +150,7 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
     def record_emitter_input(module, args):
         inputs["emitter"] = args[0].detach().clone()
 
-    critic.encoder_net.register_forward_pre_hook(record_encoder_input)
+    critic.encoder.encoder_net.register_forward_pre_hook(record_encoder_input)
     critic.emitter_net.register_forward_pre_hook(record_emitter_input)
     physical_design = torch.tensor([[1.0, 4.0]])
     observation = History(
@@ -171,10 +172,10 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
     )
 
 
-def test_deployable_policy_maps_raw_history_to_physical_designs():
+def test_gaussian_policy_maps_physical_history_to_raw_proposal():
     design_space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
-    policy = TanhGaussianPolicyNet(
+    actor = DeepSetGaussianActor(event_shape_y=(1,), event_shape_design=(2,))
+    policy = GaussianPolicyNet(
         design_space,
         actor=actor,
         normalize_design_history=True,
@@ -188,17 +189,18 @@ def test_deployable_policy_maps_raw_history_to_physical_designs():
         torch.tensor([[[0.5]]]),
         torch.tensor([[[0.0, 1.0]]]),
     )
-    expected = torch.tanh(mean) * 4.0
+    expected = mean
     actual = policy(raw_y, raw_designs)
 
     torch.testing.assert_close(actual, expected)
-    assert torch.all(actual >= -4.0)
-    assert torch.all(actual <= 4.0)
+    assert design_space.contains(design_space.to_design(actual))
 
 
 def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
     design_space = FiniteDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
-    actor = DeepSetCategoricalActor(dim_y=1, dim_design=1, n_designs=3)
+    actor = DeepSetCategoricalActor(
+        event_shape_y=(1,), event_shape_design=(1,), n_designs=3
+    )
     policy = CategoricalPolicyNet(
         design_space,
         actor=actor,
@@ -206,17 +208,22 @@ def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
         outcome_bounds=(0.0, 10.0),
     )
     with torch.no_grad():
-        actor.logits_head.bias.copy_(torch.tensor([0.0, -1.0, 2.0]))
+        actor.head.logits_head.bias.copy_(torch.tensor([0.0, -1.0, 2.0]))
     outcomes = torch.zeros(4, 0, 1)
     designs = torch.zeros(4, 0, 1)
 
-    sampled = policy.sample(outcomes, designs)
-    greedy = policy.sample(outcomes, designs, deterministic=True)
+    proposal = policy.propose(outcomes, designs)
+    greedy = policy(outcomes, designs)
 
-    assert design_space.contains(sampled.design)
-    torch.testing.assert_close(greedy.design, torch.full((4, 1), 10.0))
-    expected_log_prob = torch.log_softmax(actor.logits_head.bias, dim=0)[2]
-    torch.testing.assert_close(greedy.log_prob, expected_log_prob.expand(4))
+    assert design_space.contains(proposal.raw_design)
+    torch.testing.assert_close(greedy, torch.full((4, 1), 10.0))
+    torch.testing.assert_close(
+        proposal.deterministic_raw_design, torch.full((4, 1), 10.0)
+    )
+    selected_log_probs = torch.log_softmax(actor.head.logits_head.bias, dim=0)[
+        proposal.info["design_index"]
+    ]
+    torch.testing.assert_close(proposal.log_prob, selected_log_probs)
 
 
 def test_discrete_q_network_is_masked_and_permutation_invariant():
@@ -426,7 +433,7 @@ def _build_trainer(cfg, *, manager=None):
     nets = make_networks(task, design_space, cfg, task.device)
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = build_policy_designer(task, cfg.T, nets.actor)
+    designer = PolicyDesigner(task, cfg.T, nets.actor, design_space=design_space)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
 
 
@@ -506,7 +513,7 @@ def test_categorical_train_step_updates_networks_with_finite_losses():
     nets = make_networks(task, design_space, cfg, task.device)
     trainer = Trainer(
         task,
-        build_policy_designer(task, cfg.T, nets.actor),
+        PolicyDesigner(task, cfg.T, nets.actor),
         build_env(cfg, task, design_space),
         build_replay_buffer(cfg, task),
         nets,
@@ -540,10 +547,10 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
     with torch.no_grad():
         for parameter in nets.actor.parameters():
             parameter.zero_()
-        nets.actor.actor.logits_head.bias[0] = 10.0
+        nets.actor.actor.head.logits_head.bias[0] = 10.0
     trainer = Trainer(
         task,
-        build_policy_designer(task, cfg.T, nets.actor),
+        PolicyDesigner(task, cfg.T, nets.actor),
         build_env(cfg, task, design_space),
         build_replay_buffer(cfg, task),
         nets,
@@ -595,8 +602,8 @@ def test_trainer_produces_deployable_designer(tmp_path):
     trainer.train()
 
     assert isinstance(trainer.designer, PolicyDesigner)
-    assert isinstance(trainer.designer.design_net, TanhGaussianPolicyNet)
-    assert isinstance(trainer.designer, StochasticPolicyDesigner)
+    assert isinstance(trainer.designer.design_net, GaussianPolicyNet)
+    assert trainer.designer.requires_policy_log_probs
     assert trainer.designer.design_net.design_history_bounds == (0.0, 1.0)
 
     checkpoint = trainer.build_checkpoint(step=cfg.sac.num_training_iterations - 1)

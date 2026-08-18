@@ -22,7 +22,7 @@ import torch
 from torch.distributions import MultivariateNormal
 
 from testbed.design_objectives import PCE
-from testbed.designers import SequentialDesigner, DeterministicPolicyDesigner
+from testbed.designers import SequentialDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
 
 torch.manual_seed(2)
@@ -81,5 +81,17 @@ print(f'raw designs: {rollout.extra["raw_design_history"]}')
 There may be cases in which you want to skip this automatic transformation coming from the design space. You can do this by setting `transform_designs=False` in the construction of your designer.  For example, you might be using a {py:class}`~testbed.designers.amortized.PolicyDesigner` with a neural network design policy that is already constrained to output valid designs. 
 
 ```{warning}
-For numerical stability, it is often important to feed a raw/latent design into a design policy network, rather than a transformed design. Policy designers have the flag `use_raw_history` to control this behavior. If `use_raw_history=True` and `transform_designs=True`, it is expected that your design net outputs raw designs, and that these raw designs will be fed back in future steps. If `use_raw_history=False` and `transform_designs=True`, your net should output raw designs, but will take in transformed designs as inputs. When `transform_designs=False`, the flag `use_raw_history` is a no-op and will not call `to_raw()` internally.
+`PolicyDesigner` always receives a `DesignProposal` from its `DesignNet`. Normally,
+the proposal's `raw_design` is transformed with `to_design()` and, for stochastic
+policies, the corresponding change-of-variables correction is applied to its log
+probability. For numerical stability, a policy can condition on raw/latent designs
+rather than physical designs by setting `use_raw_history=True`. That setting is an
+advanced opt-in: it is incompatible with policies that normalize physical design
+histories. With its default `use_raw_history=False`, a policy receives physical
+designs after the first rollout step. When `transform_designs=False`, the
+`use_raw_history` flag has no effect.
+
+Some policies, such as `CategoricalPolicyNet`, select directly from a finite set of
+physical designs. Such a policy declares this in its network contract, so
+`PolicyDesigner` does not apply a design-space transform or density correction.
 ```

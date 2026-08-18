@@ -1,8 +1,7 @@
 """Neural-network building blocks."""
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 
 
 def _initialize_linear_layers(module: nn.Module) -> None:
