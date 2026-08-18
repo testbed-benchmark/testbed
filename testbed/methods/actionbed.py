@@ -11,7 +11,6 @@ from testbed.designers import (
     ActionHook,
     PolicyDesigner,
     RandomDesigner,
-    build_policy_designer,
 )
 
 # ============================================================================
@@ -339,7 +338,7 @@ def main(cfg):
     design_net, action_net = build_policy_nets(cfg, task, manager)
     design_net = design_net.to(cfg.device)
     action_net = action_net.to(cfg.device)
-    designer = build_policy_designer(task, cfg.T, design_net)
+    designer = PolicyDesigner(task, cfg.T, design_net)
 
     # Setup for action-warmup; designs are drawn from the task's design space.
     random_designer = None

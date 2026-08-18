@@ -3,7 +3,7 @@
 from testbed.core.hooks import ActionHook, PosteriorUpdateHook, RolloutHook
 from testbed.core.rollout import Rollout, RolloutState
 
-from .amortized import PolicyDesigner, build_policy_designer
+from .amortized import PolicyDesigner
 from .base import Designer
 from .non_adaptive import RandomDesigner, StaticDesigner
 from .sequential import SequentialDesigner
@@ -19,5 +19,4 @@ __all__ = [
     "RolloutState",
     "SequentialDesigner",
     "StaticDesigner",
-    "build_policy_designer",
 ]

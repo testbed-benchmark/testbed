@@ -8,9 +8,9 @@ from testbed.design_nets import DesignNet, DesignProposal
 from testbed.design_nets.deterministic import DeepSetPolicyNet
 from testbed.designers import (
     Designer,
+    PolicyDesigner,
     RandomDesigner,
     StaticDesigner,
-    build_policy_designer,
 )
 from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
 
@@ -25,7 +25,7 @@ def _policy_designer(task, **kwargs):
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
     )
-    return build_policy_designer(task, T=3, design_net=net, **kwargs)
+    return PolicyDesigner(task, T=3, design_net=net, **kwargs)
 
 
 class _HistorySpy(DesignNet):
@@ -232,7 +232,7 @@ def test_policy_designer_conditions_on_the_requested_history(use_raw_history):
         event_shape_out=task.event_shape_design,
     )
     spy = _HistorySpy(net)
-    designer = build_policy_designer(
+    designer = PolicyDesigner(
         task, T=3, design_net=spy, use_raw_history=use_raw_history
     )
 
@@ -253,7 +253,7 @@ def test_policy_designer_gets_the_constrained_history_at_t0():
         event_shape_out=task.event_shape_design,
     )
     spy = _HistorySpy(net)
-    designer = build_policy_designer(task, T=2, design_net=spy, use_raw_history=True)
+    designer = PolicyDesigner(task, T=2, design_net=spy, use_raw_history=True)
 
     designer.rollout(task.sample_prior(2))
 

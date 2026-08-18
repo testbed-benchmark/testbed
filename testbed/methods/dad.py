@@ -6,7 +6,7 @@ from hydra.utils import instantiate
 
 from testbed.core.setup import setup
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
-from testbed.designers import PolicyDesigner, build_policy_designer
+from testbed.designers import PolicyDesigner
 
 # ============================================================================
 # Training class
@@ -192,7 +192,7 @@ def main(cfg):
 
     policy_net = build_design_net(cfg, task)
     policy_net = policy_net.to(cfg.device)
-    designer = build_policy_designer(
+    designer = PolicyDesigner(
         task,
         cfg.T,
         policy_net,

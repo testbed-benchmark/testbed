@@ -7,7 +7,7 @@ import torch
 from torch.distributions import Bernoulli
 
 from testbed.design_nets import DeepSetPolicyNet
-from testbed.designers import build_policy_designer
+from testbed.designers import PolicyDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
 from testbed.tasks.hyperbolic_temporal_discounting import HTDDesignSpace, HTDPrior
 
@@ -325,7 +325,7 @@ def test_rollout_shapes():
         event_shape_out=task.event_shape_design,
     )
     b, T = 8, 4
-    designer = build_policy_designer(task, T=T, design_net=policy_net)
+    designer = PolicyDesigner(task, T=T, design_net=policy_net)
     theta0 = task.sample_prior(b)
     rollout = designer.rollout(theta0)
 

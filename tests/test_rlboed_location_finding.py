@@ -19,7 +19,7 @@ from testbed.design_nets import (
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
 )
-from testbed.designers import PolicyDesigner, build_policy_designer
+from testbed.designers import PolicyDesigner
 from testbed.envs.history import History
 from testbed.methods.rlboed import (
     Trainer,
@@ -433,7 +433,7 @@ def _build_trainer(cfg, *, manager=None):
     nets = make_networks(task, design_space, cfg, task.device)
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = build_policy_designer(task, cfg.T, nets.actor, design_space=design_space)
+    designer = PolicyDesigner(task, cfg.T, nets.actor, design_space=design_space)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
 
 
@@ -513,7 +513,7 @@ def test_categorical_train_step_updates_networks_with_finite_losses():
     nets = make_networks(task, design_space, cfg, task.device)
     trainer = Trainer(
         task,
-        build_policy_designer(task, cfg.T, nets.actor),
+        PolicyDesigner(task, cfg.T, nets.actor),
         build_env(cfg, task, design_space),
         build_replay_buffer(cfg, task),
         nets,
@@ -550,7 +550,7 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
         nets.actor.actor.head.logits_head.bias[0] = 10.0
     trainer = Trainer(
         task,
-        build_policy_designer(task, cfg.T, nets.actor),
+        PolicyDesigner(task, cfg.T, nets.actor),
         build_env(cfg, task, design_space),
         build_replay_buffer(cfg, task),
         nets,

@@ -31,7 +31,7 @@ from testbed.design_nets import (
     RLBOEDQNetwork,
     StochasticDesignNet,
 )
-from testbed.designers import PolicyDesigner, build_policy_designer
+from testbed.designers import PolicyDesigner
 from testbed.envs import BEDEnv
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
@@ -1038,7 +1038,7 @@ def main(cfg):
 
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = build_policy_designer(
+    designer = PolicyDesigner(
         task,
         cfg.T,
         nets.actor,
