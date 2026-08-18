@@ -3,9 +3,9 @@
 from math import prod
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 
-from testbed.design_nets.base import DesignNet
+from testbed.design_nets.base import DesignNet, DesignProposal
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP
 
@@ -48,6 +48,19 @@ class DeterministicPolicyNet(DesignNet):
         enc = self.encoder(y_history, design_history, mask=mask)  # [b, dim_emb]
         out = self.decoder(enc)  # [b, prod(out)]
         return out.reshape(*enc.shape[:-1], *self.event_shape_out)
+
+    def propose(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask: Tensor | None = None,
+        reparameterize_policy: bool = False,
+    ):
+        """Wraps the output of ``self.forward`` in a ``DesignProposal``."""
+        del reparameterize_policy
+        raw_design = self(y_history, design_history, mask=mask)
+        return DesignProposal(raw_design=raw_design)
 
 
 class AttentivePolicyNet(DeterministicPolicyNet):
@@ -166,3 +179,16 @@ class MLPPolicyNet(DesignNet):
         out = self.mlp(tokens)
         out = out.reshape(b, *self.event_shape_out)
         return out
+
+    def propose(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask: Tensor | None = None,
+        reparameterize_policy: bool = False,
+    ):
+        """Wraps the output of ``self.forward`` in a ``DesignProposal``."""
+        del reparameterize_policy
+        raw_design = self(y_history, design_history, mask=mask)
+        return DesignProposal(raw_design=raw_design)

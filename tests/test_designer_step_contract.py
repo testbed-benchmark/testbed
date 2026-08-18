@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from testbed.core.rollout import RolloutState
-from testbed.design_nets import DesignNet
+from testbed.design_nets import DesignNet, DesignProposal
 from testbed.design_nets.deterministic import DeepSetPolicyNet
 from testbed.designers import (
     Designer,
@@ -43,6 +43,19 @@ class _HistorySpy(DesignNet):
     def forward(self, y_history, design_history, *, mask=None):
         self.seen.append(design_history.clone())
         return self.inner(y_history, design_history, mask=mask)
+
+    def propose(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask=None,
+        reparameterize_policy=False,
+    ):
+        del reparameterize_policy
+        return DesignProposal(
+            raw_design=self(y_history, design_history, mask=mask)
+        )
 
 
 # ---------------------------------------------------------------------------

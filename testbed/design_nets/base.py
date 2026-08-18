@@ -58,6 +58,7 @@ class DesignNet(torch.nn.Module, ABC):
         """
         ...
 
+    @abstractmethod
     def propose(
         self,
         y_history,
@@ -68,19 +69,14 @@ class DesignNet(torch.nn.Module, ABC):
     ) -> DesignProposal:
         """Returns a raw design proposal for an experimental history.
 
-        Deterministic design networks use their forward output as the raw design.
-        Stochastic design networks may override this method to sample a proposal.
-
         Args:
             y_history: Outcome history.
             design_history: Design history.
             mask: Optional mask for padded histories.
             reparameterize_policy: Whether stochastic policies should use a
-                reparameterized sample. Ignored by the deterministic default.
+                reparameterized sample.
 
         Returns:
             A proposal containing the network's raw design.
         """
-        del reparameterize_policy
-        raw_design = self(y_history, design_history, mask=mask)
-        return DesignProposal(raw_design=raw_design)
+        ...
