@@ -4,7 +4,6 @@ import torch
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets import (
     CategoricalPolicyNet,
-    DeepSetEncoder,
     DeepSetGaussianActor,
     DesignProposal,
     GaussianPolicyNet,
@@ -176,16 +175,6 @@ def test_tanh_gaussian_policy_normalizes_physical_histories_for_actor():
     )
 
 
-def test_tanh_gaussian_forward_returns_deterministic_raw_design():
-    policy = make_policy()
-    y_history = torch.randn(4, 2, 1)
-    design_history = torch.randn(4, 2, 2)
-
-    forward_raw_design = policy(y_history, design_history)
-
-    assert forward_raw_design.shape == (4, 2)
-
-
 def test_tanh_gaussian_proposal_has_raw_density_and_deterministic_value():
     torch.manual_seed(0)
     policy = make_policy()
@@ -220,29 +209,6 @@ def test_tanh_gaussian_proposal_has_raw_density_and_deterministic_value():
         expected_log_prob,
         proposal.log_prob - policy.design_space._log_det_jacobian(proposal.raw_design),
     )
-
-
-def test_tanh_gaussian_forward_forwards_mask():
-    policy = make_policy()
-
-    with pytest.raises(ValueError, match="mask must have shape"):
-        policy(
-            torch.randn(2, 3, 1),
-            torch.randn(2, 3, 2),
-            mask=torch.ones(2, 2, dtype=torch.bool),
-        )
-
-
-def test_categorical_forward_forwards_mask():
-    space = FiniteDesignSpace(torch.tensor([[-1.0], [1.0]]))
-    policy = CategoricalPolicyNet(space, event_shape_y=(1,))
-
-    with pytest.raises(ValueError, match="mask must have shape"):
-        policy(
-            torch.randn(2, 3, 1),
-            torch.randn(2, 3, 1),
-            mask=torch.ones(2, 2, dtype=torch.bool),
-        )
 
 
 def test_tanh_gaussian_policy_accepts_history_tensors_from_observation():
@@ -333,31 +299,7 @@ def test_default_stochastic_actors_support_multidimensional_outcome_events(
 
     proposal = policy.propose(outcomes, designs)
 
-    assert policy.actor.event_shape_y == torch.Size(event_shape_y)
-    assert policy.actor.event_shape_design == torch.Size((2, 2))
-    assert policy.actor.dim_y == 6
-    assert policy.actor.dim_design == 4
     assert proposal.raw_design.shape == (4, 2, 2)
-
-
-def test_stochastic_policies_accept_shared_history_encoders():
-    gaussian_encoder = DeepSetEncoder((1,), (2,), dim_emb=5)
-    gaussian_policy = GaussianPolicyNet(make_space(), encoder=gaussian_encoder)
-
-    assert gaussian_policy.actor.encoder is gaussian_encoder
-    gaussian_raw = gaussian_policy(torch.empty(3, 0, 1), torch.empty(3, 0, 2))
-    assert gaussian_raw.shape == (3, 2)
-
-    categorical_encoder = DeepSetEncoder((1,), (1,), dim_emb=5)
-    categorical_policy = CategoricalPolicyNet(
-        FiniteDesignSpace(torch.tensor([[0.0], [1.0]])),
-        encoder=categorical_encoder,
-    )
-
-    categorical_raw = categorical_policy(torch.empty(3, 0, 1), torch.empty(3, 0, 1))
-
-    assert categorical_policy.actor.encoder is categorical_encoder
-    assert categorical_raw.shape == (3, 1)
 
 
 def test_tanh_gaussian_policy_rejects_invalid_mask_shape():

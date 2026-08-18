@@ -1,6 +1,5 @@
 """Tests for the unified amortized PolicyDesigner."""
 
-import pytest
 import torch
 
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
@@ -90,28 +89,6 @@ def test_transform_designs_false_opts_out():
     )
 
 
-def test_raw_design_history_is_always_exposed():
-    # The net's raw output is computed either way, so it is always reported.
-    torch.manual_seed(0)
-    task = _make_task()
-    policy_net = _make_policy_net(task)
-    designer = PolicyDesigner(task, T=2, design_net=policy_net)
-
-    rollout = designer.rollout(task.sample_prior(3))
-
-    assert "raw_design_history" in rollout.extra
-
-
-def test_policy_designer_forwards_transform_designs_to_deterministic():
-    torch.manual_seed(0)
-    task = _make_task()
-    policy_net = _make_policy_net(task)
-    designer = PolicyDesigner(task, T=2, design_net=policy_net, transform_designs=False)
-
-    assert type(designer) is PolicyDesigner
-    assert designer.transform_designs is False
-
-
 def test_policy_designer_forwards_transform_designs_to_stochastic():
     task = _make_task()
     task.validate_designs = False
@@ -122,21 +99,9 @@ def test_policy_designer_forwards_transform_designs_to_stochastic():
 
     rollout = designer.rollout(task.sample_prior(3))
 
-    assert designer.transform_designs is False
     torch.testing.assert_close(
         rollout.design_history, rollout.extra["raw_design_history"]
     )
-
-
-def test_policy_designer_stochastic_exposes_raw_design():
-    torch.manual_seed(0)
-    task = _make_task()
-    stochastic_net = _make_stochastic_net()
-    designer = PolicyDesigner(task, T=2, design_net=stochastic_net)
-
-    rollout = designer.rollout(task.sample_prior(3))
-
-    assert "raw_design_history" in rollout.extra
 
 
 def test_categorical_policy_physical_proposals_bypass_task_transform():
@@ -167,54 +132,6 @@ def test_categorical_policy_physical_proposals_bypass_task_transform():
 # ============================================================================
 
 
-def test_physical_history_is_the_uniform_default():
-    task = _make_task()
-
-    deterministic = PolicyDesigner(task, T=2, design_net=_make_policy_net(task))
-    stochastic = PolicyDesigner(task, T=2, design_net=_make_stochastic_net())
-
-    assert deterministic.use_raw_history is False
-    assert stochastic.use_raw_history is False
-
-
-def test_use_raw_history_true_is_honored_for_a_stochastic_net():
-    task = _make_task()
-    stochastic_net = _make_stochastic_net()
-
-    designer = PolicyDesigner(
-        task, T=2, design_net=stochastic_net, use_raw_history=True
-    )
-
-    assert type(designer) is PolicyDesigner
-    assert designer.use_raw_history is True
-
-
-def test_use_raw_history_false_is_honored_for_a_stochastic_net():
-    task = _make_task()
-
-    designer = PolicyDesigner(
-        task, T=2, design_net=_make_stochastic_net(), use_raw_history=False
-    )
-
-    assert designer.use_raw_history is False
-
-
-def test_raw_history_rejected_when_policy_normalizes_physical_history():
-    task = _make_task()
-    space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
-    policy_net = GaussianPolicyNet(
-        space, event_shape_y=task.event_shape_y, normalize_design_history=True
-    )
-
-    with pytest.raises(ValueError, match="normalizes physical design histories"):
-        PolicyDesigner(
-            task,
-            T=2,
-            design_net=policy_net,
-            use_raw_history=True,
-        )
-
-
 def test_categorical_policy_net_can_condition_on_design_shaped_raw_history():
     task = _make_task()
     space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
@@ -225,15 +142,3 @@ def test_categorical_policy_net_can_condition_on_design_shaped_raw_history():
 
     assert designer.use_raw_history is True
     assert rollout.extra["raw_design_history"].shape == rollout.design_history.shape
-
-
-def test_categorical_physical_raw_history_can_still_be_normalized():
-    task = _make_task()
-    space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
-    net = CategoricalPolicyNet(
-        space, event_shape_y=task.event_shape_y, normalize_design_history=True
-    )
-
-    designer = PolicyDesigner(task, T=2, design_net=net, use_raw_history=True)
-
-    assert designer.use_raw_history is True

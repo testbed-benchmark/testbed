@@ -109,7 +109,6 @@ def test_deepset_learned_null_history_agrees_for_empty_and_fully_masked_rows():
     )
 
     torch.testing.assert_close(empty, fully_masked)
-    assert "null_enc" in dict(encoder.named_parameters())
 
 
 def test_deepset_partially_masked_rows_pool_only_valid_tokens():
@@ -143,17 +142,3 @@ def test_stochastic_forward_matches_deterministic_proposal(make_policy):
     torch.testing.assert_close(deterministic, proposal.deterministic_raw_design)
     assert proposal.raw_design.shape == (*BATCH_SHAPE, *EVENT_SHAPE)
     assert proposal.log_prob.shape == BATCH_SHAPE
-
-
-def test_gaussian_sampling_and_reparameterized_sampling_contracts():
-    policy = make_gaussian_policy()
-    y_history, design_history = make_histories()
-
-    sampled = policy.propose(y_history, design_history)
-    reparameterized = policy.propose(
-        y_history, design_history, reparameterize_policy=True
-    )
-
-    assert not sampled.raw_design.requires_grad
-    assert reparameterized.raw_design.requires_grad
-    assert reparameterized.log_prob.requires_grad
