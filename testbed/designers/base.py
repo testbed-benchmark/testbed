@@ -96,12 +96,10 @@ class Designer(ABC, nn.Module):
                 strictly before ``state.t``, so at ``t=0`` they are empty.
 
         Returns:
-            Tensor:
-                The design ``[b, *event_shape_design]``.
-            Tensor | None:
-                The raw (pre-transform) design, when the designer computes one.
-            Tensor | None:
-                The policy log-prob ``[b]`` when the designer is stochastic and calculates a log-prob.
+            tuple[Tensor, Tensor | None, Tensor | None]: The physical design
+            with shape ``[b, *event_shape_design]``, its optional raw
+            pre-transform value, and its optional policy log probability with
+            shape ``[b]``.
         """
         ...
 
@@ -113,11 +111,9 @@ class Designer(ABC, nn.Module):
                 Batch size.
 
         Returns:
-            Tensor:
-                Empty y_history ``[b, 0, *event_shape_y]``.
-
-            Tensor:
-                Empty design_history ``[b, 0, *event_shape_design]``.
+            tuple[Tensor, Tensor]: Empty outcome and design histories with
+            shapes ``[b, 0, *event_shape_y]`` and
+            ``[b, 0, *event_shape_design]``, respectively.
         """
         y_history = torch.empty(
             (b, 0, *self.task.event_shape_y), device=self.task.device

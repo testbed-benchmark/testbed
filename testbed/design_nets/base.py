@@ -64,9 +64,14 @@ class DesignNet(torch.nn.Module, ABC):
         """Maps past (design, outcome) pairs to the next design x_t.
 
         Args:
-            y_history: Outcome history.
-            design_history: Design history.
-            mask: Optional mask for padded histories.
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``. Its ``batch_shape``
+                and history length ``T`` must exactly match ``y_history``;
+                built-in networks do not broadcast these dimensions.
+            mask: Optional boolean mask for padded histories with shape
+                ``[*batch_shape, T]``.
 
         Returns:
             Tensor: The next design x_t with shape
@@ -86,8 +91,10 @@ class DesignNet(torch.nn.Module, ABC):
         """Returns a raw design proposal for an experimental history.
 
         Args:
-            y_history: Outcome history.
-            design_history: Design history.
+            y_history: Outcome history with the same shape requirements as
+                ``forward``.
+            design_history: Design history with the same shape requirements
+                as ``forward``.
             mask: Optional mask for padded histories.
             reparameterize_policy: Whether stochastic policies should use a
                 reparameterized sample.

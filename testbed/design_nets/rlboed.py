@@ -9,7 +9,19 @@ from testbed.envs.history import History
 
 
 class RLBOEDQNetwork(nn.Module):
-    """DeepSets critic with masked sum pooling over experiment history."""
+    """DeepSets critic with masked sum pooling over experiment history.
+
+    Args:
+        dim_y: Flattened outcome dimension.
+        dim_design: Flattened design dimension.
+        design_low: Per-coordinate physical lower design bounds.
+        design_high: Per-coordinate physical upper design bounds.
+        outcome_low: Per-coordinate lower outcome bounds.
+        outcome_high: Per-coordinate upper outcome bounds.
+        dim_h: Hidden layer widths; an integer specifies one layer.
+        dim_emb: History-summary dimension for the default encoder.
+        encoder: Optional history encoder. Defaults to ``DeepSetEncoder``.
+    """
 
     def __init__(
         self,
@@ -24,7 +36,19 @@ class RLBOEDQNetwork(nn.Module):
         dim_emb: int = 64,
         encoder: HistoryEncoder | None = None,
     ):
-        """dim_h: per-layer hidden widths as a list; an int is a single layer."""
+        """Initializes the continuous-action critic.
+
+        Args:
+            dim_y: Flattened outcome dimension.
+            dim_design: Flattened design dimension.
+            design_low: Per-coordinate physical lower design bounds.
+            design_high: Per-coordinate physical upper design bounds.
+            outcome_low: Per-coordinate lower outcome bounds.
+            outcome_high: Per-coordinate upper outcome bounds.
+            dim_h: Hidden layer widths; an integer specifies one layer.
+            dim_emb: History-summary dimension for the default encoder.
+            encoder: Optional history encoder. Defaults to ``DeepSetEncoder``.
+        """
         super().__init__()
         self.dim_y = dim_y
         self.dim_design = dim_design
@@ -44,7 +68,17 @@ class RLBOEDQNetwork(nn.Module):
         self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
 
     def forward(self, observation: History, design: Tensor) -> Tensor:
-        """Estimates Q from a permutation-invariant history summary and design."""
+        """Estimates Q from a permutation-invariant history summary and design.
+
+        Args:
+            observation: History containing designs, outcomes, and an optional
+                padding mask.
+            design: Candidate physical designs with shape
+                ``[batch, *event_shape_design]``.
+
+        Returns:
+            Tensor: Q-values with shape ``[batch, 1]``.
+        """
         hist_designs = observation.designs
         outcomes = observation.outcomes
         mask = observation.mask

@@ -89,7 +89,15 @@ class PolicyDesigner(Designer):
         return produces_log_probs and not uses_pathwise_samples
 
     def design_history_for_step(self, state) -> torch.Tensor:
-        """Returns the physical history, or raw history when explicitly requested."""
+        """Returns the history passed to the policy for a rollout step.
+
+        Args:
+            state: Mutable rollout state maintained by :class:`Designer`.
+
+        Returns:
+            Tensor: Raw history when ``use_raw_history`` is enabled and
+            available; otherwise, physical design history.
+        """
         if self.use_raw_history and state.raw_design_history is not None:
             return state.raw_design_history
         return state.design_history
@@ -103,8 +111,15 @@ class PolicyDesigner(Designer):
     ):
         """Proposes and transforms one design for the supplied history.
 
+        Args:
+            y_history: Outcome history accepted by the design network.
+            design_history: Physical or raw design history accepted by the
+                design network according to ``use_raw_history``.
+            mask: Optional validity mask for padded history positions.
+
         Returns:
-            A ``(design, raw_design, log_prob)`` tuple. ``log_prob`` is ``None``
+            tuple[Tensor, Tensor, Tensor | None]: Physical design, raw design,
+            and physical-space log probability. The log probability is ``None``
             for deterministic proposals.
         """
         proposal = self.design_net.propose(
@@ -152,7 +167,24 @@ def build_policy_designer(
     use_raw_history: bool = False,
     transform_designs: bool = True,
 ):
-    """Compatibility alias that constructs :class:`PolicyDesigner`."""
+    """Constructs a :class:`PolicyDesigner`.
+
+    This compatibility factory accepts exactly the corresponding
+    :class:`PolicyDesigner` construction arguments.
+
+    Args:
+        task: Task for which designs are produced.
+        T: Number of experimental steps.
+        design_net: Network implementing ``propose()``.
+        design_space: Optional design space used to transform raw proposals.
+        reparameterize_policy: Request pathwise samples where supported.
+        hooks: Optional rollout hooks.
+        use_raw_history: Whether policies receive raw design history.
+        transform_designs: Whether raw proposals are mapped to physical designs.
+
+    Returns:
+        PolicyDesigner: The configured policy designer.
+    """
     return PolicyDesigner(
         task,
         T,

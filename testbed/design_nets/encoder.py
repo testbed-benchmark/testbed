@@ -80,15 +80,40 @@ class HistoryEncoder(nn.Module, ABC):
         The default implementation concatenates them. Subclasses can override
         this method, for example to pass each input through a separate MLP,
         provided they specify the resulting width with ``dim_token``.
+
+        Args:
+            y_flat: Flattened outcomes with shape ``[batch, T, dim_y]``.
+            design_flat: Flattened designs with shape
+                ``[batch, T, dim_design]``.
+
+        Returns:
+            Tensor: Tokens with shape ``[batch, T, dim_token]``.
         """
         return torch.cat([y_flat, design_flat], dim=-1)
 
     def empty_encoding(self, b):
-        """Encoding for the empty history (T=0) case."""
+        """Returns the learned encoding for empty histories.
+
+        Args:
+            b: Flattened batch size.
+
+        Returns:
+            Tensor: Empty-history encodings with shape ``[b, dim_emb]``.
+        """
         return self.null_enc.unsqueeze(0).expand(b, -1)  # [b, dim_emb]
 
     def forward(self, y_history, design_history, mask=None):
-        """Runs the forward pass of the encoder."""
+        """Encodes histories with arbitrary event and batch shapes.
+
+        Args:
+            y_history: Outcomes shaped ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Designs shaped
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional validity mask shaped ``[*batch_shape, T]``.
+
+        Returns:
+            Tensor: Encodings shaped ``[*batch_shape, dim_emb]``.
+        """
         prepared = self._prepare_history(
             y_history,
             design_history,
@@ -99,11 +124,19 @@ class HistoryEncoder(nn.Module, ABC):
         return self._encode_prepared(prepared)
 
     def encode_flat(self, y_history, design_history, mask=None):
-        """Encode histories already flattened to ``[batch, T, dim_event]``.
+        """Encodes histories already flattened to ``[batch, T, dim_event]``.
 
         Policy actors use this method after shared policy preparation. External
         callers should use :meth:`forward`, which accepts arbitrary event and
         batch shapes.
+
+        Args:
+            y_history: Outcomes with shape ``[batch, T, dim_y]``.
+            design_history: Designs with shape ``[batch, T, dim_design]``.
+            mask: Optional validity mask with shape ``[batch, T]``.
+
+        Returns:
+            Tensor: Encodings with shape ``[batch, dim_emb]``.
         """
         prepared = self._prepare_history(
             y_history,

@@ -15,7 +15,12 @@ from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_r
 
 
 class StochasticDesignNet(DesignNet):
-    """Design network that samples raw proposals with policy log probabilities."""
+    """Base network for sampled proposals with policy log probabilities.
+
+    Subclasses implement :meth:`propose` and set the policy's history
+    normalization contract. Their proposals participate in score-function
+    training unless they support and are asked for reparameterized samples.
+    """
 
     produces_policy_log_probs = True
     raw_designs_are_physical = False
@@ -23,7 +28,16 @@ class StochasticDesignNet(DesignNet):
     def _prepare_histories(
         self, y_history, design_history, *, mask: Tensor | None = None
     ) -> PreparedHistory:
-        """Prepare histories and apply this policy's optional normalization."""
+        """Validates, flattens, and optionally normalizes policy histories.
+
+        Args:
+            y_history: Outcome histories in the public history format.
+            design_history: Physical design histories in the public format.
+            mask: Optional validity mask for padded history positions.
+
+        Returns:
+            PreparedHistory: Flattened actor inputs and the flattened mask.
+        """
         encoder = getattr(self.actor, "encoder", None)
         event_shape_y = getattr(self.actor, "event_shape_y", None)
         if event_shape_y is None and encoder is not None:
@@ -129,7 +143,13 @@ class CategoricalHead(nn.Module):
     """Maps a history encoding to categorical design logits."""
 
     def __init__(self, dim_emb: int, n_designs: int, dim_h=(128, 128)):
-        """Initializes the categorical readout."""
+        """Initializes the categorical readout.
+
+        Args:
+            dim_emb: Width of each history embedding.
+            n_designs: Number of designs represented by the logits.
+            dim_h: Hidden layer widths; an integer specifies one layer.
+        """
         super().__init__()
         self.dim_emb = int(dim_emb)
         self.n_designs = int(n_designs)
@@ -139,7 +159,14 @@ class CategoricalHead(nn.Module):
         _initialize_linear_layers(self)
 
     def forward(self, encoding: Tensor) -> Tensor:
-        """Returns one categorical logit per design."""
+        """Returns one categorical logit per design.
+
+        Args:
+            encoding: History encodings with shape ``[batch, dim_emb]``.
+
+        Returns:
+            Tensor: Logits with shape ``[batch, n_designs]``.
+        """
         return self.logits_head(self.actor_net(encoding))
 
 
@@ -155,6 +182,13 @@ class GaussianPolicyActor(nn.Module):
 
         The encoder and head must produce and consume the same embedding
         dimension.
+
+        Args:
+            encoder: History encoder that produces the Gaussian-head input.
+            head: Readout that maps encoder outputs to Gaussian parameters.
+
+        Raises:
+            ValueError: If the encoder and head embedding widths differ.
         """
         super().__init__()
         if encoder.dim_emb != head.dim_emb:
@@ -231,7 +265,15 @@ class CategoricalPolicyActor(nn.Module):
     """History encoder followed by a categorical policy head."""
 
     def __init__(self, encoder: HistoryEncoder, head: CategoricalHead):
-        """Initializes an encoder and categorical head pair."""
+        """Initializes an encoder and categorical head pair.
+
+        Args:
+            encoder: History encoder that produces the categorical-head input.
+            head: Readout that maps encoder outputs to categorical logits.
+
+        Raises:
+            ValueError: If the encoder and head embedding widths differ.
+        """
         super().__init__()
         if encoder.dim_emb != head.dim_emb:
             raise ValueError("encoder and head embedding dimensions must match.")
@@ -241,7 +283,16 @@ class CategoricalPolicyActor(nn.Module):
     def forward(
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
     ) -> Tensor:
-        """Computes design logits from a history."""
+        """Computes design logits from a flattened history.
+
+        Args:
+            y_history: Outcomes with shape ``[batch, T, dim_y]``.
+            design_history: Designs with shape ``[batch, T, dim_design]``.
+            mask: Optional validity mask with shape ``[batch, T]``.
+
+        Returns:
+            Tensor: One logit per design with shape ``[batch, n_designs]``.
+        """
         return self.head(self.encoder.encode_flat(y_history, design_history, mask=mask))
 
 
@@ -422,7 +473,20 @@ class GaussianPolicyNet(StochasticDesignNet):
         mask: Tensor | None = None,
         reparameterize_policy: bool = False,
     ) -> DesignProposal:
-        """Samples an unconstrained Gaussian proposal and its raw density."""
+        """Samples an unconstrained Gaussian proposal and its raw density.
+
+        Args:
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional validity mask with shape ``[*batch_shape, T]``.
+            reparameterize_policy: Whether to sample with ``Normal.rsample``.
+
+        Returns:
+            DesignProposal: A raw sampled design, its summed raw log density,
+            and its deterministic mean counterpart.
+        """
         history = self._prepare_histories(
             y_history,
             design_history,

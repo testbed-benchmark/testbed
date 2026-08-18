@@ -52,11 +52,10 @@ Note that some of these are meant only as references or reasonable defaults; for
 
 | `testbed.designers.X` | Description | API |
 |---|---|---|
-| `DeterministicPolicyDesigner` | Uses a deterministic neural network based policy to produce designs | [API](autoapi/testbed/designers/amortized/index) |
+| `PolicyDesigner` | Uses a `DesignNet` policy to produce deterministic or stochastic designs | [API](autoapi/testbed/designers/amortized/index) |
 | `RandomDesigner` | Samples designs from a fixed distribution | [API](autoapi/testbed/designers/non_adaptive/index) |
 | `SequentialDesigner` | Produces designs by optimizing an objective at each design step; estimates a posterior at each step | [API](autoapi/testbed/designers/sequential/index) |
 | `StaticDesigner` | Produces all designs up-front (i.e., non-adaptively) by optimizing an objective | [API](autoapi/testbed/designers/non_adaptive/index) |
-| `StochasticPolicyDesigner` | Uses a stochastic neural network based policy to produce designs | [API](autoapi/testbed/designers/amortized/index) |
 
 
 ```{toctree}

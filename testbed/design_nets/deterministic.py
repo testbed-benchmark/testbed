@@ -30,7 +30,15 @@ class DeterministicPolicyNet(DesignNet):
         dim_h=None,
         activation=nn.GELU,
     ):
-        """Initializes."""
+        """Initializes a deterministic policy.
+
+        Args:
+            encoder: History encoder that produces a ``dim_emb`` summary.
+            event_shape_out: Shape of one design proposal.
+            dim_h: Decoder hidden widths. An integer selects one layer; defaults
+                to the encoder embedding width.
+            activation: Activation class used by the decoder.
+        """
         super().__init__()
 
         self.encoder = encoder
@@ -44,7 +52,17 @@ class DeterministicPolicyNet(DesignNet):
         self.decoder = MLP(layer_widths, activation=activation)
 
     def forward(self, y_history, design_history, mask=None):
-        """Forward pass of the policy net. Combines the encoder with the decoder, which is assumed to be an MLP."""
+        """Returns a deterministic raw design for each supplied history.
+
+        Args:
+            y_history: Outcome histories accepted by ``encoder``.
+            design_history: Design histories accepted by ``encoder``.
+            mask: Optional validity mask for padded history positions.
+
+        Returns:
+            Tensor: Raw designs with shape
+            ``[*batch_shape, *event_shape_out]``.
+        """
         enc = self.encoder(y_history, design_history, mask=mask)  # [b, dim_emb]
         out = self.decoder(enc)  # [b, prod(out)]
         return out.reshape(*enc.shape[:-1], *self.event_shape_out)
@@ -57,7 +75,17 @@ class DeterministicPolicyNet(DesignNet):
         mask: Tensor | None = None,
         reparameterize_policy: bool = False,
     ):
-        """Wraps the output of ``self.forward`` in a ``DesignProposal``."""
+        """Returns the deterministic design in the common proposal format.
+
+        Args:
+            y_history: Outcome history accepted by :meth:`forward`.
+            design_history: Design history accepted by :meth:`forward`.
+            mask: Optional validity mask for padded history positions.
+            reparameterize_policy: Ignored because this policy is deterministic.
+
+        Returns:
+            DesignProposal: A proposal without a log probability.
+        """
         del reparameterize_policy
         raw_design = self(y_history, design_history, mask=mask)
         return DesignProposal(raw_design=raw_design)
@@ -82,7 +110,19 @@ class AttentivePolicyNet(DeterministicPolicyNet):
         decoder_dim_h=None,
         decoder_activation=nn.GELU,
     ):
-        """Initializes."""
+        """Initializes the attentive policy preset.
+
+        Args:
+            event_shape_y: Shape of one outcome event.
+            event_shape_design: Shape of one design-history event.
+            event_shape_out: Shape of one proposed design.
+            encoder_dim_h: Hidden widths in the token encoder.
+            dim_emb: History embedding width.
+            num_heads: Number of attention heads.
+            num_blocks: Number of Transformer blocks.
+            decoder_dim_h: Optional decoder hidden widths.
+            decoder_activation: Decoder activation class.
+        """
         encoder = AttentiveEncoder(
             event_shape_y,
             event_shape_design,
@@ -117,7 +157,17 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
         decoder_dim_h=None,
         decoder_activation=nn.GELU,
     ):
-        """Initializes."""
+        """Initializes the DeepSets policy preset.
+
+        Args:
+            event_shape_y: Shape of one outcome event.
+            event_shape_design: Shape of one design-history event.
+            event_shape_out: Shape of one proposed design.
+            encoder_dim_h: Hidden widths in the per-token encoder.
+            dim_emb: History embedding width.
+            decoder_dim_h: Optional decoder hidden widths.
+            decoder_activation: Decoder activation class.
+        """
         encoder = DeepSetEncoder(
             event_shape_y,
             event_shape_design,
@@ -147,7 +197,15 @@ class MLPPolicyNet(DesignNet):
         dims,
         activation=nn.ReLU,
     ):
-        """Initializes."""
+        """Initializes the fixed-length MLP policy.
+
+        Args:
+            event_shape_y: Shape of one outcome event.
+            event_shape_design: Shape of one design-history event.
+            event_shape_out: Shape of one proposed design.
+            dims: Widths of the flattened-input MLP, including input and output.
+            activation: Activation class used by the MLP.
+        """
         super().__init__()
 
         self.event_shape_y = torch.Size(event_shape_y)
@@ -161,7 +219,19 @@ class MLPPolicyNet(DesignNet):
         self.mlp = MLP(dims, activation=activation)
 
     def forward(self, y_history, design_history, mask=None):
-        """Forward pass of the policy net."""
+        """Returns a raw design from a fixed-length unmasked history.
+
+        Args:
+            y_history: Outcome history with leading batch and time dimensions.
+            design_history: Design history with matching batch and time dimensions.
+            mask: Unsupported padding mask; must be ``None``.
+
+        Returns:
+            Tensor: Raw designs with shape ``[batch, *event_shape_out]``.
+
+        Raises:
+            NotImplementedError: If ``mask`` is provided.
+        """
         if mask is not None:
             raise NotImplementedError("Masks are not supported by MLPPolicyNet.")
 
@@ -188,7 +258,17 @@ class MLPPolicyNet(DesignNet):
         mask: Tensor | None = None,
         reparameterize_policy: bool = False,
     ):
-        """Wraps the output of ``self.forward`` in a ``DesignProposal``."""
+        """Returns the deterministic design in the common proposal format.
+
+        Args:
+            y_history: Outcome history accepted by :meth:`forward`.
+            design_history: Design history accepted by :meth:`forward`.
+            mask: Optional validity mask; unsupported by this policy.
+            reparameterize_policy: Ignored because this policy is deterministic.
+
+        Returns:
+            DesignProposal: A proposal without a log probability.
+        """
         del reparameterize_policy
         raw_design = self(y_history, design_history, mask=mask)
         return DesignProposal(raw_design=raw_design)

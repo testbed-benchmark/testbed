@@ -74,10 +74,9 @@ class StaticDesigner(Designer):
                 How many copies of the design to return.
 
         Returns:
-            Tensor:
-                The design, ``[batch_size, *event_shape_design]``.
-            Tensor:
-                The raw design it was mapped from, same shape.
+            tuple[Tensor, Tensor]: The physical design and the raw design it
+            was mapped from, each with shape
+            ``[batch_size, *event_shape_design]``.
         """
         raw = (
             self.raw_design[t]
@@ -168,11 +167,10 @@ class RandomDesigner(Designer):
                 How many designs to draw.
 
         Returns:
-            Tensor:
-                Random designs. Shape ``[n, *event_shape_design]``.
-            Tensor | None:
-                Log-probs, shape ``[n]``, or None when drawing from the design
-                space, which exposes no density.
+            tuple[Tensor, Tensor | None]: Random designs with shape
+            ``[n, *event_shape_design]`` and their log probabilities with
+            shape ``[n]``. The log probabilities are ``None`` when sampling
+            from the design space, which exposes no density.
         """
         if self.dist is None:
             design = self.task.design_space.sample(
@@ -195,11 +193,10 @@ class RandomDesigner(Designer):
                 depend on the history.
 
         Returns:
-            Tensor:
-                Random design. Shape ``[b, *event_shape_design]``.
-            Tensor | None:
-                Log-prob of random designs, shape ``[b,]``, or None when
-                drawing from the design space.
+            tuple[Tensor, Tensor | None]: Random designs with shape
+            ``[b, *event_shape_design]`` and their log probabilities with
+            shape ``[b]``. The log probabilities are ``None`` when sampling
+            from the design space.
         """
         return self._sample_designs(y_history.shape[0])
 

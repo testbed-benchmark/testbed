@@ -14,6 +14,13 @@ class PreparedHistory:
 
     ``batch_shape`` is retained so callers can restore their public result
     shape after evaluating an encoder or actor on the flattened histories.
+
+    Attributes:
+        batch_shape: Original leading batch dimensions.
+        y_flat: Outcomes with shape ``[prod(batch_shape), T, dim_y]``.
+        design_flat: Designs with shape
+            ``[prod(batch_shape), T, dim_design]``.
+        mask_flat: Optional validity mask with shape ``[prod(batch_shape), T]``.
     """
 
     batch_shape: torch.Size
