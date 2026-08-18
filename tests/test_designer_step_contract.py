@@ -53,9 +53,7 @@ class _HistorySpy(DesignNet):
         reparameterize_policy=False,
     ):
         del reparameterize_policy
-        return DesignProposal(
-            raw_design=self(y_history, design_history, mask=mask)
-        )
+        return DesignProposal(raw_design=self(y_history, design_history, mask=mask))
 
 
 # ---------------------------------------------------------------------------
