@@ -59,12 +59,8 @@ class PolicyDesigner(Designer):
             )
         self.reparameterize_policy = bool(reparameterize_policy)
         self.use_raw_history = bool(use_raw_history)
-        normalizes_physical_history = bool(
-            getattr(self.design_net, "normalize_design_history", False)
-        )
-        raw_designs_are_physical = bool(
-            getattr(self.design_net, "raw_designs_are_physical", False)
-        )
+        normalizes_physical_history = bool(self.design_net.normalize_design_history)
+        raw_designs_are_physical = bool(self.design_net.raw_designs_are_physical)
         if (
             self.use_raw_history
             and normalizes_physical_history
@@ -83,11 +79,9 @@ class PolicyDesigner(Designer):
     @property
     def requires_policy_log_probs(self) -> bool:
         """Whether training must use proposal score-function log probabilities."""
-        produces_log_probs = bool(
-            getattr(self.design_net, "produces_policy_log_probs", False)
-        )
+        produces_log_probs = bool(self.design_net.produces_policy_log_probs)
         supports_reparameterization = bool(
-            getattr(self.design_net, "supports_reparameterized_proposals", False)
+            self.design_net.supports_reparameterized_proposals
         )
         uses_pathwise_samples = (
             self.reparameterize_policy and supports_reparameterization
@@ -124,9 +118,7 @@ class PolicyDesigner(Designer):
         # finite set of physical designs.  Their log_prob is a categorical
         # log-mass, not a density in the task's raw coordinates, so neither
         # the task transform nor its Jacobian correction applies.
-        raw_designs_are_physical = bool(
-            getattr(self.design_net, "raw_designs_are_physical", False)
-        )
+        raw_designs_are_physical = bool(self.design_net.raw_designs_are_physical)
         if not self.transform_designs or raw_designs_are_physical:
             return proposal.raw_design, proposal.raw_design, proposal.log_prob
 
