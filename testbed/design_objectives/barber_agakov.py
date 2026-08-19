@@ -4,10 +4,10 @@ from torch import Tensor
 
 from ..core.rollout import Rollout
 from ..tasks.base import Task
-from .base_objective import RolloutObjective
+from .base_objective import DesignObjective, RolloutObjective
 from .loss import _check_reduction
 
-__all__ = ["BarberAgakov", "posterior_nll"]
+__all__ = ["BarberAgakov", "MyopicBarberAgakov", "posterior_nll"]
 
 
 def posterior_nll(
@@ -42,6 +42,63 @@ def posterior_nll(
     if reduction == "mean":
         return nll.mean()
     return nll
+
+
+class MyopicBarberAgakov(DesignObjective):
+    r"""Barber-Agakov lower bound on the EIG of one design.
+
+    .. math::
+        \mathrm{EIG}(d) \ge \mathbb{E}[\log q(\theta \mid y, d) - \log p(\theta)]
+
+    The ``T=1`` case of :class:`BarberAgakov`, for myopic optimization with
+    ``SequentialDesigner``: draws ``n_outer`` pairs ``(theta, y)`` for ``design``
+    and evaluates the bound with ``posterior_net`` conditioned on that one-step
+    history.
+
+
+    Args:
+        task: Task whose EIG is bounded.
+        posterior_net: Anything exposing ``log_prob(theta, y_history,
+            design_history)``, e.g. a ``VariationalPosteriorNet``.
+        n_outer: Number of ``(theta, y)`` pairs per gain estimate.
+    """
+
+    def __init__(self, task: Task, posterior_net, n_outer: int):
+        """Initializes."""
+        super().__init__(task)
+        self.posterior_net = posterior_net
+        self.n_outer = int(n_outer)
+
+    def __call__(self, design: Tensor):
+        """Estimates gain for one design."""
+        return self.estimate_gain(design)
+
+    def estimate_gain(self, design: Tensor) -> Tensor:
+        """Estimates gain for one fixed design.
+
+        design: ``[*event_shape_design]``. Leading size-1 batch dims are
+        tolerated and stripped.
+        returns: scalar Barber-Agakov estimate.
+        """
+        n_event_dims = len(self.task.event_shape_design)
+        batch_shape = design.shape[: design.ndim - n_event_dims]
+        if any(s != 1 for s in batch_shape):
+            raise ValueError(
+                "MyopicBarberAgakov expects a single design; got shape "
+                f"{tuple(design.shape)}"
+            )
+        design = design.reshape(self.task.event_shape_design)
+
+        b = self.n_outer
+        y, theta = self.task.sample_joint(design, n_samples=b)
+        theta = theta.reshape(b, *self.task.event_shape_theta)
+
+        log_q = self.posterior_net.log_prob(
+            theta,
+            y.reshape(b, 1, *self.task.event_shape_y),
+            design.expand(b, 1, *self.task.event_shape_design),
+        )
+        return (log_q - self.task.current_prior.log_prob(theta)).mean()
 
 
 class BarberAgakov(RolloutObjective):

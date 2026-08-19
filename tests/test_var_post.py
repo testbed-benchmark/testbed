@@ -20,9 +20,19 @@ from testbed.design_nets.variational_posterior import (
     GaussianMixtureVariationalPosteriorNet,
     VariationalPosteriorNet,
 )
-from testbed.design_objectives import BarberAgakov, BarberAgakovReinforce, posterior_nll
+from testbed.design_objectives import (
+    BarberAgakov,
+    BarberAgakovReinforce,
+    MyopicBarberAgakov,
+    posterior_nll,
+)
 from testbed.design_objectives.reinforce import leave_one_out_baseline
-from testbed.designers import PolicyDesigner, RandomDesigner, Rollout
+from testbed.designers import (
+    PolicyDesigner,
+    RandomDesigner,
+    Rollout,
+    SequentialDesigner,
+)
 from testbed.tasks import (
     HyperbolicTemporalDiscounting,
     LinearRegression,
@@ -821,3 +831,88 @@ def test_canonicalized_net_sorts_its_samples():
     samples = posterior.sample(rollout.y_history, rollout.design_history, n_samples=4)
     assert samples.shape == (4, 6, *task.event_shape_theta)
     assert torch.all(samples[..., :-1, 0] <= samples[..., 1:, 0])
+
+
+# ============================================================================
+# MyopicBarberAgakov (single-design DesignObjective variant)
+# ============================================================================
+
+
+def test_myopic_bound_with_exact_posterior_matches_exact_eig():
+    torch.manual_seed(1)
+    x_val = 0.7
+    task, prior_loc, prior_cov, design_row, exact_eig = _linear_regression_setup(
+        x_val=x_val
+    )
+    posterior = _ExactPosterior(prior_loc, prior_cov, design_row, task.noise_scale)
+
+    # the task design is x alone; design_row is the regressor [1, x]
+    objective = MyopicBarberAgakov(task, posterior, n_outer=32768)
+    bound = objective.estimate_gain(torch.tensor([x_val]))
+
+    assert bound.item() == pytest.approx(exact_eig.item(), abs=0.05)
+
+
+def test_myopic_gain_reaches_both_the_design_and_the_posterior():
+    torch.manual_seed(0)
+    task = LinearRegression(dim=2)
+    posterior = DeepSetVariationalPosteriorNet(
+        task.event_shape_y,
+        task.event_shape_design,
+        task.event_shape_theta,
+        n_components=3,
+        encoder_dim_h=[16],
+        dim_emb=16,
+        trunk_dim_h=16,
+    )
+    design = task.design_space.sample().requires_grad_(True)
+
+    gain = MyopicBarberAgakov(task, posterior, n_outer=64).estimate_gain(design)
+    assert gain.ndim == 0
+    gain.backward()
+
+    assert design.grad is not None and torch.isfinite(design.grad).all()
+    trainable = [p for n, p in posterior.named_parameters() if n != "encoder.null_enc"]
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in trainable)
+
+
+def test_myopic_objective_rejects_a_batch_of_designs():
+    task = LinearRegression(dim=2)
+    posterior = DeepSetVariationalPosteriorNet(
+        task.event_shape_y,
+        task.event_shape_design,
+        task.event_shape_theta,
+        n_components=2,
+        encoder_dim_h=[8],
+        dim_emb=8,
+        trunk_dim_h=8,
+    )
+    objective = MyopicBarberAgakov(task, posterior, n_outer=8)
+    with pytest.raises(ValueError, match="single design"):
+        objective.estimate_gain(task.design_space.sample(batch_shape=(3,)))
+
+
+def test_myopic_objective_drives_a_sequential_designer():
+    torch.manual_seed(0)
+    task = LinearRegression(dim=2)
+    posterior = DeepSetVariationalPosteriorNet(
+        task.event_shape_y,
+        task.event_shape_design,
+        task.event_shape_theta,
+        n_components=2,
+        encoder_dim_h=[8],
+        dim_emb=8,
+        trunk_dim_h=8,
+    )
+    designer = SequentialDesigner(
+        task,
+        T=2,
+        objective=MyopicBarberAgakov(task, posterior, n_outer=32),
+        lr=1e-2,
+        n_step_opt=2,
+        update_posterior=False,
+    )
+    rollout = designer.rollout(task.sample_prior(1))
+
+    assert rollout.design_history.shape == (1, 2, *task.event_shape_design)
+    assert torch.isfinite(rollout.design_history).all()

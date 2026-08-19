@@ -3,7 +3,7 @@
 # Included so that you can do `from testbed.design_objectives import MSELoss` (for consistency with the other losses)
 from torch.nn import MSELoss
 
-from .barber_agakov import BarberAgakov, posterior_nll
+from .barber_agakov import BarberAgakov, MyopicBarberAgakov, posterior_nll
 from .base_objective import DesignObjective, Objective, RolloutObjective
 from .log_loss import LogLoss
 from .loss import (
@@ -27,6 +27,7 @@ __all__ = [
     "LogLoss",
     "LogMSELoss",
     "LossReinforce",
+    "MyopicBarberAgakov",
     "MSELoss",
     "Objective",
     "PermutationInvariantMSELoss",
