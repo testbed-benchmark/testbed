@@ -128,7 +128,7 @@ def normal_cdf(x):
     return 0.5 * (1 + torch.erf(x / 2**0.5))
 
 
-def _sort_by_key(x: Tensor, key: Tensor) -> Tensor:
+def sort_by_key(x: Tensor, key: Tensor) -> Tensor:
     """Sorts the ``n_objects`` axis of ``x`` by ascending ``key``.
 
     Args:
@@ -161,7 +161,7 @@ def sort_by_norm(x: Tensor) -> Tensor:
         x = x.unsqueeze(0)
 
     norms = torch.linalg.norm(x.flatten(start_dim=2), dim=-1)
-    x = _sort_by_key(x, norms)
+    x = sort_by_key(x, norms)
 
     if unbatched:
         x = x.squeeze(0)
@@ -194,7 +194,7 @@ def sort_by_first_coordinate(x: Tensor) -> Tensor:
 
     # for each entry, what is its first coordinate?
     first_coord = x.flatten(start_dim=2)[..., 0]
-    x = _sort_by_key(x, first_coord)
+    x = sort_by_key(x, first_coord)
 
     if unbatched:
         x = x.squeeze(0)
