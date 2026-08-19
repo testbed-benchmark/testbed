@@ -38,7 +38,7 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from testbed.designers import build_policy_designer
+from testbed.designers import PolicyDesigner
 
 
 def build_design_net(cfg, task):
@@ -144,7 +144,14 @@ def evaluate_checkpoint(
     design_net.load_state_dict(state[key])
     design_net.eval()
 
-    designer = build_policy_designer(task, cfg.T, design_net)
+    # use_raw_history mirrors the default the training run was built with, so
+    # evaluation conditions the net on the same history coordinates.
+    designer = PolicyDesigner(
+        task,
+        cfg.T,
+        design_net,
+        use_raw_history=not design_net.produces_policy_log_probs,
+    )
 
     lower_gains, upper_gains = [], []
     remaining = n_outer

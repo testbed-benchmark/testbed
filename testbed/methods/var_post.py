@@ -11,12 +11,7 @@ from hydra.utils import instantiate
 
 from testbed.core.setup import setup
 from testbed.design_objectives import GuideNLL, VarPost, VarPostReinforce
-from testbed.designers import (
-    PolicyDesigner,
-    RandomDesigner,
-    StochasticPolicyDesigner,
-    build_policy_designer,
-)
+from testbed.designers import PolicyDesigner, RandomDesigner
 
 # ============================================================================
 # Training class
@@ -402,17 +397,18 @@ def main(cfg):
     guide_net = build_guide_net(cfg, task)
     guide_net = guide_net.to(cfg.device)
 
-    designer = build_policy_designer(
+    designer = PolicyDesigner(
         task,
         cfg.T,
         design_net,
         reparameterize_policy=cfg.objective.reparameterize_policy,
+        # PolicyDesigner now defaults this to False for every net. Reproduce the
+        # old per-net default before PR #37: raw-history conditioning for
+        # deterministic nets, constrained history for stochastic ones.
+        use_raw_history=not design_net.produces_policy_log_probs,
     )
 
-    cfg.objective.requires_policy_log_probs = (
-        isinstance(designer, StochasticPolicyDesigner)
-        and not designer.reparameterize_policy
-    )
+    cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
 
     objective = build_objective(cfg, task, guide_net)
     guide_loss = GuideNLL(

@@ -12,12 +12,12 @@ from testbed.design_nets import (
     AttentiveGuideNet,
     DeepSetGuideNet,
     DeepSetPolicyNet,
-    TanhGaussianPolicyNet,
+    GaussianPolicyNet,
 )
 from testbed.design_nets.guide import GaussianMixtureGuideNet, GuideNet, GuideNLL
 from testbed.design_objectives import VarPost, VarPostReinforce
 from testbed.design_objectives.reinforce import leave_one_out_baseline
-from testbed.designers import RandomDesigner, Rollout, build_policy_designer
+from testbed.designers import PolicyDesigner, RandomDesigner, Rollout
 from testbed.tasks import (
     HyperbolicTemporalDiscounting,
     LinearRegression,
@@ -43,7 +43,7 @@ def _make_design_net(task):
 
 def _make_stochastic_net(task):
     space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
-    return TanhGaussianPolicyNet(space)
+    return GaussianPolicyNet(space, event_shape_y=task.event_shape_y)
 
 
 def _make_guide(task, n_components=3):
@@ -58,8 +58,15 @@ def _make_guide(task, n_components=3):
     )
 
 
+def _make_designer(task, policy_net, T=3, **kwargs):
+    # PolicyDesigner defaults use_raw_history to False for every net; reproduce
+    # the old per-net default unless a caller asks for something else.
+    kwargs.setdefault("use_raw_history", not policy_net.produces_policy_log_probs)
+    return PolicyDesigner(task, T=T, design_net=policy_net, **kwargs)
+
+
 def _make_rollout(task, policy_net, b=8, T=3, **kwargs):
-    designer = build_policy_designer(task, T=T, design_net=policy_net, **kwargs)
+    designer = _make_designer(task, policy_net, T=T, **kwargs)
     theta0 = task.sample_prior(b)
     return designer.rollout(theta0)
 
@@ -318,7 +325,7 @@ def test_var_post_gradient_reaches_deterministic_policy_and_guide_in_one_backwar
     task = _make_task()
     guide = _make_guide(task)
     policy_net = _make_design_net(task)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
 
     gain = VarPostReinforce(task, guide, stochastic_design_policy=False).estimate_gain(
@@ -340,7 +347,7 @@ def test_var_post_reinforce_train_guide_false_blocks_guide_gradient_even_if_unfr
     task = _make_task()
     guide = _make_guide(task)
     policy_net = _make_design_net(task)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
     objective = VarPostReinforce(task, guide, stochastic_design_policy=False)
 
@@ -404,7 +411,7 @@ def test_deterministic_reinforce_matches_dad_eq16_reference(baseline):
     task = _make_task()
     guide = _make_guide(task)
     policy_net = _make_design_net(task)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
 
     var_post = VarPost(task, guide)
@@ -435,7 +442,7 @@ def test_stochastic_constant_value_loo_baseline_zero_grad():
     torch.manual_seed(0)
     task = _make_task()
     policy_net = _make_stochastic_net(task)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
 
     guide = _make_guide(task)
@@ -468,9 +475,7 @@ def test_estimate_gain_train_guide_updates_both_nets_in_one_backward_stochastic(
     task = _make_task()
     guide = _make_guide(task)
     policy_net = _make_stochastic_net(task)
-    designer = build_policy_designer(
-        task, T=3, design_net=policy_net, reparameterize_policy=False
-    )
+    designer = _make_designer(task, policy_net, reparameterize_policy=False)
     rollout = designer.rollout(task.sample_prior(8))
     assert "policy_log_probs" in rollout.extra
 
@@ -495,9 +500,7 @@ def test_train_guide_preserves_the_interpretable_gain_value():
     task = _make_task()
     guide = _make_guide(task)
     policy_net = _make_stochastic_net(task)
-    designer = build_policy_designer(
-        task, T=3, design_net=policy_net, reparameterize_policy=False
-    )
+    designer = _make_designer(task, policy_net, reparameterize_policy=False)
     rollout = designer.rollout(task.sample_prior(8))
     objective = VarPostReinforce(task, guide, stochastic_design_policy=True)
 
@@ -512,7 +515,7 @@ def test_train_guide_does_not_affect_policy_gradient_deterministic():
     task = _make_task()
     guide = _make_guide(task)
     policy_net = _make_design_net(task)
-    designer = build_policy_designer(task, T=3, design_net=policy_net)
+    designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
     objective = VarPostReinforce(task, guide, stochastic_design_policy=False)
 
@@ -549,7 +552,7 @@ def _make_trainer(joint):
     task = _make_task()
     guide = _make_guide(task)
     design_net = _make_design_net(task)
-    designer = build_policy_designer(task, T=3, design_net=design_net)
+    designer = _make_designer(task, design_net)
     pretrain_designer = RandomDesigner(task, T=3)
     objective = VarPostReinforce(task, guide, stochastic_design_policy=False)
     guide_loss = GuideNLL(guide)
