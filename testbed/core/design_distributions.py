@@ -1,4 +1,4 @@
-"""Design-sampling distributions for pretraining amortized nets independently of a policy."""
+"""Design-sampling distributions to be used with RandomDesigner."""
 
 import torch
 from torch import Tensor
