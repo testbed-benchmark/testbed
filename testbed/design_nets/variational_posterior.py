@@ -6,14 +6,9 @@ from math import atanh, log, prod
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.distributions import (
-    Categorical,
-    Distribution,
-    Independent,
-    MixtureSameFamily,
-    Normal,
-)
+from torch.distributions import Categorical, Independent, MixtureSameFamily, Normal
 
+from testbed.core.distributions import Distribution, TorchDistribution
 from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP
@@ -22,11 +17,18 @@ from testbed.design_nets.modules import MLP
 class VariationalPosteriorNet(nn.Module, ABC):
     """Maps an experimental history to an amortized variational posterior over theta.
 
+    Subclasses must implement :meth:`log_prob`, the only operation the
+    variational bounds use. :meth:`sample` is optional and raises
+    NotImplementedError until provided; it serves diagnostics and posterior
+    proposals rather than training. A family that materializes an explicit
+    distribution object may expose it as an optional ``distribution`` method
+    (see :class:`GaussianMixtureVariationalPosteriorNet`), but nothing requires
+    one.
+
     Shape:
         ``y_history``: ``[b, T, *event_shape_y]``
         ``design_history``: ``[b, T, *event_shape_design]``
         ``mask``: ``[b, T]`` or None
-        The returned distribution has ``batch_shape=[b]``, ``event_shape=[dim_theta]``.
     """
 
     def __init__(self, event_shape_theta):
@@ -42,14 +44,6 @@ class VariationalPosteriorNet(nn.Module, ABC):
         return next(self.parameters()).device
 
     @abstractmethod
-    def distribution(self, y_history, design_history, mask=None) -> Distribution:
-        """Returns the variational posterior for a history.
-
-        Returns:
-            Distribution: batch_shape ``[b]``, event_shape ``[dim_theta]``.
-        """
-        ...
-
     def log_prob(self, theta: Tensor, y_history, design_history, mask=None) -> Tensor:
         """Evaluates the variational posterior's log density at theta.
 
@@ -62,24 +56,14 @@ class VariationalPosteriorNet(nn.Module, ABC):
         Returns:
             Tensor: Log density, shape ``[b]``.
         """
-        trailing_shape = torch.Size(
-            theta.shape[len(theta.shape) - len(self.event_shape_theta) :]
-        )
-        if trailing_shape != self.event_shape_theta:
-            raise ValueError(
-                f"theta must have trailing shape {tuple(self.event_shape_theta)}; "
-                f"got {tuple(theta.shape)}."
-            )
-        b = theta.shape[0]
-        theta_flat = theta.reshape(b, self.dim_theta)
-        return self.distribution(y_history, design_history, mask=mask).log_prob(
-            theta_flat
-        )
+        ...
 
     def sample(
         self, y_history, design_history, n_samples: int = 1, mask=None
     ) -> Tensor:
         """Draws samples from the variational posterior.
+
+        Optional: raises NotImplementedError unless a subclass provides it.
 
         Args:
             y_history: Outcomes so far, shape ``[b, T, *event_shape_y]``.
@@ -90,13 +74,19 @@ class VariationalPosteriorNet(nn.Module, ABC):
         Returns:
             Tensor: Shape ``[n_samples, b, *event_shape_theta]``.
         """
-        dist = self.distribution(y_history, design_history, mask=mask)
-        samples = dist.sample((n_samples,))  # [n_samples, b, dim_theta]
-        return samples.reshape(n_samples, *dist.batch_shape, *self.event_shape_theta)
+        raise NotImplementedError(f"{type(self).__name__} does not implement sampling.")
 
-    def forward(self, y_history, design_history, mask=None) -> Distribution:
-        """Returns the variational posterior for a history."""
-        return self.distribution(y_history, design_history, mask=mask)
+    def _flatten_theta(self, theta: Tensor) -> Tensor:
+        """Checks theta's trailing event shape and flattens it to ``[b, dim_theta]``."""
+        trailing_shape = torch.Size(
+            theta.shape[len(theta.shape) - len(self.event_shape_theta) :]
+        )
+        if trailing_shape != self.event_shape_theta:
+            raise ValueError(
+                f"theta must have trailing shape {tuple(self.event_shape_theta)}; "
+                f"got {tuple(theta.shape)}."
+            )
+        return theta.reshape(theta.shape[0], self.dim_theta)
 
 
 class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
@@ -201,7 +191,26 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
         )
 
     def distribution(self, y_history, design_history, mask=None) -> Distribution:
-        """Returns the Gaussian-mixture variational posterior for a history."""
+        """Returns the Gaussian-mixture posterior for a history."""
+        return TorchDistribution(self._mixture(y_history, design_history, mask=mask))
+
+    def log_prob(self, theta: Tensor, y_history, design_history, mask=None) -> Tensor:
+        """Evaluates the mixture's log density at theta; shape ``[b]``."""
+        theta_flat = self._flatten_theta(theta)
+        return self.distribution(y_history, design_history, mask=mask).log_prob(
+            theta_flat
+        )
+
+    def sample(
+        self, y_history, design_history, n_samples: int = 1, mask=None
+    ) -> Tensor:
+        """Draws mixture samples; shape ``[n_samples, b, *event_shape_theta]``."""
+        dist = self.distribution(y_history, design_history, mask=mask)
+        samples = dist.sample(n_samples)  # [n_samples, b, dim_theta]
+        return samples.reshape(n_samples, y_history.shape[0], *self.event_shape_theta)
+
+    def _mixture(self, y_history, design_history, mask=None) -> MixtureSameFamily:
+        """Builds the underlying torch Gaussian mixture for a history."""
         emb = self.encoder(y_history, design_history, mask=mask)  # [b, dim_emb]
         b = emb.shape[0]
         K, D = self.n_components, self.dim_theta

@@ -119,6 +119,18 @@ class _ExactPosterior(VariationalPosteriorNet):
         post_mean = post_mean.T  # [b, D]
         return MultivariateNormal(loc=post_mean, covariance_matrix=post_cov)
 
+    def log_prob(self, theta, y_history, design_history, mask=None):
+        theta_flat = self._flatten_theta(theta)
+        return self.distribution(y_history, design_history, mask=mask).log_prob(
+            theta_flat
+        )
+
+    def sample(self, y_history, design_history, n_samples: int = 1, mask=None):
+        dist = self.distribution(y_history, design_history, mask=mask)
+        return dist.sample((n_samples,)).reshape(
+            n_samples, y_history.shape[0], *self.event_shape_theta
+        )
+
 
 # ============================================================================
 # VariationalPosteriorNet: shapes and mixture correctness
@@ -210,7 +222,8 @@ def test_mixture_with_one_component_matches_independent_normal():
     )
     rollout = _make_rollout(task, _make_design_net(task), b=4)
 
-    dist = posterior.distribution(rollout.y_history, rollout.design_history)
+    # .dist reaches the wrapped torch mixture, whose internals this test checks
+    dist = posterior.distribution(rollout.y_history, rollout.design_history).dist
     loc = dist.component_distribution.base_dist.loc[:, 0]
     scale = dist.component_distribution.base_dist.scale[:, 0]
     reference = Independent(Normal(loc, scale), 1)
@@ -227,7 +240,7 @@ def test_mixture_with_three_components_matches_manual_logsumexp():
     posterior = _make_posterior(task, n_components=3)
     rollout = _make_rollout(task, _make_design_net(task), b=4)
 
-    dist = posterior.distribution(rollout.y_history, rollout.design_history)
+    dist = posterior.distribution(rollout.y_history, rollout.design_history).dist
     theta_flat = rollout.theta.reshape(rollout.b, posterior.dim_theta)
 
     loc = dist.component_distribution.base_dist.loc  # [b, K, D]
