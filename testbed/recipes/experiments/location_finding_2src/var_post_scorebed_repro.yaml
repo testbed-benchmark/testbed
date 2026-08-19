@@ -46,7 +46,6 @@ n_posterior_outer: 1_024 # unused if no pretraining phase; kept for config compl
 
 objective:
   name: barber_agakov # plain pathwise bound: deterministic policy + reparameterized likelihood
-  canonicalize_theta: true 
 
 # Policy optimizer: Adam(b1=0.9, b2=0.999), grad clip 1.0 (global norm),
 # cosine_decay_schedule(init_value=1e-5, decay_steps=num_iters, alpha=5e-6).
@@ -82,3 +81,4 @@ posterior_net:
   dim_emb: 256
   num_heads: 4
   num_blocks: 3
+  canonicalize_theta: true # exchangeable sources; matches ScoreBED

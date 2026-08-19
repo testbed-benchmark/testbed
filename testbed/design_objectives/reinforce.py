@@ -209,7 +209,6 @@ class BarberAgakovReinforce(Reinforce):
         stochastic_design_policy: bool,
         baseline: str | None = None,
         use_current_prior: bool = False,
-        canonicalize_theta: bool = False,
     ):
         """Initializes."""
         super().__init__(task, stochastic_design_policy, baseline)
@@ -217,7 +216,6 @@ class BarberAgakovReinforce(Reinforce):
             task,
             posterior_net,
             use_current_prior=use_current_prior,
-            canonicalize_theta=canonicalize_theta,
         )
 
     def calculate_value(self, rollout: Rollout) -> Tensor:

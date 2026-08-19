@@ -734,9 +734,8 @@ def test_sort_by_first_coordinate_matches_manual_reference():
         )
 
 
-def test_canonicalize_theta_makes_var_post_invariant_to_source_order():
-    task = LocationFinding(n_sources=2, dim_theta=2)
-    posterior = DeepSetVariationalPosteriorNet(
+def _make_location_posterior(task, canonicalize_theta=False):
+    return DeepSetVariationalPosteriorNet(
         task.event_shape_y,
         task.event_shape_design,
         task.event_shape_theta,
@@ -744,7 +743,13 @@ def test_canonicalize_theta_makes_var_post_invariant_to_source_order():
         encoder_dim_h=[16],
         dim_emb=16,
         trunk_dim_h=16,
+        canonicalize_theta=canonicalize_theta,
     )
+
+
+def test_canonicalize_theta_makes_var_post_invariant_to_source_order():
+    task = LocationFinding(n_sources=2, dim_theta=2)
+    posterior = _make_location_posterior(task)
     designer = RandomDesigner(task, T=3)
     theta0 = task.sample_prior(6)
     rollout = designer.rollout(theta0)
@@ -764,7 +769,9 @@ def test_canonicalize_theta_makes_var_post_invariant_to_source_order():
         gain, gain_swapped
     )  # generically different without canonicalization
 
-    barber_agakov_canon = BarberAgakov(task, posterior, canonicalize_theta=True)
+    # canonicalization lives on the net, so the objective needs no flag
+    canon_posterior = _make_location_posterior(task, canonicalize_theta=True)
+    barber_agakov_canon = BarberAgakov(task, canon_posterior)
     gain_canon = barber_agakov_canon.per_sample_gain(rollout)
     gain_canon_swapped = barber_agakov_canon.per_sample_gain(swapped_rollout)
     torch.testing.assert_close(
@@ -772,24 +779,45 @@ def test_canonicalize_theta_makes_var_post_invariant_to_source_order():
     )  # identical with canonicalization
 
 
-def test_posterior_nll_canonicalize_theta_matches_var_post_convention():
+def test_posterior_nll_inherits_the_nets_canonicalization():
     task = LocationFinding(n_sources=2, dim_theta=2)
-    posterior = DeepSetVariationalPosteriorNet(
-        task.event_shape_y,
-        task.event_shape_design,
-        task.event_shape_theta,
-        n_components=3,
-        encoder_dim_h=[16],
-        dim_emb=16,
-        trunk_dim_h=16,
-    )
+    posterior = _make_location_posterior(task, canonicalize_theta=True)
+    plain = _make_location_posterior(task)
+    plain.load_state_dict(posterior.state_dict())
     designer = RandomDesigner(task, T=3)
     rollout = designer.rollout(task.sample_prior(6))
 
-    loss = posterior_nll(posterior, rollout, canonicalize_theta=True, reduction="none")
-    manual = -posterior.log_prob(
+    loss = posterior_nll(posterior, rollout, reduction="none")
+    # the same weights without canonicalization, fed pre-sorted theta by hand
+    manual = -plain.log_prob(
         sort_by_first_coordinate(rollout.theta),
         rollout.y_history,
         rollout.design_history,
     )
     torch.testing.assert_close(loss, manual)
+
+
+def test_canonicalize_theta_requires_an_object_axis():
+    task = HyperbolicTemporalDiscounting()  # event_shape_theta == [2]
+    with pytest.raises(ValueError, match="exchangeable object axis"):
+        DeepSetVariationalPosteriorNet(
+            task.event_shape_y,
+            task.event_shape_design,
+            task.event_shape_theta,
+            n_components=3,
+            encoder_dim_h=[16],
+            dim_emb=16,
+            trunk_dim_h=16,
+            canonicalize_theta=True,
+        )
+
+
+def test_canonicalized_net_sorts_its_samples():
+    task = LocationFinding(n_sources=2, dim_theta=2)
+    posterior = _make_location_posterior(task, canonicalize_theta=True)
+    designer = RandomDesigner(task, T=3)
+    rollout = designer.rollout(task.sample_prior(6))
+
+    samples = posterior.sample(rollout.y_history, rollout.design_history, n_samples=4)
+    assert samples.shape == (4, 6, *task.event_shape_theta)
+    assert torch.all(samples[..., :-1, 0] <= samples[..., 1:, 0])

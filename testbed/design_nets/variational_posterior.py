@@ -9,6 +9,7 @@ from torch import Tensor
 from torch.distributions import Categorical, Independent, MixtureSameFamily, Normal
 
 from testbed.core.distributions import Distribution, TorchDistribution
+from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP
 
@@ -28,14 +29,42 @@ class VariationalPosteriorNet(nn.Module, ABC):
         ``y_history``: ``[b, T, *event_shape_y]``
         ``design_history``: ``[b, T, *event_shape_design]``
         ``mask``: ``[b, T]`` or None
+
+    Args:
+        event_shape_theta: Shape of theta.
+        canonicalize_theta: Sort theta's leading (object) axis by first
+            coordinate inside :meth:`log_prob` and :meth:`sample`, collapsing
+            the label-switching symmetry of an exchangeable axis such as
+            LocationFinding's ``n_sources``. Requires a theta with an
+            object axis, i.e. ``len(event_shape_theta) >= 2`` (default: False).
     """
 
-    def __init__(self, event_shape_theta):
+    def __init__(self, event_shape_theta, canonicalize_theta: bool = False):
         """Initializes the posterior net."""
         super().__init__()
 
         self.event_shape_theta = torch.Size(event_shape_theta)
         self.dim_theta = int(prod(self.event_shape_theta))
+        self.canonicalize_theta = bool(canonicalize_theta)
+        if self.canonicalize_theta and len(self.event_shape_theta) < 2:
+            raise ValueError(
+                "canonicalize_theta requires an exchangeable object axis, i.e. "
+                f"len(event_shape_theta) >= 2; got {tuple(self.event_shape_theta)}."
+            )
+
+    def _maybe_canonicalize(self, theta: Tensor) -> Tensor:
+        """Sorts theta's object axis by first coordinate, if canonicalizing.
+
+        Accepts any number of leading batch dims, which sort_by_first_coordinate
+        does not, so they are flattened into one before sorting.
+        """
+        if not self.canonicalize_theta:
+            return theta
+        batch_shape = theta.shape[: theta.ndim - len(self.event_shape_theta)]
+        flat = theta.reshape(-1, *self.event_shape_theta)
+        return sort_by_first_coordinate(flat).reshape(
+            *batch_shape, *self.event_shape_theta
+        )
 
     @property
     def device(self) -> torch.device:
@@ -105,12 +134,10 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
     modes. If using the Barber-Agakov bound it remains valid, since it holds
     for any posterior, but it may be needlessly loose on such tasks if used as-is.
 
-    Limitation is addressed at the caller: pass
-    `canonicalize_theta=True` to `BarberAgakov`/`BarberAgakovReinforce`/`posterior_nll` to
-    sort theta by first coordinate before it ever reaches this posterior,
-    collapsing the label-switching symmetry to one canonical representative
-    per equivalence class.
-    A posterior used without that flag still has this limitation.
+    Limitation is addressed by `canonicalize_theta=True`, which sorts
+    theta by first coordinate in `log_prob`/`sample`, collapsing the
+    label-switching symmetry to one canonical representative per equivalence
+    class. A posterior used without that flag still has this limitation.
 
     Args:
         encoder: HistoryEncoder object.
@@ -140,9 +167,10 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
         init_scale: float = 1.0,
         theta_loc: Tensor | None = None,
         theta_scale: Tensor | None = None,
+        canonicalize_theta: bool = False,
     ):
         """Initializes."""
-        super().__init__(event_shape_theta)
+        super().__init__(event_shape_theta, canonicalize_theta=canonicalize_theta)
 
         self.encoder = encoder
         self.n_components = int(n_components)
@@ -195,7 +223,7 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
 
     def log_prob(self, theta: Tensor, y_history, design_history, mask=None) -> Tensor:
         """Evaluates the mixture's log density at theta; shape ``[b]``."""
-        theta_flat = self._flatten_theta(theta)
+        theta_flat = self._flatten_theta(self._maybe_canonicalize(theta))
         return self.distribution(y_history, design_history, mask=mask).log_prob(
             theta_flat
         )
@@ -206,7 +234,10 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
         """Draws mixture samples; shape ``[n_samples, b, *event_shape_theta]``."""
         dist = self.distribution(y_history, design_history, mask=mask)
         samples = dist.sample(n_samples)  # [n_samples, b, dim_theta]
-        return samples.reshape(n_samples, y_history.shape[0], *self.event_shape_theta)
+        samples = samples.reshape(
+            n_samples, y_history.shape[0], *self.event_shape_theta
+        )
+        return self._maybe_canonicalize(samples)
 
     def _mixture(self, y_history, design_history, mask=None) -> MixtureSameFamily:
         """Builds the underlying torch Gaussian mixture for a history."""
@@ -250,6 +281,7 @@ class AttentiveVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):
         init_scale: float = 1.0,
         theta_loc: Tensor | None = None,
         theta_scale: Tensor | None = None,
+        canonicalize_theta: bool = False,
     ):
         """Initializes."""
         encoder = AttentiveEncoder(
@@ -272,6 +304,7 @@ class AttentiveVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):
             init_scale=init_scale,
             theta_loc=theta_loc,
             theta_scale=theta_scale,
+            canonicalize_theta=canonicalize_theta,
         )
 
 
@@ -293,6 +326,7 @@ class DeepSetVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):
         init_scale: float = 1.0,
         theta_loc: Tensor | None = None,
         theta_scale: Tensor | None = None,
+        canonicalize_theta: bool = False,
     ):
         """Initializes."""
         encoder = DeepSetEncoder(
@@ -313,4 +347,5 @@ class DeepSetVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):
             init_scale=init_scale,
             theta_loc=theta_loc,
             theta_scale=theta_scale,
+            canonicalize_theta=canonicalize_theta,
         )

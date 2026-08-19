@@ -4,3 +4,7 @@ encoder_dim_h: 256
 dim_emb: 128
 num_heads: 4
 num_blocks: 3
+# sources are exchangeable for multi-source LocationFinding tasks (n.b. a no-op
+# for the default single-source task); experiments/location_finding_2src/
+# var_post_scorebed_repro.yaml turns this on.
+canonicalize_theta: false

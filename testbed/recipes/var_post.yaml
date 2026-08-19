@@ -22,10 +22,6 @@ objective:
   baseline: null
   requires_policy_log_probs: false
   use_current_prior: false
-  # sources are exchangeable for multi-source LocationFinding tasks (n.b. a
-  # no-op for the default single-source task); see
-  # experiments/location_finding_2src/var_post.yaml, which turns this on.
-  canonicalize_theta: false
 # posterior pretraining
 n_posterior_pretrain_iter: 5_000
 n_posterior_outer: 1_024

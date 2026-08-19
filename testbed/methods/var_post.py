@@ -280,7 +280,11 @@ def build_design_net(cfg, task):
 
 
 def build_posterior_net(cfg, task):
-    """Instantiates the posterior (variational-posterior) network."""
+    """Instantiates the posterior (variational-posterior) network.
+
+    Theta canonicalization lives on the net, so both the bound and the
+    pretraining NLL see one convention; set it under cfg.posterior_net.
+    """
     return instantiate(
         cfg.posterior_net,
         event_shape_y=task.event_shape_y,
@@ -300,7 +304,6 @@ def build_objective(cfg, task, posterior_net):
             task,
             posterior_net,
             use_current_prior=cfg.objective.use_current_prior,
-            canonicalize_theta=cfg.objective.canonicalize_theta,
         ),
         "barber_agakov_reinforce": lambda: BarberAgakovReinforce(
             task,
@@ -308,7 +311,6 @@ def build_objective(cfg, task, posterior_net):
             stochastic_design_policy=cfg.objective.requires_policy_log_probs,
             baseline=cfg.objective.baseline,
             use_current_prior=cfg.objective.use_current_prior,
-            canonicalize_theta=cfg.objective.canonicalize_theta,
         ),
     }
     name = cfg.objective.name
@@ -418,11 +420,7 @@ def main(cfg):
     cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
 
     objective = build_objective(cfg, task, posterior_net)
-    posterior_loss = partial(
-        posterior_nll,
-        posterior_net,
-        canonicalize_theta=cfg.objective.canonicalize_theta,
-    )
+    posterior_loss = partial(posterior_nll, posterior_net)
     pretrain_designer = build_pretrain_designer(cfg, task)
 
     policy_optimizer, policy_scheduler = build_policy_optimizer(cfg, design_net)
