@@ -111,7 +111,7 @@ def test_var_post_recipe_wires_posterior_net():
     )
     assert cfg.posterior_net.n_components == 10
     assert cfg.joint is False
-    assert cfg.objective.name == "var_post"
+    assert cfg.objective.name == "barber_agakov"
 
 
 def test_joint_var_post_recipe_sets_joint_true():
@@ -126,7 +126,7 @@ def test_temporal_discounting_var_post_uses_reinforce_and_htd_task():
     # gets its own standalone test above instead of joining that list.
     cfg = _compose("experiments/temporal_discounting/var_post")
     assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
-    assert cfg.objective.name == "var_post_reinforce"
+    assert cfg.objective.name == "barber_agakov_reinforce"
     assert (
         cfg.posterior_net._target_
         == "testbed.design_nets.DeepSetVariationalPosteriorNet"

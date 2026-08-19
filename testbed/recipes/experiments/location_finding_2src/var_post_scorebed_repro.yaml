@@ -8,7 +8,7 @@ defaults:
   - _self_
 
 # Close reproduction of ScoreBED's (Phillips, Kerrigan, Rainforth, UAI 2026)
-# VarPost baseline on standard location finding (d=2, K=2), P=1 protocol --
+# BarberAgakov baseline on standard location finding (d=2, K=2), P=1 protocol --
 # based on their released code
 # (github.com/angusphillips/Score_Matching_BED:
 # config/experiment/location_finding_var_post.yaml +
@@ -45,7 +45,7 @@ n_outer: 1_024
 n_posterior_outer: 1_024 # unused if no pretraining phase; kept for config completeness
 
 objective:
-  name: var_post # plain pathwise bound: deterministic policy + reparameterized likelihood
+  name: barber_agakov # plain pathwise bound: deterministic policy + reparameterized likelihood
   canonicalize_theta: true 
 
 # Policy optimizer: Adam(b1=0.9, b2=0.999), grad clip 1.0 (global norm),

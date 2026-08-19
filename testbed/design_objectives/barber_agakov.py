@@ -8,7 +8,7 @@ from ..tasks.base import Task
 from .base_objective import RolloutObjective
 from .loss import _check_reduction
 
-__all__ = ["VarPost", "posterior_nll"]
+__all__ = ["BarberAgakov", "posterior_nll"]
 
 
 def posterior_nll(
@@ -22,7 +22,7 @@ def posterior_nll(
 
     Used to pretrain or fit a posterior net. Minimizing it over the posterior's
     parameters is equivalent to maximizing any EIG lower bound that depends on
-    the posterior only through ``log q(theta | y, d)`` (e.g. :class:`VarPost`):
+    the posterior only through ``log q(theta | y, d)`` (e.g. :class:`BarberAgakov`):
     whatever posterior-independent term such a bound also carries (``-log
     p(theta)`` for Barber-Agakov) has zero gradient w.r.t. posterior parameters.
 
@@ -51,7 +51,7 @@ def posterior_nll(
     return nll
 
 
-class VarPost(RolloutObjective):
+class BarberAgakov(RolloutObjective):
     r"""Barber-Agakov lower bound on EIG via an amortized variational posterior.
 
     .. math::
@@ -98,7 +98,7 @@ class VarPost(RolloutObjective):
             task.prior.log_prob(task.sample_prior(2))
         except Exception as e:
             raise ValueError(
-                f"{type(task).__name__}.prior.log_prob is not evaluable; VarPost "
+                f"{type(task).__name__}.prior.log_prob is not evaluable; BarberAgakov "
                 "requires a prior with a working log_prob."
             ) from e
 

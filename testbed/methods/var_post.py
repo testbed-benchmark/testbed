@@ -11,7 +11,7 @@ import torch
 from hydra.utils import instantiate
 
 from testbed.core.setup import setup
-from testbed.design_objectives import VarPost, VarPostReinforce, posterior_nll
+from testbed.design_objectives import BarberAgakov, BarberAgakovReinforce, posterior_nll
 from testbed.designers import PolicyDesigner, RandomDesigner
 
 # ============================================================================
@@ -20,7 +20,7 @@ from testbed.designers import PolicyDesigner, RandomDesigner
 
 
 class Trainer:
-    """Training class for VarPost-style training.
+    """Training class for BarberAgakov-style training.
 
     Two phases: a posterior-pretraining phase (fits the posterior net against random
     designs) followed by a policy-training phase, mirroring ActionBED's
@@ -180,11 +180,11 @@ class Trainer:
         theta0 = self.task.sample_prior(cfg.n_outer)
         rollout = self.designer.rollout(theta0)
 
-        # In joint mode, VarPostReinforce.estimate_gain(train_posterior=True)
-        # self-contains the posterior's gradient. Plain VarPost already updates both
+        # In joint mode, BarberAgakovReinforce.estimate_gain(train_posterior=True)
+        # self-contains the posterior's gradient. Plain BarberAgakov already updates both
         # nets in a single pass when the policy is pathwise-differentiable
         # so it needs no such flag.
-        if self.joint and isinstance(self.objective, VarPostReinforce):
+        if self.joint and isinstance(self.objective, BarberAgakovReinforce):
             gain = self.objective.estimate_gain(rollout, train_posterior=True)
         else:
             gain = self.objective.estimate_gain(rollout)
@@ -290,19 +290,19 @@ def build_posterior_net(cfg, task):
 
 
 def build_objective(cfg, task, posterior_net):
-    """Instantiates the objective for training VarPost.
+    """Instantiates the objective for training BarberAgakov.
 
-    VarPost/VarPostReinforce need the task and posterior_net to construct, so it
+    BarberAgakov/BarberAgakovReinforce need the task and posterior_net to construct, so it
     can't be a pure instantiate.
     """
     objectives = {
-        "var_post": lambda: VarPost(
+        "barber_agakov": lambda: BarberAgakov(
             task,
             posterior_net,
             use_current_prior=cfg.objective.use_current_prior,
             canonicalize_theta=cfg.objective.canonicalize_theta,
         ),
-        "var_post_reinforce": lambda: VarPostReinforce(
+        "barber_agakov_reinforce": lambda: BarberAgakovReinforce(
             task,
             posterior_net,
             stochastic_design_policy=cfg.objective.requires_policy_log_probs,
@@ -387,7 +387,7 @@ def build_pretrain_designer(cfg, task):
 
 @hydra.main(version_base="1.3", config_path="../recipes", config_name="var_post")
 def main(cfg):
-    """Entry point for VarPost training.
+    """Entry point for BarberAgakov training.
 
     Args:
         cfg: Composed Hydra configuration for the training run.

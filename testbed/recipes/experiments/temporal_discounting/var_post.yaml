@@ -14,12 +14,12 @@ T: 20
 joint: false
 # objective
 objective:
-  name: var_post_reinforce
+  name: barber_agakov_reinforce
   reparameterize_policy: false
   baseline: null  # or leave_one_out for variance reduction
   requires_policy_log_probs: false
   use_current_prior: false
-  # deterministic policy -> pathwise Reinforce with VarPost.per_sample_gain (DAD Eq. 16)
+  # deterministic policy -> pathwise Reinforce with BarberAgakov.per_sample_gain (DAD Eq. 16)
 
 # posterior pretraining
 n_posterior_pretrain_iter: 5_000

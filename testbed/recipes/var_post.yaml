@@ -13,11 +13,11 @@ T: 10
 joint: false
 # objective: plain (non-REINFORCE) Barber-Agakov bound, since the default
 # task/net pairing (location_finding + attentive_policy) is fully
-# reparameterized end to end -- switch to var_post_reinforce for tasks with a
+# reparameterized end to end -- switch to barber_agakov_reinforce for tasks with a
 # non-reparameterized outcome model or a score-function design policy (see
 # experiments/temporal_discounting/var_post.yaml).
 objective:
-  name: var_post
+  name: barber_agakov
   reparameterize_policy: false
   baseline: null
   requires_policy_log_probs: false

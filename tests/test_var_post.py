@@ -20,7 +20,7 @@ from testbed.design_nets.variational_posterior import (
     GaussianMixtureVariationalPosteriorNet,
     VariationalPosteriorNet,
 )
-from testbed.design_objectives import VarPost, VarPostReinforce, posterior_nll
+from testbed.design_objectives import BarberAgakov, BarberAgakovReinforce, posterior_nll
 from testbed.design_objectives.reinforce import leave_one_out_baseline
 from testbed.designers import PolicyDesigner, RandomDesigner, Rollout
 from testbed.tasks import (
@@ -92,7 +92,7 @@ class _ExactPosterior(VariationalPosteriorNet):
     """Test-only posterior returning the exact Gaussian-linear posterior.
 
     Only valid for LinearRegression(dim=1) with a single (T=1) observation and
-    a fixed design; used to check VarPost's bound is tight (matches the exact
+    a fixed design; used to check BarberAgakov's bound is tight (matches the exact
     EIG) when q == p(theta | y, d).
     """
 
@@ -255,7 +255,7 @@ def test_mixture_with_three_components_matches_manual_logsumexp():
 
 
 # ============================================================================
-# VarPost: bound correctness against a closed-form EIG
+# BarberAgakov: bound correctness against a closed-form EIG
 # ============================================================================
 
 
@@ -302,7 +302,7 @@ def test_untrained_posterior_gives_a_bound_strictly_below_exact_eig():
         dim_emb=16,
         trunk_dim_h=16,
     )
-    bound = VarPost(task, posterior).estimate_gain(rollout)
+    bound = BarberAgakov(task, posterior).estimate_gain(rollout)
 
     assert (
         bound.item() < exact_eig.item() - 0.5
@@ -318,13 +318,13 @@ def test_exact_posterior_bound_matches_exact_eig():
     rollout = _fixed_design_rollout(task, x_val, b=32768)
 
     posterior = _ExactPosterior(prior_loc, prior_cov, design_row, task.noise_scale)
-    bound = VarPost(task, posterior).estimate_gain(rollout)
+    bound = BarberAgakov(task, posterior).estimate_gain(rollout)
 
     assert bound.item() == pytest.approx(exact_eig.item(), abs=0.05)
 
 
 # ============================================================================
-# VarPost: gradient flow and freezing
+# BarberAgakov: gradient flow and freezing
 # ============================================================================
 
 
@@ -333,7 +333,7 @@ def test_var_post_gradient_reaches_posterior_params():
     posterior = _make_posterior(task)
     rollout = _make_rollout(task, _make_design_net(task))
 
-    gain = VarPost(task, posterior).estimate_gain(rollout)
+    gain = BarberAgakov(task, posterior).estimate_gain(rollout)
     gain.backward()
 
     trainable = [p for n, p in posterior.named_parameters() if n != "encoder.null_enc"]
@@ -348,7 +348,7 @@ def test_var_post_gradient_reaches_deterministic_policy_and_posterior_in_one_bac
     designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
 
-    gain = VarPostReinforce(
+    gain = BarberAgakovReinforce(
         task, posterior, stochastic_design_policy=False
     ).estimate_gain(rollout, train_posterior=True)
     gain.backward()
@@ -369,7 +369,7 @@ def test_var_post_reinforce_train_posterior_false_blocks_posterior_gradient_even
     policy_net = _make_design_net(task)
     designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
-    objective = VarPostReinforce(task, posterior, stochastic_design_policy=False)
+    objective = BarberAgakovReinforce(task, posterior, stochastic_design_policy=False)
 
     gain = objective.estimate_gain(rollout, train_posterior=False)
     gain.backward()
@@ -391,7 +391,7 @@ def test_frozen_posterior_receives_no_gradient():
         p.requires_grad_(False)
 
     rollout = _make_rollout(task, _make_design_net(task))
-    gain = VarPost(task, posterior).estimate_gain(rollout)
+    gain = BarberAgakov(task, posterior).estimate_gain(rollout)
     gain.backward()
 
     assert all(p.grad is None for p in posterior.parameters())
@@ -402,11 +402,11 @@ def test_var_post_raises_on_non_evaluable_prior():
     posterior = _make_posterior(task)
     task.prior.log_prob = lambda *_: (_ for _ in ()).throw(NotImplementedError())
     with pytest.raises(ValueError):
-        VarPost(task, posterior)
+        BarberAgakov(task, posterior)
 
 
 # ============================================================================
-# VarPostReinforce: matches VarPost forward value, and DAD-Eq.16-style gradient
+# BarberAgakovReinforce: matches BarberAgakov forward value, and DAD-Eq.16-style gradient
 # ============================================================================
 
 
@@ -416,11 +416,11 @@ def test_var_post_reinforce_forward_value_matches_var_post():
     rollout = _make_rollout(task, _make_design_net(task))
 
     torch.manual_seed(2)
-    reinforce_gain = VarPostReinforce(
+    reinforce_gain = BarberAgakovReinforce(
         task, posterior, stochastic_design_policy=False
     ).estimate_gain(rollout)
     torch.manual_seed(2)
-    plain_gain = VarPost(task, posterior).estimate_gain(rollout)
+    plain_gain = BarberAgakov(task, posterior).estimate_gain(rollout)
 
     assert torch.allclose(reinforce_gain, plain_gain)
 
@@ -434,8 +434,8 @@ def test_deterministic_reinforce_matches_dad_eq16_reference(baseline):
     designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
 
-    var_post = VarPost(task, posterior)
-    reinforce = VarPostReinforce(
+    barber_agakov = BarberAgakov(task, posterior)
+    reinforce = BarberAgakovReinforce(
         task, posterior, stochastic_design_policy=False, baseline=baseline
     )
 
@@ -443,7 +443,7 @@ def test_deterministic_reinforce_matches_dad_eq16_reference(baseline):
     gain = reinforce.estimate_gain(rollout)
 
     torch.manual_seed(1)
-    reward = var_post.per_sample_gain(rollout)
+    reward = barber_agakov.per_sample_gain(rollout)
     baseline_value = (
         leave_one_out_baseline(reward.detach()) if baseline == "leave_one_out" else 0.0
     )
@@ -467,14 +467,14 @@ def test_stochastic_constant_value_loo_baseline_zero_grad():
 
     posterior = _make_posterior(task)
 
-    class _ConstantVarPost(VarPost):
+    class _ConstantBarberAgakov(BarberAgakov):
         def per_sample_gain(self, rollout):
             return rollout.y_history.new_full((rollout.b,), 3.0)
 
-    reinforce = VarPostReinforce(
+    reinforce = BarberAgakovReinforce(
         task, posterior, stochastic_design_policy=True, baseline="leave_one_out"
     )
-    reinforce.var_post = _ConstantVarPost(task, posterior)
+    reinforce.barber_agakov = _ConstantBarberAgakov(task, posterior)
 
     gain = reinforce.estimate_gain(rollout)
     grad = _policy_grad(policy_net, gain)
@@ -499,7 +499,7 @@ def test_estimate_gain_train_posterior_updates_both_nets_in_one_backward_stochas
     rollout = designer.rollout(task.sample_prior(8))
     assert "policy_log_probs" in rollout.extra
 
-    objective = VarPostReinforce(task, posterior, stochastic_design_policy=True)
+    objective = BarberAgakovReinforce(task, posterior, stochastic_design_policy=True)
 
     gain = objective.estimate_gain(rollout, train_posterior=True)
     gain.backward()
@@ -524,7 +524,7 @@ def test_train_posterior_preserves_the_interpretable_gain_value():
     policy_net = _make_stochastic_net(task)
     designer = _make_designer(task, policy_net, reparameterize_policy=False)
     rollout = designer.rollout(task.sample_prior(8))
-    objective = VarPostReinforce(task, posterior, stochastic_design_policy=True)
+    objective = BarberAgakovReinforce(task, posterior, stochastic_design_policy=True)
 
     plain = objective.estimate_gain(rollout, train_posterior=False)
     with_posterior = objective.estimate_gain(rollout, train_posterior=True)
@@ -539,7 +539,7 @@ def test_train_posterior_does_not_affect_policy_gradient_deterministic():
     policy_net = _make_design_net(task)
     designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
-    objective = VarPostReinforce(task, posterior, stochastic_design_policy=False)
+    objective = BarberAgakovReinforce(task, posterior, stochastic_design_policy=False)
 
     plain = objective.estimate_gain(rollout, train_posterior=False)
     with_posterior = objective.estimate_gain(rollout, train_posterior=True)
@@ -554,10 +554,11 @@ def test_posterior_gain_method_matches_var_post_estimate_gain():
     task = _make_task()
     posterior = _make_posterior(task)
     rollout = _make_rollout(task, _make_design_net(task))
-    objective = VarPostReinforce(task, posterior, stochastic_design_policy=False)
+    objective = BarberAgakovReinforce(task, posterior, stochastic_design_policy=False)
 
     torch.testing.assert_close(
-        objective.posterior_gain(rollout), objective.var_post.estimate_gain(rollout)
+        objective.posterior_gain(rollout),
+        objective.barber_agakov.estimate_gain(rollout),
     )
 
 
@@ -576,7 +577,7 @@ def _make_trainer(joint):
     design_net = _make_design_net(task)
     designer = _make_designer(task, design_net)
     pretrain_designer = RandomDesigner(task, T=3)
-    objective = VarPostReinforce(task, posterior, stochastic_design_policy=False)
+    objective = BarberAgakovReinforce(task, posterior, stochastic_design_policy=False)
     posterior_loss = partial(posterior_nll, posterior)
 
     cfg = SimpleNamespace(
@@ -756,16 +757,16 @@ def test_canonicalize_theta_makes_var_post_invariant_to_source_order():
         design_history=rollout.design_history,
     )
 
-    var_post_plain = VarPost(task, posterior)
-    gain = var_post_plain.per_sample_gain(rollout)
-    gain_swapped = var_post_plain.per_sample_gain(swapped_rollout)
+    barber_agakov_plain = BarberAgakov(task, posterior)
+    gain = barber_agakov_plain.per_sample_gain(rollout)
+    gain_swapped = barber_agakov_plain.per_sample_gain(swapped_rollout)
     assert not torch.allclose(
         gain, gain_swapped
     )  # generically different without canonicalization
 
-    var_post_canon = VarPost(task, posterior, canonicalize_theta=True)
-    gain_canon = var_post_canon.per_sample_gain(rollout)
-    gain_canon_swapped = var_post_canon.per_sample_gain(swapped_rollout)
+    barber_agakov_canon = BarberAgakov(task, posterior, canonicalize_theta=True)
+    gain_canon = barber_agakov_canon.per_sample_gain(rollout)
+    gain_canon_swapped = barber_agakov_canon.per_sample_gain(swapped_rollout)
     torch.testing.assert_close(
         gain_canon, gain_canon_swapped
     )  # identical with canonicalization

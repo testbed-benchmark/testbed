@@ -8,9 +8,9 @@ from torch import Tensor
 
 from ..core.rollout import Rollout
 from ..tasks.base import Task
+from .barber_agakov import BarberAgakov
 from .base_objective import RolloutObjective
 from .spce import SPCE
-from .var_post import VarPost
 
 
 @contextmanager
@@ -21,7 +21,7 @@ def _requires_grad(module: torch.nn.Module, flag: bool):
     `requires_grad` at the time the *forward* ops touching it are recorded,
     not at backward time -- so restoring the original flags on exit doesn't
     retroactively reconnect a graph built with them disabled. Used to make a
-    training-time flag (like `VarPostReinforce.estimate_gain`'s
+    training-time flag (like `BarberAgakovReinforce.estimate_gain`'s
     `train_posterior`) the actual source of truth for whether a module gets
     gradient from one specific call, regardless of whatever `requires_grad`
     state it happens to carry externally (e.g. if the caller forgot to
@@ -199,7 +199,7 @@ class SPCEReinforce(Reinforce):
         return self.spce.per_sample_gain(rollout)
 
 
-class VarPostReinforce(Reinforce):
+class BarberAgakovReinforce(Reinforce):
     """REINFORCE over the Barber-Agakov lower bound on EIG."""
 
     def __init__(
@@ -213,7 +213,7 @@ class VarPostReinforce(Reinforce):
     ):
         """Initializes."""
         super().__init__(task, stochastic_design_policy, baseline)
-        self.var_post = VarPost(
+        self.barber_agakov = BarberAgakov(
             task,
             posterior_net,
             use_current_prior=use_current_prior,
@@ -222,16 +222,16 @@ class VarPostReinforce(Reinforce):
 
     def calculate_value(self, rollout: Rollout) -> Tensor:
         """Computes the per-sample Barber-Agakov gain."""
-        return self.var_post.per_sample_gain(rollout)
+        return self.barber_agakov.per_sample_gain(rollout)
 
     def posterior_gain(self, rollout: Rollout) -> Tensor:
         """The posterior's own (undetached) Barber-Agakov gain, for training posterior_net.
 
-        Equivalent to ``self.var_post.estimate_gain(rollout)``, exposed here
+        Equivalent to ``self.barber_agakov.estimate_gain(rollout)``, exposed here
         as a public method rather than making callers reach into
-        ``self.var_post`` directly.
+        ``self.barber_agakov`` directly.
         """
-        return self.var_post.estimate_gain(rollout)
+        return self.barber_agakov.estimate_gain(rollout)
 
     def estimate_gain(self, rollout: Rollout, train_posterior: bool = False) -> Tensor:
         r"""Estimates the (policy-gradient-ready) Barber-Agakov gain.
@@ -242,7 +242,7 @@ class VarPostReinforce(Reinforce):
         because autograd fixes whether a leaf gets gradient at forward time,
         so restoring requires_grad right after can't reconnect it.
         """
-        with _requires_grad(self.var_post.posterior_net, train_posterior):
+        with _requires_grad(self.barber_agakov.posterior_net, train_posterior):
             gain = super().estimate_gain(rollout)
         if train_posterior and self.stochastic_design_policy:
             posterior_gain = self.posterior_gain(rollout)

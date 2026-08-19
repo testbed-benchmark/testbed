@@ -106,7 +106,7 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
     for any posterior, but it may be needlessly loose on such tasks if used as-is.
 
     Limitation is addressed at the caller: pass
-    `canonicalize_theta=True` to `VarPost`/`VarPostReinforce`/`posterior_nll` to
+    `canonicalize_theta=True` to `BarberAgakov`/`BarberAgakovReinforce`/`posterior_nll` to
     sort theta by first coordinate before it ever reaches this posterior,
     collapsing the label-switching symmetry to one canonical representative
     per equivalence class.
