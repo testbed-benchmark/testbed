@@ -4,13 +4,14 @@ Inspired by Bayesian Experimental Design via Score Matching paper.
 """
 
 import copy
+from functools import partial
 
 import hydra
 import torch
 from hydra.utils import instantiate
 
 from testbed.core.setup import setup
-from testbed.design_objectives import VariationalPosteriorNLL, VarPost, VarPostReinforce
+from testbed.design_objectives import VarPost, VarPostReinforce, posterior_nll
 from testbed.designers import PolicyDesigner, RandomDesigner
 
 # ============================================================================
@@ -44,6 +45,10 @@ class Trainer:
         manager=None,
     ):
         """Initializes the trainer.
+
+        posterior_loss: callable mapping a rollout to the scalar loss minimized
+        during posterior pretraining, e.g. `posterior_nll` bound to a posterior
+        net.
 
         ema_decay: if set, an exponential moving average of design_net's
         parameters is tracked (`design_net_ema = ema_decay * design_net_ema +
@@ -141,12 +146,12 @@ class Trainer:
         # The pretrain designer has no trainable params, so no_grad on the
         # rollout just avoids building an unnecessary graph through it. The
         # resulting theta/y_history/design_history are plain tensors either
-        # way; posterior_loss's forward pass below still builds a fresh graph
-        # from the posterior net's own parameters.
+        # way; the posterior NLL below still builds a fresh graph from the
+        # posterior net's own parameters.
         with torch.no_grad():
             rollout = self.pretrain_designer.rollout(theta)
 
-        loss = self.posterior_loss.from_rollout(rollout)
+        loss = self.posterior_loss(rollout)
 
         self.posterior_optimizer.zero_grad()
         loss.backward()
@@ -413,8 +418,10 @@ def main(cfg):
     cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
 
     objective = build_objective(cfg, task, posterior_net)
-    posterior_loss = VariationalPosteriorNLL(
-        posterior_net, canonicalize_theta=cfg.objective.canonicalize_theta
+    posterior_loss = partial(
+        posterior_nll,
+        posterior_net,
+        canonicalize_theta=cfg.objective.canonicalize_theta,
     )
     pretrain_designer = build_pretrain_designer(cfg, task)
 

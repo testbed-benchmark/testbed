@@ -22,5 +22,4 @@ from .variational_posterior import (
     DeepSetVariationalPosteriorNet,
     GaussianMixtureVariationalPosteriorNet,
     VariationalPosteriorNet,
-    VariationalPosteriorNLL,
 )

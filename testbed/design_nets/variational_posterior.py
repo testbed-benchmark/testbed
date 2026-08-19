@@ -9,7 +9,6 @@ from torch import Tensor
 from torch.distributions import Categorical, Independent, MixtureSameFamily, Normal
 
 from testbed.core.distributions import Distribution, TorchDistribution
-from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP
 
@@ -107,7 +106,7 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
     for any posterior, but it may be needlessly loose on such tasks if used as-is.
 
     Limitation is addressed at the caller: pass
-    `canonicalize_theta=True` to `VarPost`/`VarPostReinforce`/`VariationalPosteriorNLL` to
+    `canonicalize_theta=True` to `VarPost`/`VarPostReinforce`/`posterior_nll` to
     sort theta by first coordinate before it ever reaches this posterior,
     collapsing the label-switching symmetry to one canonical representative
     per equivalence class.
@@ -229,67 +228,6 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
         logits = self.logit_head(h)  # [b, K]
         component = Independent(Normal(loc, scale), 1)
         return MixtureSameFamily(Categorical(logits=logits), component)
-
-
-class VariationalPosteriorNLL(nn.Module):
-    """Negative log-likelihood loss for pretraining/fitting a posterior net.
-
-    Minimizing this loss over posterior parameters is equivalent to maximizing
-    any reasonable lower bound on EIG that depends on the posterior only through
-    ``log q(theta | y, d)`` (e.g. ``testbed.design_objectives.var_post.VarPost``):
-    whatever posterior-independent term such a bound also contains (``-log
-    p(theta)`` in the Barber-Agakov bound) has zero gradient w.r.t. posterior
-    parameters.
-    """
-
-    def __init__(
-        self,
-        posterior_net: VariationalPosteriorNet,
-        reduction: str = "mean",
-        canonicalize_theta: bool = False,
-    ):
-        """Initializes.
-
-        canonicalize_theta: sort the leading axis of ``event_shape_theta`` by
-        first coordinate before computing the NLL (default: False).
-        Must be set consistently with whatever variational bound
-        (e.g. `VarPost`/`VarPostReinforce`) this posterior is paired with downstream,
-        since the posterior should be pretrained to fit whatever theta it will
-        actually be evaluated against.
-        """
-        super().__init__()
-        # Deferred import: avoids a design_nets <-> design_objectives import
-        # cycle
-        from testbed.design_objectives.loss import _check_reduction
-
-        self.posterior_net = posterior_net
-        self.reduction = _check_reduction(reduction)
-        self.canonicalize_theta = canonicalize_theta
-
-    def forward(self, theta: Tensor, y_history, design_history, mask=None) -> Tensor:
-        """Computes the posterior NLL.
-
-        Args:
-            theta: Parameters, shape ``[b, *event_shape_theta]``.
-            y_history: Outcomes so far, shape ``[b, T, *event_shape_y]``.
-            design_history: Designs so far, shape ``[b, T, *event_shape_design]``.
-            mask: Optional boolean mask for padded histories, shape ``[b, T]``.
-
-        Returns:
-            Tensor: If ``reduction`` is ``"none"``, shape ``[b]``. Otherwise, a scalar.
-        """
-        if self.canonicalize_theta:
-            theta = sort_by_first_coordinate(theta)
-        nll = -self.posterior_net.log_prob(theta, y_history, design_history, mask=mask)
-        if self.reduction == "sum":
-            return nll.sum()
-        if self.reduction == "mean":
-            return nll.mean()
-        return nll
-
-    def from_rollout(self, rollout) -> Tensor:
-        """Computes the posterior NLL from a rollout's theta/y_history/design_history."""
-        return self.forward(rollout.theta, rollout.y_history, rollout.design_history)
 
 
 class AttentiveVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):

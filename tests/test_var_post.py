@@ -1,5 +1,7 @@
 """Tests for the variational-posterior (Barber-Agakov) EIG estimator."""
 
+from functools import partial
+
 import pytest
 import torch
 from torch.distributions import Independent, MultivariateNormal, Normal
@@ -17,9 +19,8 @@ from testbed.design_nets import (
 from testbed.design_nets.variational_posterior import (
     GaussianMixtureVariationalPosteriorNet,
     VariationalPosteriorNet,
-    VariationalPosteriorNLL,
 )
-from testbed.design_objectives import VarPost, VarPostReinforce
+from testbed.design_objectives import VarPost, VarPostReinforce, posterior_nll
 from testbed.design_objectives.reinforce import leave_one_out_baseline
 from testbed.designers import PolicyDesigner, RandomDesigner, Rollout
 from testbed.tasks import (
@@ -576,7 +577,7 @@ def _make_trainer(joint):
     designer = _make_designer(task, design_net)
     pretrain_designer = RandomDesigner(task, T=3)
     objective = VarPostReinforce(task, posterior, stochastic_design_policy=False)
-    posterior_loss = VariationalPosteriorNLL(posterior)
+    posterior_loss = partial(posterior_nll, posterior)
 
     cfg = SimpleNamespace(
         joint=joint,
@@ -784,10 +785,10 @@ def test_posterior_nll_canonicalize_theta_matches_var_post_convention():
     designer = RandomDesigner(task, T=3)
     rollout = designer.rollout(task.sample_prior(6))
 
-    loss = VariationalPosteriorNLL(posterior, canonicalize_theta=True, reduction="none")
+    loss = posterior_nll(posterior, rollout, canonicalize_theta=True, reduction="none")
     manual = -posterior.log_prob(
         sort_by_first_coordinate(rollout.theta),
         rollout.y_history,
         rollout.design_history,
     )
-    torch.testing.assert_close(loss.from_rollout(rollout), manual)
+    torch.testing.assert_close(loss, manual)
