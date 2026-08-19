@@ -149,6 +149,25 @@ def test_wrapped_dist_reports_the_device_it_was_built_on():
     assert dist.device.type == "meta"
 
 
+def test_wrapped_composite_dist_reports_its_nested_parameters_device():
+    # Composite distributions hold no tensors directly, so the device has to be
+    # found by searching nested distributions rather than defaulting to cpu.
+    loc = torch.zeros(4, 3, 2, device="meta")
+    component = torch.distributions.Independent(
+        torch.distributions.Normal(loc, torch.ones_like(loc), validate_args=False), 1
+    )
+    mixture = torch.distributions.MixtureSameFamily(
+        torch.distributions.Categorical(
+            logits=torch.zeros(4, 3, device="meta"), validate_args=False
+        ),
+        component,
+        validate_args=False,
+    )
+
+    assert TorchDistribution(component).device.type == "meta"
+    assert TorchDistribution(mixture).device.type == "meta"
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_to_cuda_moves_designs_drawn_from_a_wrapped_dist():
     # The wrapped torch distribution's own parameters stay on the CPU -- only
