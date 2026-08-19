@@ -103,10 +103,13 @@ def test_temporal_discounting_dad_preserves_objective_defaults():
     assert cfg.objective.requires_policy_log_probs is False
 
 
-def test_var_post_recipe_wires_guide_net():
+def test_var_post_recipe_wires_posterior_net():
     cfg = _compose("var_post")
-    assert cfg.guide_net._target_ == "testbed.design_nets.AttentiveGuideNet"
-    assert cfg.guide_net.n_components == 10
+    assert (
+        cfg.posterior_net._target_
+        == "testbed.design_nets.AttentiveVariationalPosteriorNet"
+    )
+    assert cfg.posterior_net.n_components == 10
     assert cfg.joint is False
     assert cfg.objective.name == "var_post"
 
@@ -114,7 +117,7 @@ def test_var_post_recipe_wires_guide_net():
 def test_joint_var_post_recipe_sets_joint_true():
     cfg = _compose("joint_var_post")
     assert cfg.joint is True
-    assert cfg.guide_net.n_components == 10
+    assert cfg.posterior_net.n_components == 10
 
 
 def test_temporal_discounting_var_post_uses_reinforce_and_htd_task():
@@ -124,8 +127,11 @@ def test_temporal_discounting_var_post_uses_reinforce_and_htd_task():
     cfg = _compose("experiments/temporal_discounting/var_post")
     assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
     assert cfg.objective.name == "var_post_reinforce"
-    assert cfg.guide_net._target_ == "testbed.design_nets.DeepSetGuideNet"
-    assert cfg.guide_net.n_components == 10
+    assert (
+        cfg.posterior_net._target_
+        == "testbed.design_nets.DeepSetVariationalPosteriorNet"
+    )
+    assert cfg.posterior_net.n_components == 10
 
 
 def test_two_source_actionbed_preserves_grad_clip_default():

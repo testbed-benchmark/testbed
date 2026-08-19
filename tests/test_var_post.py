@@ -9,12 +9,16 @@ from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.hooks import RolloutHook
 from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets import (
-    AttentiveGuideNet,
-    DeepSetGuideNet,
+    AttentiveVariationalPosteriorNet,
     DeepSetPolicyNet,
+    DeepSetVariationalPosteriorNet,
     GaussianPolicyNet,
 )
-from testbed.design_nets.guide import GaussianMixtureGuideNet, GuideNet, GuideNLL
+from testbed.design_nets.variational_posterior import (
+    GaussianMixtureVariationalPosteriorNet,
+    VariationalPosteriorNet,
+    VariationalPosteriorNLL,
+)
 from testbed.design_objectives import VarPost, VarPostReinforce
 from testbed.design_objectives.reinforce import leave_one_out_baseline
 from testbed.designers import PolicyDesigner, RandomDesigner, Rollout
@@ -46,8 +50,8 @@ def _make_stochastic_net(task):
     return GaussianPolicyNet(space, event_shape_y=task.event_shape_y)
 
 
-def _make_guide(task, n_components=3):
-    return DeepSetGuideNet(
+def _make_posterior(task, n_components=3):
+    return DeepSetVariationalPosteriorNet(
         task.event_shape_y,
         task.event_shape_design,
         task.event_shape_theta,
@@ -83,8 +87,8 @@ def _policy_grad(net, gain):
     )
 
 
-class _ExactPosteriorGuide(GuideNet):
-    """Test-only guide returning the exact Gaussian-linear posterior.
+class _ExactPosterior(VariationalPosteriorNet):
+    """Test-only posterior returning the exact Gaussian-linear posterior.
 
     Only valid for LinearRegression(dim=1) with a single (T=1) observation and
     a fixed design; used to check VarPost's bound is tight (matches the exact
@@ -117,14 +121,14 @@ class _ExactPosteriorGuide(GuideNet):
 
 
 # ============================================================================
-# GuideNet: shapes and mixture correctness
+# VariationalPosteriorNet: shapes and mixture correctness
 # ============================================================================
 
 
 @pytest.mark.parametrize(
     "net_fn",
     [
-        lambda task: DeepSetGuideNet(
+        lambda task: DeepSetVariationalPosteriorNet(
             task.event_shape_y,
             task.event_shape_design,
             task.event_shape_theta,
@@ -133,7 +137,7 @@ class _ExactPosteriorGuide(GuideNet):
             dim_emb=16,
             trunk_dim_h=16,
         ),
-        lambda task: AttentiveGuideNet(
+        lambda task: AttentiveVariationalPosteriorNet(
             task.event_shape_y,
             task.event_shape_design,
             task.event_shape_theta,
@@ -145,43 +149,45 @@ class _ExactPosteriorGuide(GuideNet):
         ),
     ],
 )
-def test_guide_log_prob_shape_and_finite_1d_theta(net_fn):
+def test_posterior_log_prob_shape_and_finite_1d_theta(net_fn):
     task = _make_task()  # HTD: event_shape_theta == [2]
-    guide = net_fn(task)
+    posterior = net_fn(task)
     rollout = _make_rollout(task, _make_design_net(task))
 
-    log_q = guide.log_prob(rollout.theta, rollout.y_history, rollout.design_history)
+    log_q = posterior.log_prob(rollout.theta, rollout.y_history, rollout.design_history)
     assert log_q.shape == (rollout.b,)
     assert torch.isfinite(log_q).all()
 
 
-def test_guide_log_prob_multidim_theta_flattens_correctly():
+def test_posterior_log_prob_multidim_theta_flattens_correctly():
     task = LocationFinding(n_sources=2, dim_theta=2)  # event_shape_theta == [2, 2]
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     designer = RandomDesigner(task, T=3)
     theta0 = task.sample_prior(6)
     rollout = designer.rollout(theta0)
 
-    log_q = guide.log_prob(rollout.theta, rollout.y_history, rollout.design_history)
+    log_q = posterior.log_prob(rollout.theta, rollout.y_history, rollout.design_history)
     assert log_q.shape == (6,)
     assert torch.isfinite(log_q).all()
 
 
-def test_guide_log_prob_rejects_wrong_theta_shape():
+def test_posterior_log_prob_rejects_wrong_theta_shape():
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     rollout = _make_rollout(task, _make_design_net(task))
     with pytest.raises(ValueError):
-        guide.log_prob(rollout.theta[:, :1], rollout.y_history, rollout.design_history)
+        posterior.log_prob(
+            rollout.theta[:, :1], rollout.y_history, rollout.design_history
+        )
 
 
-def test_guide_sample_shapes():
+def test_posterior_sample_shapes():
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     rollout = _make_rollout(task, _make_design_net(task), b=5)
 
-    s1 = guide.sample(rollout.y_history, rollout.design_history, n_samples=1)
-    s3 = guide.sample(rollout.y_history, rollout.design_history, n_samples=3)
+    s1 = posterior.sample(rollout.y_history, rollout.design_history, n_samples=1)
+    s3 = posterior.sample(rollout.y_history, rollout.design_history, n_samples=3)
     assert s1.shape == (
         1,
         5,
@@ -193,7 +199,7 @@ def test_guide_sample_shapes():
 def test_mixture_with_one_component_matches_independent_normal():
     torch.manual_seed(0)
     task = _make_task()
-    guide = DeepSetGuideNet(
+    posterior = DeepSetVariationalPosteriorNet(
         task.event_shape_y,
         task.event_shape_design,
         task.event_shape_theta,
@@ -204,12 +210,12 @@ def test_mixture_with_one_component_matches_independent_normal():
     )
     rollout = _make_rollout(task, _make_design_net(task), b=4)
 
-    dist = guide.distribution(rollout.y_history, rollout.design_history)
+    dist = posterior.distribution(rollout.y_history, rollout.design_history)
     loc = dist.component_distribution.base_dist.loc[:, 0]
     scale = dist.component_distribution.base_dist.scale[:, 0]
     reference = Independent(Normal(loc, scale), 1)
 
-    theta_flat = rollout.theta.reshape(rollout.b, guide.dim_theta)
+    theta_flat = rollout.theta.reshape(rollout.b, posterior.dim_theta)
     torch.testing.assert_close(
         dist.log_prob(theta_flat), reference.log_prob(theta_flat)
     )
@@ -218,11 +224,11 @@ def test_mixture_with_one_component_matches_independent_normal():
 def test_mixture_with_three_components_matches_manual_logsumexp():
     torch.manual_seed(1)
     task = _make_task()
-    guide = _make_guide(task, n_components=3)
+    posterior = _make_posterior(task, n_components=3)
     rollout = _make_rollout(task, _make_design_net(task), b=4)
 
-    dist = guide.distribution(rollout.y_history, rollout.design_history)
-    theta_flat = rollout.theta.reshape(rollout.b, guide.dim_theta)
+    dist = posterior.distribution(rollout.y_history, rollout.design_history)
+    theta_flat = rollout.theta.reshape(rollout.b, posterior.dim_theta)
 
     loc = dist.component_distribution.base_dist.loc  # [b, K, D]
     scale = dist.component_distribution.base_dist.scale
@@ -267,13 +273,13 @@ def _fixed_design_rollout(task, x_val, b):
     )
 
 
-def test_untrained_guide_gives_a_bound_strictly_below_exact_eig():
+def test_untrained_posterior_gives_a_bound_strictly_below_exact_eig():
     torch.manual_seed(0)
     x_val = 0.7
     task, *_rest, exact_eig = _linear_regression_setup(x_val=x_val)
     rollout = _fixed_design_rollout(task, x_val, b=8192)
 
-    guide = DeepSetGuideNet(
+    posterior = DeepSetVariationalPosteriorNet(
         task.event_shape_y,
         task.event_shape_design,
         task.event_shape_theta,
@@ -282,14 +288,14 @@ def test_untrained_guide_gives_a_bound_strictly_below_exact_eig():
         dim_emb=16,
         trunk_dim_h=16,
     )
-    bound = VarPost(task, guide).estimate_gain(rollout)
+    bound = VarPost(task, posterior).estimate_gain(rollout)
 
     assert (
         bound.item() < exact_eig.item() - 0.5
     )  # comfortably below, well outside MC noise
 
 
-def test_exact_posterior_guide_bound_matches_exact_eig():
+def test_exact_posterior_bound_matches_exact_eig():
     torch.manual_seed(1)
     x_val = 0.7
     task, prior_loc, prior_cov, design_row, exact_eig = _linear_regression_setup(
@@ -297,8 +303,8 @@ def test_exact_posterior_guide_bound_matches_exact_eig():
     )
     rollout = _fixed_design_rollout(task, x_val, b=32768)
 
-    guide = _ExactPosteriorGuide(prior_loc, prior_cov, design_row, task.noise_scale)
-    bound = VarPost(task, guide).estimate_gain(rollout)
+    posterior = _ExactPosterior(prior_loc, prior_cov, design_row, task.noise_scale)
+    bound = VarPost(task, posterior).estimate_gain(rollout)
 
     assert bound.item() == pytest.approx(exact_eig.item(), abs=0.05)
 
@@ -308,81 +314,81 @@ def test_exact_posterior_guide_bound_matches_exact_eig():
 # ============================================================================
 
 
-def test_var_post_gradient_reaches_guide_params():
+def test_var_post_gradient_reaches_posterior_params():
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     rollout = _make_rollout(task, _make_design_net(task))
 
-    gain = VarPost(task, guide).estimate_gain(rollout)
+    gain = VarPost(task, posterior).estimate_gain(rollout)
     gain.backward()
 
-    trainable = [p for n, p in guide.named_parameters() if n != "encoder.null_enc"]
+    trainable = [p for n, p in posterior.named_parameters() if n != "encoder.null_enc"]
     assert all(p.grad is not None for p in trainable)
     assert any(p.grad.abs().sum() > 0 for p in trainable)
 
 
-def test_var_post_gradient_reaches_deterministic_policy_and_guide_in_one_backward():
+def test_var_post_gradient_reaches_deterministic_policy_and_posterior_in_one_backward():
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     policy_net = _make_design_net(task)
     designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
 
-    gain = VarPostReinforce(task, guide, stochastic_design_policy=False).estimate_gain(
-        rollout, train_guide=True
-    )
+    gain = VarPostReinforce(
+        task, posterior, stochastic_design_policy=False
+    ).estimate_gain(rollout, train_posterior=True)
     gain.backward()
 
     assert any(
         p.grad is not None and p.grad.abs().sum() > 0 for p in policy_net.parameters()
     )
-    trainable = [p for n, p in guide.named_parameters() if n != "encoder.null_enc"]
+    trainable = [p for n, p in posterior.named_parameters() if n != "encoder.null_enc"]
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in trainable)
 
 
-def test_var_post_reinforce_train_guide_false_blocks_guide_gradient_even_if_unfrozen():
-    """train_guide=False must guarantee zero guide gradient in the
-    deterministic/pathwise branch too, regardless of the guide's own
+def test_var_post_reinforce_train_posterior_false_blocks_posterior_gradient_even_if_unfrozen():
+    """train_posterior=False must guarantee zero posterior gradient in the
+    deterministic/pathwise branch too, regardless of the posterior's own
     requires_grad -- not merely rely on the caller having frozen it."""
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     policy_net = _make_design_net(task)
     designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
-    objective = VarPostReinforce(task, guide, stochastic_design_policy=False)
+    objective = VarPostReinforce(task, posterior, stochastic_design_policy=False)
 
-    gain = objective.estimate_gain(rollout, train_guide=False)
+    gain = objective.estimate_gain(rollout, train_posterior=False)
     gain.backward()
 
     assert any(
         p.grad is not None and p.grad.abs().sum() > 0 for p in policy_net.parameters()
     )
-    trainable = [p for n, p in guide.named_parameters() if n != "encoder.null_enc"]
+    trainable = [p for n, p in posterior.named_parameters() if n != "encoder.null_enc"]
     assert all(p.grad is None for p in trainable)
     # requires_grad is restored afterward, not permanently disabled
-    assert all(p.requires_grad for p in guide.parameters())
+    assert all(p.requires_grad for p in posterior.parameters())
 
 
-def test_frozen_guide_receives_no_gradient():
+def test_frozen_posterior_receives_no_gradient():
     task = _make_task()
-    guide = _make_guide(task)
-    guide.eval()
-    for p in guide.parameters():
+    posterior = _make_posterior(task)
+    posterior.eval()
+    for p in posterior.parameters():
         p.requires_grad_(False)
 
     rollout = _make_rollout(task, _make_design_net(task))
-    gain = VarPost(task, guide).estimate_gain(rollout)
+    gain = VarPost(task, posterior).estimate_gain(rollout)
     gain.backward()
 
-    assert all(p.grad is None for p in guide.parameters())
+    assert all(p.grad is None for p in posterior.parameters())
 
 
 def test_var_post_raises_on_non_evaluable_prior():
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     task.prior.log_prob = lambda *_: (_ for _ in ()).throw(NotImplementedError())
     with pytest.raises(ValueError):
-        VarPost(task, guide)
+        VarPost(task, posterior)
 
 
 # ============================================================================
@@ -392,15 +398,15 @@ def test_var_post_raises_on_non_evaluable_prior():
 
 def test_var_post_reinforce_forward_value_matches_var_post():
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     rollout = _make_rollout(task, _make_design_net(task))
 
     torch.manual_seed(2)
     reinforce_gain = VarPostReinforce(
-        task, guide, stochastic_design_policy=False
+        task, posterior, stochastic_design_policy=False
     ).estimate_gain(rollout)
     torch.manual_seed(2)
-    plain_gain = VarPost(task, guide).estimate_gain(rollout)
+    plain_gain = VarPost(task, posterior).estimate_gain(rollout)
 
     assert torch.allclose(reinforce_gain, plain_gain)
 
@@ -409,14 +415,14 @@ def test_var_post_reinforce_forward_value_matches_var_post():
 def test_deterministic_reinforce_matches_dad_eq16_reference(baseline):
     torch.manual_seed(0)
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     policy_net = _make_design_net(task)
     designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
 
-    var_post = VarPost(task, guide)
+    var_post = VarPost(task, posterior)
     reinforce = VarPostReinforce(
-        task, guide, stochastic_design_policy=False, baseline=baseline
+        task, posterior, stochastic_design_policy=False, baseline=baseline
     )
 
     torch.manual_seed(1)
@@ -445,16 +451,16 @@ def test_stochastic_constant_value_loo_baseline_zero_grad():
     designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
 
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
 
     class _ConstantVarPost(VarPost):
         def per_sample_gain(self, rollout):
             return rollout.y_history.new_full((rollout.b,), 3.0)
 
     reinforce = VarPostReinforce(
-        task, guide, stochastic_design_policy=True, baseline="leave_one_out"
+        task, posterior, stochastic_design_policy=True, baseline="leave_one_out"
     )
-    reinforce.var_post = _ConstantVarPost(task, guide)
+    reinforce.var_post = _ConstantVarPost(task, posterior)
 
     gain = reinforce.estimate_gain(rollout)
     grad = _policy_grad(policy_net, gain)
@@ -468,74 +474,76 @@ def test_stochastic_constant_value_loo_baseline_zero_grad():
 # ============================================================================
 
 
-def test_estimate_gain_train_guide_updates_both_nets_in_one_backward_stochastic():
-    """A single estimate_gain(train_guide=True) + one backward() must update
-    both design_net (via the REINFORCE surrogate) and guide_net (via the
+def test_estimate_gain_train_posterior_updates_both_nets_in_one_backward_stochastic():
+    """A single estimate_gain(train_posterior=True) + one backward() must update
+    both design_net (via the REINFORCE surrogate) and posterior_net (via the
     injected term) for a stochastic, non-reparameterized policy."""
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     policy_net = _make_stochastic_net(task)
     designer = _make_designer(task, policy_net, reparameterize_policy=False)
     rollout = designer.rollout(task.sample_prior(8))
     assert "policy_log_probs" in rollout.extra
 
-    objective = VarPostReinforce(task, guide, stochastic_design_policy=True)
+    objective = VarPostReinforce(task, posterior, stochastic_design_policy=True)
 
-    gain = objective.estimate_gain(rollout, train_guide=True)
+    gain = objective.estimate_gain(rollout, train_posterior=True)
     gain.backward()
 
-    trainable_guide = [
-        p for n, p in guide.named_parameters() if n != "encoder.null_enc"
+    trainable_posterior = [
+        p for n, p in posterior.named_parameters() if n != "encoder.null_enc"
     ]
     assert any(
         p.grad is not None and p.grad.abs().sum() > 0 for p in policy_net.parameters()
     )
-    assert all(p.grad is not None and p.grad.abs().sum() > 0 for p in trainable_guide)
+    assert all(
+        p.grad is not None and p.grad.abs().sum() > 0 for p in trainable_posterior
+    )
 
 
-def test_train_guide_preserves_the_interpretable_gain_value():
-    """The injected guide term must be zero-forward-value: estimate_gain's
+def test_train_posterior_preserves_the_interpretable_gain_value():
+    """The injected posterior term must be zero-forward-value: estimate_gain's
     returned number (used for logging / best-checkpoint comparisons) should
-    be unaffected by train_guide, only its gradient."""
+    be unaffected by train_posterior, only its gradient."""
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     policy_net = _make_stochastic_net(task)
     designer = _make_designer(task, policy_net, reparameterize_policy=False)
     rollout = designer.rollout(task.sample_prior(8))
-    objective = VarPostReinforce(task, guide, stochastic_design_policy=True)
+    objective = VarPostReinforce(task, posterior, stochastic_design_policy=True)
 
-    plain = objective.estimate_gain(rollout, train_guide=False)
-    with_guide = objective.estimate_gain(rollout, train_guide=True)
-    torch.testing.assert_close(plain, with_guide)
+    plain = objective.estimate_gain(rollout, train_posterior=False)
+    with_posterior = objective.estimate_gain(rollout, train_posterior=True)
+    torch.testing.assert_close(plain, with_posterior)
 
 
-def test_train_guide_does_not_affect_policy_gradient_deterministic():
-    """train_guide only gates guide_net's gradient; design_net's gradient
+def test_train_posterior_does_not_affect_policy_gradient_deterministic():
+    """train_posterior only gates posterior_net's gradient; design_net's gradient
     must be identical either way in the deterministic/pathwise branch."""
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     policy_net = _make_design_net(task)
     designer = _make_designer(task, policy_net)
     rollout = designer.rollout(task.sample_prior(8))
-    objective = VarPostReinforce(task, guide, stochastic_design_policy=False)
+    objective = VarPostReinforce(task, posterior, stochastic_design_policy=False)
 
-    plain = objective.estimate_gain(rollout, train_guide=False)
-    with_guide = objective.estimate_gain(rollout, train_guide=True)
-    torch.testing.assert_close(plain, with_guide)
+    plain = objective.estimate_gain(rollout, train_posterior=False)
+    with_posterior = objective.estimate_gain(rollout, train_posterior=True)
+    torch.testing.assert_close(plain, with_posterior)
 
     grad_plain = _policy_grad(policy_net, plain)
-    grad_with_guide = _policy_grad(policy_net, with_guide)
-    torch.testing.assert_close(grad_plain, grad_with_guide)
+    grad_with_posterior = _policy_grad(policy_net, with_posterior)
+    torch.testing.assert_close(grad_plain, grad_with_posterior)
 
 
-def test_guide_gain_method_matches_var_post_estimate_gain():
+def test_posterior_gain_method_matches_var_post_estimate_gain():
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     rollout = _make_rollout(task, _make_design_net(task))
-    objective = VarPostReinforce(task, guide, stochastic_design_policy=False)
+    objective = VarPostReinforce(task, posterior, stochastic_design_policy=False)
 
     torch.testing.assert_close(
-        objective.guide_gain(rollout), objective.var_post.estimate_gain(rollout)
+        objective.posterior_gain(rollout), objective.var_post.estimate_gain(rollout)
     )
 
 
@@ -550,33 +558,33 @@ def _make_trainer(joint):
     from testbed.methods.var_post import Trainer
 
     task = _make_task()
-    guide = _make_guide(task)
+    posterior = _make_posterior(task)
     design_net = _make_design_net(task)
     designer = _make_designer(task, design_net)
     pretrain_designer = RandomDesigner(task, T=3)
-    objective = VarPostReinforce(task, guide, stochastic_design_policy=False)
-    guide_loss = GuideNLL(guide)
+    objective = VarPostReinforce(task, posterior, stochastic_design_policy=False)
+    posterior_loss = VariationalPosteriorNLL(posterior)
 
     cfg = SimpleNamespace(
         joint=joint,
-        n_guide_outer=8,
+        n_posterior_outer=8,
         n_outer=8,
-        guide_grad_clip=1.0,
+        posterior_grad_clip=1.0,
         grad_clip=1.0,
         objective=SimpleNamespace(requires_policy_log_probs=False),
     )
     trainer = Trainer(
         task=task,
         designer=designer,
-        guide_net=guide,
+        posterior_net=posterior,
         objective=objective,
-        guide_loss=guide_loss,
+        posterior_loss=posterior_loss,
         policy_optimizer=torch.optim.Adam(design_net.parameters(), lr=1e-3),
-        guide_optimizer=torch.optim.Adam(guide.parameters(), lr=1e-3),
+        posterior_optimizer=torch.optim.Adam(posterior.parameters(), lr=1e-3),
         cfg=cfg,
         pretrain_designer=pretrain_designer,
     )
-    return trainer, design_net, guide
+    return trainer, design_net, posterior
 
 
 def _snapshot(net):
@@ -587,38 +595,38 @@ def _any_changed(before, net):
     return any(not torch.equal(b, p) for b, p in zip(before, net.parameters()))
 
 
-def test_guide_pretrain_step_changes_only_guide():
-    trainer, design_net, guide = _make_trainer(joint=False)
-    design_before, guide_before = _snapshot(design_net), _snapshot(guide)
+def test_posterior_pretrain_step_changes_only_posterior():
+    trainer, design_net, posterior = _make_trainer(joint=False)
+    design_before, posterior_before = _snapshot(design_net), _snapshot(posterior)
 
-    metrics = trainer.guide_pretrain_step()
+    metrics = trainer.posterior_pretrain_step()
 
-    assert torch.isfinite(torch.tensor(metrics["guide_pretrain/loss"]))
+    assert torch.isfinite(torch.tensor(metrics["posterior_pretrain/loss"]))
     assert not _any_changed(design_before, design_net)
-    assert _any_changed(guide_before, guide)
+    assert _any_changed(posterior_before, posterior)
 
 
 def test_frozen_train_step_changes_only_design_net():
-    trainer, design_net, guide = _make_trainer(joint=False)
-    trainer._freeze_guide()
-    design_before, guide_before = _snapshot(design_net), _snapshot(guide)
+    trainer, design_net, posterior = _make_trainer(joint=False)
+    trainer._freeze_posterior()
+    design_before, posterior_before = _snapshot(design_net), _snapshot(posterior)
 
     metrics = trainer.train_step()
 
     assert torch.isfinite(torch.tensor(metrics["gain"]))
     assert _any_changed(design_before, design_net)
-    assert not _any_changed(guide_before, guide)
+    assert not _any_changed(posterior_before, posterior)
 
 
 def test_joint_train_step_changes_both_nets():
-    trainer, design_net, guide = _make_trainer(joint=True)
-    design_before, guide_before = _snapshot(design_net), _snapshot(guide)
+    trainer, design_net, posterior = _make_trainer(joint=True)
+    design_before, posterior_before = _snapshot(design_net), _snapshot(posterior)
 
     metrics = trainer.train_step()
 
     assert torch.isfinite(torch.tensor(metrics["gain"]))
     assert _any_changed(design_before, design_net)
-    assert _any_changed(guide_before, guide)
+    assert _any_changed(posterior_before, posterior)
 
 
 # ============================================================================
@@ -713,7 +721,7 @@ def test_sort_by_first_coordinate_matches_manual_reference():
 
 def test_canonicalize_theta_makes_var_post_invariant_to_source_order():
     task = LocationFinding(n_sources=2, dim_theta=2)
-    guide = DeepSetGuideNet(
+    posterior = DeepSetVariationalPosteriorNet(
         task.event_shape_y,
         task.event_shape_design,
         task.event_shape_theta,
@@ -734,14 +742,14 @@ def test_canonicalize_theta_makes_var_post_invariant_to_source_order():
         design_history=rollout.design_history,
     )
 
-    var_post_plain = VarPost(task, guide)
+    var_post_plain = VarPost(task, posterior)
     gain = var_post_plain.per_sample_gain(rollout)
     gain_swapped = var_post_plain.per_sample_gain(swapped_rollout)
     assert not torch.allclose(
         gain, gain_swapped
     )  # generically different without canonicalization
 
-    var_post_canon = VarPost(task, guide, canonicalize_theta=True)
+    var_post_canon = VarPost(task, posterior, canonicalize_theta=True)
     gain_canon = var_post_canon.per_sample_gain(rollout)
     gain_canon_swapped = var_post_canon.per_sample_gain(swapped_rollout)
     torch.testing.assert_close(
@@ -749,9 +757,9 @@ def test_canonicalize_theta_makes_var_post_invariant_to_source_order():
     )  # identical with canonicalization
 
 
-def test_guide_nll_canonicalize_theta_matches_var_post_convention():
+def test_posterior_nll_canonicalize_theta_matches_var_post_convention():
     task = LocationFinding(n_sources=2, dim_theta=2)
-    guide = DeepSetGuideNet(
+    posterior = DeepSetVariationalPosteriorNet(
         task.event_shape_y,
         task.event_shape_design,
         task.event_shape_theta,
@@ -763,8 +771,8 @@ def test_guide_nll_canonicalize_theta_matches_var_post_convention():
     designer = RandomDesigner(task, T=3)
     rollout = designer.rollout(task.sample_prior(6))
 
-    loss = GuideNLL(guide, canonicalize_theta=True, reduction="none")
-    manual = -guide.log_prob(
+    loss = VariationalPosteriorNLL(posterior, canonicalize_theta=True, reduction="none")
+    manual = -posterior.log_prob(
         sort_by_first_coordinate(rollout.theta),
         rollout.y_history,
         rollout.design_history,

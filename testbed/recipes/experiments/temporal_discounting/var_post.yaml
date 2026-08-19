@@ -4,7 +4,7 @@ defaults:
   - /var_post
   - override /task: temporal_discounting
   - override /net@design_net: null
-  - override /net@guide_net: null
+  - override /net@posterior_net: null
   - _self_
 
 
@@ -21,11 +21,11 @@ objective:
   use_current_prior: false
   # deterministic policy -> pathwise Reinforce with VarPost.per_sample_gain (DAD Eq. 16)
 
-# guide pretraining
-n_guide_pretrain_iter: 5_000
-n_guide_outer: 1_024
-guide_lr: 1e-4
-guide_grad_clip: 1.0
+# posterior pretraining
+n_posterior_pretrain_iter: 5_000
+n_posterior_outer: 1_024
+posterior_lr: 1e-4
+posterior_grad_clip: 1.0
 pretrain_design_distr: null
 
 # policy training
@@ -53,9 +53,9 @@ design_net:
     _target_: torch.nn.ReLU
     _partial_: true
 
-# guide network: DeepSets encoder + Gaussian-mixture readout over theta = (k, alpha)
-guide_net:
-  _target_: testbed.design_nets.DeepSetGuideNet
+# posterior network: DeepSets encoder + Gaussian-mixture readout over theta = (k, alpha)
+posterior_net:
+  _target_: testbed.design_nets.DeepSetVariationalPosteriorNet
   n_components: 10
   encoder_dim_h: [256, 256]
   dim_emb: 16

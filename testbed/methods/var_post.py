@@ -1,4 +1,4 @@
-"""Training for variational-posterior (Barber-Agakov) design, frozen or joint guide.
+"""Training for variational-posterior (Barber-Agakov) design, frozen or joint posterior.
 
 Inspired by Bayesian Experimental Design via Score Matching paper.
 """
@@ -10,7 +10,7 @@ import torch
 from hydra.utils import instantiate
 
 from testbed.core.setup import setup
-from testbed.design_objectives import GuideNLL, VarPost, VarPostReinforce
+from testbed.design_objectives import VariationalPosteriorNLL, VarPost, VarPostReinforce
 from testbed.designers import PolicyDesigner, RandomDesigner
 
 # ============================================================================
@@ -21,9 +21,9 @@ from testbed.designers import PolicyDesigner, RandomDesigner
 class Trainer:
     """Training class for VarPost-style training.
 
-    Two phases: a guide-pretraining phase (fits the guide net against random
+    Two phases: a posterior-pretraining phase (fits the posterior net against random
     designs) followed by a policy-training phase, mirroring ActionBED's
-    two-phase structure. `cfg.joint` controls whether the guide keeps
+    two-phase structure. `cfg.joint` controls whether the posterior keeps
     training (rather than being frozen) during the second phase.
     """
 
@@ -31,15 +31,15 @@ class Trainer:
         self,
         task,
         designer,
-        guide_net,
+        posterior_net,
         objective,
-        guide_loss,
+        posterior_loss,
         policy_optimizer,
-        guide_optimizer,
+        posterior_optimizer,
         cfg,
         pretrain_designer,
         policy_scheduler=None,
-        guide_scheduler=None,
+        posterior_scheduler=None,
         ema_decay=None,
         manager=None,
     ):
@@ -56,15 +56,15 @@ class Trainer:
 
         self.task = task
         self.designer = designer
-        self.guide_net = guide_net
+        self.posterior_net = posterior_net
         self.objective = objective
-        self.guide_loss = guide_loss
+        self.posterior_loss = posterior_loss
         self.policy_optimizer = policy_optimizer
-        self.guide_optimizer = guide_optimizer
+        self.posterior_optimizer = posterior_optimizer
         self.cfg = cfg
         self.pretrain_designer = pretrain_designer
         self.policy_scheduler = policy_scheduler
-        self.guide_scheduler = guide_scheduler
+        self.posterior_scheduler = posterior_scheduler
         self.manager = manager
 
         self.joint = bool(cfg.joint)
@@ -86,23 +86,23 @@ class Trainer:
                 p_ema.mul_(self.ema_decay).add_(p, alpha=1 - self.ema_decay)
 
     def train(self):
-        """Full training loop: guide pretraining, then policy training."""
+        """Full training loop: posterior pretraining, then policy training."""
         self.designer.design_net.train()
-        self.guide_net.train()
+        self.posterior_net.train()
 
-        for step in range(self.cfg.n_guide_pretrain_iter):
-            metrics = self.guide_pretrain_step()
+        for step in range(self.cfg.n_posterior_pretrain_iter):
+            metrics = self.posterior_pretrain_step()
             metrics["step"] = step
 
             if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
 
         if not self.joint:
-            self._freeze_guide()
+            self._freeze_posterior()
 
         for step in range(
-            self.cfg.n_guide_pretrain_iter,
-            self.cfg.n_guide_pretrain_iter + self.cfg.n_train_iter,
+            self.cfg.n_posterior_pretrain_iter,
+            self.cfg.n_posterior_pretrain_iter + self.cfg.n_train_iter,
         ):
             metrics = self.train_step()
             metrics["step"] = step
@@ -123,7 +123,7 @@ class Trainer:
         save_path = self.manager.path("final_step.pt")
         checkpoint = {
             "design_net": self.designer.design_net.state_dict(),
-            "guide_net": self.guide_net.state_dict(),
+            "posterior_net": self.posterior_net.state_dict(),
             "step": step,
         }
         if self.design_net_ema is not None:
@@ -133,61 +133,61 @@ class Trainer:
         if self.manager.metric_logger is not None:
             self.manager.metric_logger.close()
 
-    def guide_pretrain_step(self):
-        """Takes a single guide-pretraining step against selected designs - typically random designs."""
+    def posterior_pretrain_step(self):
+        """Takes a single posterior-pretraining step against selected designs - typically random designs."""
         cfg = self.cfg
 
-        theta = self.task.sample_prior(cfg.n_guide_outer)
+        theta = self.task.sample_prior(cfg.n_posterior_outer)
         # The pretrain designer has no trainable params, so no_grad on the
         # rollout just avoids building an unnecessary graph through it. The
         # resulting theta/y_history/design_history are plain tensors either
-        # way; guide_loss's forward pass below still builds a fresh graph
-        # from the guide net's own parameters.
+        # way; posterior_loss's forward pass below still builds a fresh graph
+        # from the posterior net's own parameters.
         with torch.no_grad():
             rollout = self.pretrain_designer.rollout(theta)
 
-        loss = self.guide_loss.from_rollout(rollout)
+        loss = self.posterior_loss.from_rollout(rollout)
 
-        self.guide_optimizer.zero_grad()
+        self.posterior_optimizer.zero_grad()
         loss.backward()
 
-        if cfg.guide_grad_clip is not None:
+        if cfg.posterior_grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(
-                self.guide_net.parameters(), cfg.guide_grad_clip
+                self.posterior_net.parameters(), cfg.posterior_grad_clip
             )
 
-        self.guide_optimizer.step()
-        if self.guide_scheduler is not None:
-            self.guide_scheduler.step()
+        self.posterior_optimizer.step()
+        if self.posterior_scheduler is not None:
+            self.posterior_scheduler.step()
 
-        return {"guide_pretrain/loss": loss.item()}
+        return {"posterior_pretrain/loss": loss.item()}
 
-    def _freeze_guide(self):
-        """Freezes the guide net after pretraining (non-joint mode)."""
-        self.guide_net.eval()
-        for p in self.guide_net.parameters():
+    def _freeze_posterior(self):
+        """Freezes the posterior net after pretraining (non-joint mode)."""
+        self.posterior_net.eval()
+        for p in self.posterior_net.parameters():
             p.requires_grad_(False)
 
     def train_step(self):
-        """Takes a single policy-training step (and, in joint mode, a guide step)."""
+        """Takes a single policy-training step (and, in joint mode, a posterior step)."""
         cfg = self.cfg
 
         theta0 = self.task.sample_prior(cfg.n_outer)
         rollout = self.designer.rollout(theta0)
 
-        # In joint mode, VarPostReinforce.estimate_gain(train_guide=True)
-        # self-contains the guide's gradient. Plain VarPost already updates both
+        # In joint mode, VarPostReinforce.estimate_gain(train_posterior=True)
+        # self-contains the posterior's gradient. Plain VarPost already updates both
         # nets in a single pass when the policy is pathwise-differentiable
         # so it needs no such flag.
         if self.joint and isinstance(self.objective, VarPostReinforce):
-            gain = self.objective.estimate_gain(rollout, train_guide=True)
+            gain = self.objective.estimate_gain(rollout, train_posterior=True)
         else:
             gain = self.objective.estimate_gain(rollout)
         loss = -gain
 
         self.policy_optimizer.zero_grad()
         if self.joint:
-            self.guide_optimizer.zero_grad()
+            self.posterior_optimizer.zero_grad()
 
         loss.backward()
 
@@ -202,13 +202,13 @@ class Trainer:
             self._update_ema()
 
         if self.joint:
-            if cfg.guide_grad_clip is not None:
+            if cfg.posterior_grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(
-                    self.guide_net.parameters(), cfg.guide_grad_clip
+                    self.posterior_net.parameters(), cfg.posterior_grad_clip
                 )
-            self.guide_optimizer.step()
-            if self.guide_scheduler is not None:
-                self.guide_scheduler.step()
+            self.posterior_optimizer.step()
+            if self.posterior_scheduler is not None:
+                self.posterior_scheduler.step()
 
         return {"gain": gain.item()}
 
@@ -241,7 +241,7 @@ class Trainer:
 
             checkpoint = {
                 "design_net": self.designer.design_net.state_dict(),
-                "guide_net": self.guide_net.state_dict(),
+                "posterior_net": self.posterior_net.state_dict(),
                 "step": step,
                 "metric": metric_val,
             }
@@ -274,32 +274,32 @@ def build_design_net(cfg, task):
     )
 
 
-def build_guide_net(cfg, task):
-    """Instantiates the guide (variational-posterior) network."""
+def build_posterior_net(cfg, task):
+    """Instantiates the posterior (variational-posterior) network."""
     return instantiate(
-        cfg.guide_net,
+        cfg.posterior_net,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_theta=task.event_shape_theta,
     )
 
 
-def build_objective(cfg, task, guide_net):
+def build_objective(cfg, task, posterior_net):
     """Instantiates the objective for training VarPost.
 
-    VarPost/VarPostReinforce need the task and guide_net to construct, so it
+    VarPost/VarPostReinforce need the task and posterior_net to construct, so it
     can't be a pure instantiate.
     """
     objectives = {
         "var_post": lambda: VarPost(
             task,
-            guide_net,
+            posterior_net,
             use_current_prior=cfg.objective.use_current_prior,
             canonicalize_theta=cfg.objective.canonicalize_theta,
         ),
         "var_post_reinforce": lambda: VarPostReinforce(
             task,
-            guide_net,
+            posterior_net,
             stochastic_design_policy=cfg.objective.requires_policy_log_probs,
             baseline=cfg.objective.baseline,
             use_current_prior=cfg.objective.use_current_prior,
@@ -315,7 +315,7 @@ def build_policy_optimizer(cfg, design_net):
 
     cfg.betas: Adam (beta1, beta2); torch's (0.9, 0.999) default if null.
     cfg.policy_cosine_alpha: if set, LR cosine-decays over the full run
-    (n_guide_pretrain_iter + n_train_iter) from cfg.lr down to
+    (n_posterior_pretrain_iter + n_train_iter) from cfg.lr down to
     cfg.lr * cfg.policy_cosine_alpha; no scheduler (constant LR) if null.
     """
     betas = tuple(cfg.betas) if cfg.get("betas") else (0.9, 0.999)
@@ -323,35 +323,37 @@ def build_policy_optimizer(cfg, design_net):
 
     scheduler = None
     if cfg.get("policy_cosine_alpha") is not None:
-        total_iters = cfg.n_guide_pretrain_iter + cfg.n_train_iter
+        total_iters = cfg.n_posterior_pretrain_iter + cfg.n_train_iter
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=total_iters, eta_min=cfg.lr * cfg.policy_cosine_alpha
         )
     return optimizer, scheduler
 
 
-def build_guide_optimizer(cfg, guide_net):
-    """Builds the guide Adam optimizer and its (optional) warmup-cosine scheduler.
+def build_posterior_optimizer(cfg, posterior_net):
+    """Builds the posterior Adam optimizer and its (optional) warmup-cosine scheduler.
 
-    cfg.guide_lr is the peak LR. cfg.guide_warmup_frac (fraction of the full
-    run, n_guide_pretrain_iter + n_train_iter) is the linear-warmup length;
+    cfg.posterior_lr is the peak LR. cfg.posterior_warmup_frac (fraction of the full
+    run, n_posterior_pretrain_iter + n_train_iter) is the linear-warmup length;
     no scheduler (constant LR) if null/0. After warmup, LR cosine-decays to
-    cfg.guide_lr_floor over the remaining steps of the full run.
+    cfg.posterior_lr_floor over the remaining steps of the full run.
     """
-    betas = tuple(cfg.guide_betas) if cfg.get("guide_betas") else (0.9, 0.999)
-    optimizer = torch.optim.Adam(guide_net.parameters(), lr=cfg.guide_lr, betas=betas)
+    betas = tuple(cfg.posterior_betas) if cfg.get("posterior_betas") else (0.9, 0.999)
+    optimizer = torch.optim.Adam(
+        posterior_net.parameters(), lr=cfg.posterior_lr, betas=betas
+    )
 
-    warmup_frac = cfg.get("guide_warmup_frac") or 0.0
+    warmup_frac = cfg.get("posterior_warmup_frac") or 0.0
     if not warmup_frac:
         return optimizer, None
 
-    total_iters = cfg.n_guide_pretrain_iter + cfg.n_train_iter
+    total_iters = cfg.n_posterior_pretrain_iter + cfg.n_train_iter
     warmup_iters = max(1, round(warmup_frac * total_iters))
     warmup = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lambda t: min(1.0, t / warmup_iters)
     )
     decay = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=total_iters - warmup_iters, eta_min=cfg.guide_lr_floor
+        optimizer, T_max=total_iters - warmup_iters, eta_min=cfg.posterior_lr_floor
     )
     scheduler = torch.optim.lr_scheduler.SequentialLR(
         optimizer, schedulers=[warmup, decay], milestones=[warmup_iters]
@@ -360,7 +362,7 @@ def build_guide_optimizer(cfg, guide_net):
 
 
 def build_pretrain_designer(cfg, task):
-    """Instantiates the RandomDesigner used to pretrain the guide net."""
+    """Instantiates the RandomDesigner used to pretrain the posterior net."""
     dist = (
         instantiate(
             cfg.pretrain_design_distr,
@@ -394,8 +396,8 @@ def main(cfg):
 
     design_net = build_design_net(cfg, task)
     design_net = design_net.to(cfg.device)
-    guide_net = build_guide_net(cfg, task)
-    guide_net = guide_net.to(cfg.device)
+    posterior_net = build_posterior_net(cfg, task)
+    posterior_net = posterior_net.to(cfg.device)
 
     designer = PolicyDesigner(
         task,
@@ -410,27 +412,29 @@ def main(cfg):
 
     cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
 
-    objective = build_objective(cfg, task, guide_net)
-    guide_loss = GuideNLL(
-        guide_net, canonicalize_theta=cfg.objective.canonicalize_theta
+    objective = build_objective(cfg, task, posterior_net)
+    posterior_loss = VariationalPosteriorNLL(
+        posterior_net, canonicalize_theta=cfg.objective.canonicalize_theta
     )
     pretrain_designer = build_pretrain_designer(cfg, task)
 
     policy_optimizer, policy_scheduler = build_policy_optimizer(cfg, design_net)
-    guide_optimizer, guide_scheduler = build_guide_optimizer(cfg, guide_net)
+    posterior_optimizer, posterior_scheduler = build_posterior_optimizer(
+        cfg, posterior_net
+    )
 
     trainer = Trainer(
         task=task,
         designer=designer,
-        guide_net=guide_net,
+        posterior_net=posterior_net,
         objective=objective,
-        guide_loss=guide_loss,
+        posterior_loss=posterior_loss,
         policy_optimizer=policy_optimizer,
-        guide_optimizer=guide_optimizer,
+        posterior_optimizer=posterior_optimizer,
         cfg=cfg,
         pretrain_designer=pretrain_designer,
         policy_scheduler=policy_scheduler,
-        guide_scheduler=guide_scheduler,
+        posterior_scheduler=posterior_scheduler,
         ema_decay=cfg.get("ema_decay"),
         manager=manager,
     )

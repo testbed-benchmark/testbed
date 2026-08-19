@@ -4,7 +4,7 @@ defaults:
   - /var_post
   - _self_
 
-# Joint variant: the guide keeps training (rather than being frozen) during
+# Joint variant: the posterior keeps training (rather than being frozen) during
 # policy training.
 joint: true
-n_guide_pretrain_iter: 0
+n_posterior_pretrain_iter: 0

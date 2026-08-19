@@ -4,11 +4,11 @@ from torch import Tensor
 
 from ..core.rollout import Rollout
 from ..core.util import sort_by_first_coordinate
-from ..design_nets.guide import GuideNLL
+from ..design_nets.variational_posterior import VariationalPosteriorNLL
 from ..tasks.base import Task
 from .base_objective import RolloutObjective
 
-__all__ = ["GuideNLL", "VarPost"]
+__all__ = ["VariationalPosteriorNLL", "VarPost"]
 
 
 class VarPost(RolloutObjective):
@@ -23,7 +23,7 @@ class VarPost(RolloutObjective):
     def __init__(
         self,
         task: Task,
-        guide_net,
+        posterior_net,
         use_current_prior: bool = False,
         canonicalize_theta: bool = False,
     ):
@@ -33,7 +33,7 @@ class VarPost(RolloutObjective):
         (default: False).
 
         canonicalize_theta: sort the leading axis of ``event_shape_theta`` by
-        first coordinate before evaluating theta under either the guide or
+        first coordinate before evaluating theta under either the posterior or
         the prior (default: False), via `sort_by_first_coordinate`. Only
         meaningful for tasks whose theta is an exchangeable set of objects
         along that axis (e.g. LocationFinding's ``n_sources``, whose
@@ -47,10 +47,10 @@ class VarPost(RolloutObjective):
         true theta everywhere. This is an inherent property of any
         canonicalization-by-sorting scheme for an exchangeable set,
         and doesn't affect the bound's validity -- only how easy the
-        guide is to fit well near those ties.
+        posterior is to fit well near those ties.
         """
         super().__init__(task)
-        self.guide_net = guide_net
+        self.posterior_net = posterior_net
         self.use_current_prior = use_current_prior
         self.canonicalize_theta = canonicalize_theta
 
@@ -74,7 +74,7 @@ class VarPost(RolloutObjective):
         theta = rollout.theta
         if self.canonicalize_theta:
             theta = sort_by_first_coordinate(theta)
-        log_q = self.guide_net.log_prob(
+        log_q = self.posterior_net.log_prob(
             theta, rollout.y_history, rollout.design_history
         )
         prior = self.task.current_prior if self.use_current_prior else self.task.prior

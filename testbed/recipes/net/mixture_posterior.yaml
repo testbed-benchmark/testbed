@@ -1,4 +1,4 @@
-_target_: testbed.design_nets.AttentiveGuideNet
+_target_: testbed.design_nets.AttentiveVariationalPosteriorNet
 n_components: 10
 encoder_dim_h: 256
 dim_emb: 128

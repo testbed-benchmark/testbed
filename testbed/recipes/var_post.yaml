@@ -2,14 +2,14 @@ defaults:
   - system: default
   - task: location_finding
   - net@design_net: attentive_policy
-  - net@guide_net: mixture_guide
+  - net@posterior_net: mixture_posterior
   - wandb: default
   - hydra_run: default
   - _self_
 # system (device/save_dir come from the system group)
 seed: 0
 T: 10
-# frozen variant: pretrain the guide, then freeze it while training the policy
+# frozen variant: pretrain the posterior, then freeze it while training the policy
 joint: false
 # objective: plain (non-REINFORCE) Barber-Agakov bound, since the default
 # task/net pairing (location_finding + attentive_policy) is fully
@@ -26,16 +26,16 @@ objective:
   # no-op for the default single-source task); see
   # experiments/location_finding_2src/var_post.yaml, which turns this on.
   canonicalize_theta: false
-# guide pretraining
-n_guide_pretrain_iter: 5_000
-n_guide_outer: 1_024
-guide_lr: 1e-4
-guide_grad_clip: 1.0
-guide_betas: null  # null -> torch Adam default (0.9, 0.999)
-guide_warmup_frac: null  # null/0 -> constant guide_lr; else linear-warmup-then-cosine-decay
-guide_lr_floor: 1e-6  # only used when guide_warmup_frac is set
+# posterior pretraining
+n_posterior_pretrain_iter: 5_000
+n_posterior_outer: 1_024
+posterior_lr: 1e-4
+posterior_grad_clip: 1.0
+posterior_betas: null  # null -> torch Adam default (0.9, 0.999)
+posterior_warmup_frac: null  # null/0 -> constant posterior_lr; else linear-warmup-then-cosine-decay
+posterior_lr_floor: 1e-6  # only used when posterior_warmup_frac is set
 # ScoreBED "random scale Gaussian" design sampler for the
-# location-finding guide pretraining: each trajectory draws its own scale
+# location-finding posterior pretraining: each trajectory draws its own scale
 # s ~ U(scale_low, scale_high), then all T steps of that trajectory are drawn
 # i.i.d. N(0, s^2). 
 pretrain_design_distr:

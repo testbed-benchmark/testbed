@@ -13,7 +13,7 @@ class RandomScaleGaussianDesignDistribution(Distribution):
     all ``T`` design steps within that trajectory are then drawn i.i.d.
     ``N(0, s^2)``. This is the "random scale Gaussian" design sampler from
     ScoreBED (Phillips, Kerrigan, Rainforth, UAI 2026), used
-    there to pretrain a score/guide net independently of the policy on the
+    there to pretrain a score/posterior net independently of the policy on the
     location-finding task.
 
     Only usable with ``RandomDesigner``'s vectorized (no-hooks) rollout path,
@@ -93,7 +93,7 @@ class RandomScaleGaussianDesignDistribution(Distribution):
 
         Not a true marginal density (which would integrate out the random
         scale) -- `RandomDesigner` always pairs one `sample()` call with one
-        `log_prob()` call on its result, (and nothing downstream in guide specific
+        `log_prob()` call on its result, (and nothing downstream in posterior specific
         calls to the implementation for pretraining consumes this value),
         so this conditional surrogate is sufficient.
         Do not call out of order or on a different-sized tensor.

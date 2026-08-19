@@ -14,7 +14,7 @@ from .loss import (
 from .reinforce import LossReinforce, Reinforce, SPCEReinforce, VarPostReinforce
 from .snmc import NMC, SNMC
 from .spce import PCE, SPCE
-from .var_post import GuideNLL, VarPost
+from .var_post import VariationalPosteriorNLL, VarPost
 
 __all__ = [
     "NMC",
@@ -22,7 +22,7 @@ __all__ = [
     "SNMC",
     "SPCE",
     "DesignObjective",
-    "GuideNLL",
+    "VariationalPosteriorNLL",
     "LossReinforce",
     "MSELoss",
     "LogLoss",

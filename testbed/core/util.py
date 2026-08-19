@@ -177,7 +177,7 @@ def sort_by_first_coordinate(x: Tensor) -> Tensor:
     invariant to the ordering of an exchangeable ``n_objects`` axis, e.g.
     LocationFinding's ``n_sources``): sorting collapses every permutation of
     a given configuration onto the same canonical representative, so the
-    guide only needs to fit one point per equivalence class.
+    posterior only needs to fit one point per equivalence class.
 
     Args:
         x: Either

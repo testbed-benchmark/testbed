@@ -22,7 +22,7 @@ def _requires_grad(module: torch.nn.Module, flag: bool):
     not at backward time -- so restoring the original flags on exit doesn't
     retroactively reconnect a graph built with them disabled. Used to make a
     training-time flag (like `VarPostReinforce.estimate_gain`'s
-    `train_guide`) the actual source of truth for whether a module gets
+    `train_posterior`) the actual source of truth for whether a module gets
     gradient from one specific call, regardless of whatever `requires_grad`
     state it happens to carry externally (e.g. if the caller forgot to
     freeze it, or froze/unfroze it for an unrelated reason).
@@ -205,7 +205,7 @@ class VarPostReinforce(Reinforce):
     def __init__(
         self,
         task: Task,
-        guide_net,
+        posterior_net,
         stochastic_design_policy: bool,
         baseline: str | None = None,
         use_current_prior: bool = False,
@@ -215,7 +215,7 @@ class VarPostReinforce(Reinforce):
         super().__init__(task, stochastic_design_policy, baseline)
         self.var_post = VarPost(
             task,
-            guide_net,
+            posterior_net,
             use_current_prior=use_current_prior,
             canonicalize_theta=canonicalize_theta,
         )
@@ -224,8 +224,8 @@ class VarPostReinforce(Reinforce):
         """Computes the per-sample Barber-Agakov gain."""
         return self.var_post.per_sample_gain(rollout)
 
-    def guide_gain(self, rollout: Rollout) -> Tensor:
-        """The guide's own (undetached) Barber-Agakov gain, for training guide_net.
+    def posterior_gain(self, rollout: Rollout) -> Tensor:
+        """The posterior's own (undetached) Barber-Agakov gain, for training posterior_net.
 
         Equivalent to ``self.var_post.estimate_gain(rollout)``, exposed here
         as a public method rather than making callers reach into
@@ -233,18 +233,18 @@ class VarPostReinforce(Reinforce):
         """
         return self.var_post.estimate_gain(rollout)
 
-    def estimate_gain(self, rollout: Rollout, train_guide: bool = False) -> Tensor:
+    def estimate_gain(self, rollout: Rollout, train_posterior: bool = False) -> Tensor:
         r"""Estimates the (policy-gradient-ready) Barber-Agakov gain.
 
-        train_guide: whether this call should also train guide_net (default
-        False). False guarantees zero guide_net gradient regardless of its
+        train_posterior: whether this call should also train posterior_net (default
+        False). False guarantees zero posterior_net gradient regardless of its
         own requires_grad state -- via `_requires_grad` below, which is safe
         because autograd fixes whether a leaf gets gradient at forward time,
         so restoring requires_grad right after can't reconnect it.
         """
-        with _requires_grad(self.var_post.guide_net, train_guide):
+        with _requires_grad(self.var_post.posterior_net, train_posterior):
             gain = super().estimate_gain(rollout)
-        if train_guide and self.stochastic_design_policy:
-            guide_gain = self.guide_gain(rollout)
-            gain = gain + (guide_gain - guide_gain.detach())
+        if train_posterior and self.stochastic_design_policy:
+            posterior_gain = self.posterior_gain(rollout)
+            gain = gain + (posterior_gain - posterior_gain.detach())
         return gain

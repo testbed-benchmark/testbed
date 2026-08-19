@@ -1,4 +1,4 @@
-"""Guide networks: amortized variational posteriors q(theta | y_history, design_history)."""
+"""Amortized variational posteriors q(theta | y_history, design_history)."""
 
 from abc import ABC, abstractmethod
 from math import atanh, log, prod
@@ -19,7 +19,7 @@ from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, Histor
 from testbed.design_nets.modules import MLP
 
 
-class GuideNet(nn.Module, ABC):
+class VariationalPosteriorNet(nn.Module, ABC):
     """Maps an experimental history to an amortized variational posterior over theta.
 
     Shape:
@@ -30,7 +30,7 @@ class GuideNet(nn.Module, ABC):
     """
 
     def __init__(self, event_shape_theta):
-        """Initializes the guide net."""
+        """Initializes the posterior net."""
         super().__init__()
 
         self.event_shape_theta = torch.Size(event_shape_theta)
@@ -99,7 +99,7 @@ class GuideNet(nn.Module, ABC):
         return self.distribution(y_history, design_history, mask=mask)
 
 
-class GaussianMixtureGuideNet(GuideNet):
+class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
     """A Gaussian-mixture variational posterior read off a history encoding.
 
     The mixture is parametrized in a standardized internal space (shifted/scaled
@@ -107,21 +107,21 @@ class GaussianMixtureGuideNet(GuideNet):
     a cheap default fix for theta with large scale or constrained support.
 
     Known limitation: `event_shape_theta` is flattened before being modeled
-    (see `GuideNet.log_prob`/`sample`), with no structural awareness of any
+    (see `VariationalPosteriorNet.log_prob`/`sample`), with no structural awareness of any
     permutation symmetry within that shape. For tasks like multi-source
     LocationFinding, whose likelihood is invariant to permuting the
     n_sources axis of theta, the true posterior is multimodal via this
     label-switching symmetry -- this class itself has no inductive bias
     encouraging it to spread mixture components across those symmetric
     modes. If using the Barber-Agakov bound it remains valid, since it holds
-    for any guide, but it may be needlessly loose on such tasks if used as-is.
+    for any posterior, but it may be needlessly loose on such tasks if used as-is.
 
     Limitation is addressed at the caller: pass
-    `canonicalize_theta=True` to `VarPost`/`VarPostReinforce`/`GuideNLL` to
-    sort theta by first coordinate before it ever reaches this guide,
+    `canonicalize_theta=True` to `VarPost`/`VarPostReinforce`/`VariationalPosteriorNLL` to
+    sort theta by first coordinate before it ever reaches this posterior,
     collapsing the label-switching symmetry to one canonical representative
     per equivalence class.
-    A guide used without that flag still has this limitation.
+    A posterior used without that flag still has this limitation.
 
     Args:
         encoder: HistoryEncoder object.
@@ -222,20 +222,20 @@ class GaussianMixtureGuideNet(GuideNet):
         return MixtureSameFamily(Categorical(logits=logits), component)
 
 
-class GuideNLL(nn.Module):
-    """Negative log-likelihood loss for pretraining/fitting a guide net.
+class VariationalPosteriorNLL(nn.Module):
+    """Negative log-likelihood loss for pretraining/fitting a posterior net.
 
-    Minimizing this loss over guide parameters is equivalent to maximizing
-    any reasonable lower bound on EIG that depends on the guide only through
+    Minimizing this loss over posterior parameters is equivalent to maximizing
+    any reasonable lower bound on EIG that depends on the posterior only through
     ``log q(theta | y, d)`` (e.g. ``testbed.design_objectives.var_post.VarPost``):
-    whatever guide-independent term such a bound also contains (``-log
-    p(theta)`` in the Barber-Agakov bound) has zero gradient w.r.t. guide
+    whatever posterior-independent term such a bound also contains (``-log
+    p(theta)`` in the Barber-Agakov bound) has zero gradient w.r.t. posterior
     parameters.
     """
 
     def __init__(
         self,
-        guide_net: GuideNet,
+        posterior_net: VariationalPosteriorNet,
         reduction: str = "mean",
         canonicalize_theta: bool = False,
     ):
@@ -244,8 +244,8 @@ class GuideNLL(nn.Module):
         canonicalize_theta: sort the leading axis of ``event_shape_theta`` by
         first coordinate before computing the NLL (default: False).
         Must be set consistently with whatever variational bound
-        (e.g. `VarPost`/`VarPostReinforce`) this guide is paired with downstream,
-        since the guide should be pretrained to fit whatever theta it will
+        (e.g. `VarPost`/`VarPostReinforce`) this posterior is paired with downstream,
+        since the posterior should be pretrained to fit whatever theta it will
         actually be evaluated against.
         """
         super().__init__()
@@ -253,12 +253,12 @@ class GuideNLL(nn.Module):
         # cycle
         from testbed.design_objectives.loss import _check_reduction
 
-        self.guide_net = guide_net
+        self.posterior_net = posterior_net
         self.reduction = _check_reduction(reduction)
         self.canonicalize_theta = canonicalize_theta
 
     def forward(self, theta: Tensor, y_history, design_history, mask=None) -> Tensor:
-        """Computes the guide NLL.
+        """Computes the posterior NLL.
 
         Args:
             theta: Parameters, shape ``[b, *event_shape_theta]``.
@@ -271,7 +271,7 @@ class GuideNLL(nn.Module):
         """
         if self.canonicalize_theta:
             theta = sort_by_first_coordinate(theta)
-        nll = -self.guide_net.log_prob(theta, y_history, design_history, mask=mask)
+        nll = -self.posterior_net.log_prob(theta, y_history, design_history, mask=mask)
         if self.reduction == "sum":
             return nll.sum()
         if self.reduction == "mean":
@@ -279,11 +279,11 @@ class GuideNLL(nn.Module):
         return nll
 
     def from_rollout(self, rollout) -> Tensor:
-        """Computes the guide NLL from a rollout's theta/y_history/design_history."""
+        """Computes the posterior NLL from a rollout's theta/y_history/design_history."""
         return self.forward(rollout.theta, rollout.y_history, rollout.design_history)
 
 
-class AttentiveGuideNet(GaussianMixtureGuideNet):
+class AttentiveVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):
     """Preset: AttentiveEncoder (transformer + CLS pooling) + Gaussian-mixture readout."""
 
     def __init__(
@@ -328,7 +328,7 @@ class AttentiveGuideNet(GaussianMixtureGuideNet):
         )
 
 
-class DeepSetGuideNet(GaussianMixtureGuideNet):
+class DeepSetVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):
     """Preset: DeepSetEncoder (per-step MLP + sum pooling) + Gaussian-mixture readout."""
 
     def __init__(
