@@ -1,5 +1,6 @@
 """Core utilities for TestBED."""
 
+from .design_distributions import RandomScaleGaussianDesignDistribution
 from .design_spaces import (
     BoxDesignSpace,
     DefaultDesignSpace,
@@ -16,6 +17,7 @@ __all__ = [
     "DesignSpace",
     "FiniteDesignSpace",
     "PosteriorUpdateHook",
+    "RandomScaleGaussianDesignDistribution",
     "Rollout",
     "RolloutHook",
     "RolloutState",

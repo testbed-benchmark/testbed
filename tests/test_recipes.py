@@ -21,6 +21,8 @@ ENTRY_POINT_RECIPES = [
     "dad",
     "actionbed",
     "rlboed",
+    "var_post",
+    "joint_var_post",
     "experiments/location_finding_2src/actionbed",
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
@@ -99,6 +101,37 @@ def test_temporal_discounting_dad_preserves_objective_defaults():
     assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
     assert cfg.objective.reparameterize_policy is False
     assert cfg.objective.requires_policy_log_probs is False
+
+
+def test_var_post_recipe_wires_posterior_net():
+    cfg = _compose("var_post")
+    assert (
+        cfg.posterior_net._target_
+        == "testbed.design_nets.AttentiveVariationalPosteriorNet"
+    )
+    assert cfg.posterior_net.n_components == 10
+    assert cfg.joint is False
+    assert cfg.objective.name == "barber_agakov"
+
+
+def test_joint_var_post_recipe_sets_joint_true():
+    cfg = _compose("joint_var_post")
+    assert cfg.joint is True
+    assert cfg.posterior_net.n_components == 10
+
+
+def test_temporal_discounting_var_post_uses_reinforce_and_htd_task():
+    # Not in ENTRY_POINT_RECIPES: its task (HTD) isn't in test_recipe_composes's
+    # allowed task-target set, same reason experiments/temporal_discounting/dad
+    # gets its own standalone test above instead of joining that list.
+    cfg = _compose("experiments/temporal_discounting/var_post")
+    assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
+    assert cfg.objective.name == "barber_agakov_reinforce"
+    assert (
+        cfg.posterior_net._target_
+        == "testbed.design_nets.DeepSetVariationalPosteriorNet"
+    )
+    assert cfg.posterior_net.n_components == 10
 
 
 def test_two_source_actionbed_preserves_grad_clip_default():

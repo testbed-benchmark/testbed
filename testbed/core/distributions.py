@@ -37,10 +37,16 @@ class Distribution(ABC, nn.Module):
 
 
 def _wrapped_device(dist) -> torch.device:
-    """Returns the device a torch.distributions object's own tensors live on."""
+    """Returns the device a torch.distributions object's tensors live on.
+
+    Composite distributions (MixtureSameFamily, Independent) hold no tensors
+    directly, so nested distributions are searched too.
+    """
     for value in dist.__dict__.values():
         if isinstance(value, torch.Tensor):
             return value.device
+        if isinstance(value, torch.distributions.Distribution):
+            return _wrapped_device(value)
     return torch.device("cpu")
 
 

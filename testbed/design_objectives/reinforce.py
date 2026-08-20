@@ -1,14 +1,40 @@
 """REINFORCE gradient estimator."""
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 
 import torch
 from torch import Tensor
 
 from ..core.rollout import Rollout
 from ..tasks.base import Task
+from .barber_agakov import BarberAgakov
 from .base_objective import RolloutObjective
 from .spce import SPCE
+
+
+@contextmanager
+def _requires_grad(module: torch.nn.Module, flag: bool):
+    """Temporarily forces every parameter of ``module`` to ``requires_grad=flag``.
+
+    Autograd decides whether a leaf accumulates gradient based on its
+    `requires_grad` at the time the *forward* ops touching it are recorded,
+    not at backward time -- so restoring the original flags on exit doesn't
+    retroactively reconnect a graph built with them disabled. Used to make a
+    training-time flag (like `BarberAgakovReinforce.estimate_gain`'s
+    `train_posterior`) the actual source of truth for whether a module gets
+    gradient from one specific call, regardless of whatever `requires_grad`
+    state it happens to carry externally (e.g. if the caller forgot to
+    freeze it, or froze/unfroze it for an unrelated reason).
+    """
+    previous = [p.requires_grad for p in module.parameters()]
+    for p in module.parameters():
+        p.requires_grad_(flag)
+    try:
+        yield
+    finally:
+        for p, was in zip(module.parameters(), previous):
+            p.requires_grad_(was)
 
 
 def leave_one_out_baseline(reward: Tensor):
@@ -171,3 +197,52 @@ class SPCEReinforce(Reinforce):
     def calculate_value(self, rollout: Rollout) -> Tensor:
         """Computes the per-sample SPCE gain."""
         return self.spce.per_sample_gain(rollout)
+
+
+class BarberAgakovReinforce(Reinforce):
+    """REINFORCE over the Barber-Agakov lower bound on EIG."""
+
+    def __init__(
+        self,
+        task: Task,
+        posterior_net,
+        stochastic_design_policy: bool,
+        baseline: str | None = None,
+        use_current_prior: bool = False,
+    ):
+        """Initializes."""
+        super().__init__(task, stochastic_design_policy, baseline)
+        self.barber_agakov = BarberAgakov(
+            task,
+            posterior_net,
+            use_current_prior=use_current_prior,
+        )
+
+    def calculate_value(self, rollout: Rollout) -> Tensor:
+        """Computes the per-sample Barber-Agakov gain."""
+        return self.barber_agakov.per_sample_gain(rollout)
+
+    def posterior_gain(self, rollout: Rollout) -> Tensor:
+        """The posterior's own (undetached) Barber-Agakov gain, for training posterior_net.
+
+        Equivalent to ``self.barber_agakov.estimate_gain(rollout)``, exposed here
+        as a public method rather than making callers reach into
+        ``self.barber_agakov`` directly.
+        """
+        return self.barber_agakov.estimate_gain(rollout)
+
+    def estimate_gain(self, rollout: Rollout, train_posterior: bool = False) -> Tensor:
+        r"""Estimates the (policy-gradient-ready) Barber-Agakov gain.
+
+        train_posterior: whether this call should also train posterior_net (default
+        False). False guarantees zero posterior_net gradient regardless of its
+        own requires_grad state -- via `_requires_grad` below, which is safe
+        because autograd fixes whether a leaf gets gradient at forward time,
+        so restoring requires_grad right after can't reconnect it.
+        """
+        with _requires_grad(self.barber_agakov.posterior_net, train_posterior):
+            gain = super().estimate_gain(rollout)
+        if train_posterior and self.stochastic_design_policy:
+            posterior_gain = self.posterior_gain(rollout)
+            gain = gain + (posterior_gain - posterior_gain.detach())
+        return gain

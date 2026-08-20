@@ -17,3 +17,9 @@ from .stochastic import (
     GaussianPolicyNet,
     StochasticDesignNet,
 )
+from .variational_posterior import (
+    AttentiveVariationalPosteriorNet,
+    DeepSetVariationalPosteriorNet,
+    GaussianMixtureVariationalPosteriorNet,
+    VariationalPosteriorNet,
+)

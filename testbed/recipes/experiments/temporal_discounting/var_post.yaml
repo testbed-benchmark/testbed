@@ -1,0 +1,62 @@
+# @package _global_
+
+defaults:
+  - /var_post
+  - override /task: temporal_discounting
+  - override /net@design_net: null
+  - override /net@posterior_net: null
+  - _self_
+
+
+
+seed: 0
+T: 20
+joint: false
+# objective
+objective:
+  name: barber_agakov_reinforce
+  reparameterize_policy: false
+  baseline: null  # or leave_one_out for variance reduction
+  requires_policy_log_probs: false
+  use_current_prior: false
+  # deterministic policy -> pathwise Reinforce with BarberAgakov.per_sample_gain (DAD Eq. 16)
+
+# posterior pretraining
+n_posterior_pretrain_iter: 5_000
+n_posterior_outer: 1_024
+posterior_lr: 1e-4
+posterior_grad_clip: 1.0
+pretrain_design_distr: null
+
+# policy training
+n_train_iter: 100_000
+n_outer: 1_024
+
+# optimizer
+lr: 5e-5
+grad_clip: 1.0
+
+# eval
+eval_every: 0  # eval is expensive here; off for this recipe
+n_outer_eval: 1_024
+n_inner_eval: 100_000
+
+# design policy network: same DeepSets architecture as
+# experiments/temporal_discounting/dad.yaml (see that file for the caveats
+# relative to the original DAD paper's HTD net).
+design_net:
+  _target_: testbed.design_nets.DeepSetPolicyNet
+  encoder_dim_h: [256, 256]
+  dim_emb: 16
+  decoder_dim_h: [128, 16]
+  decoder_activation:
+    _target_: torch.nn.ReLU
+    _partial_: true
+
+# posterior network: DeepSets encoder + Gaussian-mixture readout over theta = (k, alpha)
+posterior_net:
+  _target_: testbed.design_nets.DeepSetVariationalPosteriorNet
+  n_components: 10
+  encoder_dim_h: [256, 256]
+  dim_emb: 16
+  trunk_dim_h: [128, 16]

@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - /var_post
+  - _self_
+
+# Joint variant: the posterior keeps training (rather than being frozen) during
+# policy training.
+joint: true
+n_posterior_pretrain_iter: 0
