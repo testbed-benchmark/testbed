@@ -342,10 +342,12 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.policy_init_std must be positive.")
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
-    if not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
+    if not isinstance(
+        design_space, (BoxDesignSpace, DefaultDesignSpace, FiniteDesignSpace)
+    ):
         raise TypeError(
-            "This RLBOED SAC implementation requires a BoxDesignSpace or "
-            "FiniteDesignSpace."
+            "This RLBOED SAC implementation requires a BoxDesignSpace, "
+            "DefaultDesignSpace, or FiniteDesignSpace."
         )
 
 
@@ -376,7 +378,7 @@ def make_networks(
     dim_y = event_shape_y.numel()
     dim_design = event_shape_design.numel()
 
-    if isinstance(design_space, BoxDesignSpace):
+    if isinstance(design_space, (BoxDesignSpace, DefaultDesignSpace)):
         actor_module = DeepSetGaussianActor(
             event_shape_y=event_shape_y,
             event_shape_design=event_shape_design,
@@ -385,15 +387,12 @@ def make_networks(
         actor = GaussianPolicyNet(
             design_space,
             actor=actor_module,
-            normalize_design_history=True,
-            design_history_bounds=(0.0, 1.0),
+            normalize_design_history=False,
             outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
         ).to(device)
         critic_kwargs = {
             "dim_y": dim_y,
             "dim_design": dim_design,
-            "design_low": design_space.low.to(device),
-            "design_high": design_space.high.to(device),
             "outcome_low": cfg.reward.outcome_low,
             "outcome_high": cfg.reward.outcome_high,
         }
@@ -917,16 +916,6 @@ class Trainer:
                 self.cfg, resolve=True, throw_on_missing=False
             ),
             "horizon": self.env.horizon,
-            "design_low": (
-                design_space.low.detach().cpu()
-                if isinstance(design_space, BoxDesignSpace)
-                else design_space.values.amin(dim=0).detach().cpu()
-            ),
-            "design_high": (
-                design_space.high.detach().cpu()
-                if isinstance(design_space, BoxDesignSpace)
-                else design_space.values.amax(dim=0).detach().cpu()
-            ),
             "outcome_low": torch.as_tensor(self.cfg.reward.outcome_low),
             "outcome_high": torch.as_tensor(self.cfg.reward.outcome_high),
             "designer": actor_state_dict,
@@ -965,19 +954,13 @@ class Trainer:
 
 
 def build_design_space(cfg, task):
-    """Returns the task's declared space or configures a continuous box.
+    """Returns the task's declared design space.
 
-    Every task now carries a design space, with ``DefaultDesignSpace`` standing
-    in for "declares no real space of its own", so that -- rather than ``None``
-    -- is what falls back to the configured box.
+    In particular, location finding keeps its ``DefaultDesignSpace`` so RLBOED
+    trains on the same unbounded design domain as DAD.
     """
-    if not isinstance(task.design_space, DefaultDesignSpace):
-        return task.design_space
-    return BoxDesignSpace(
-        cfg.design_space.low,
-        cfg.design_space.high,
-        event_shape=task.event_shape_design,
-    )
+    del cfg
+    return task.design_space
 
 
 def build_env(cfg, task, design_space, *, n_contrastive=None):

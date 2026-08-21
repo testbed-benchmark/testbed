@@ -8,10 +8,6 @@ defaults:
 seed: 373693
 torch_deterministic: true
 T: 30
-# design space
-design_space:
-  low: -4.0
-  high: 4.0
 # reward / outcome bounds
 reward:
   n_contrastive: 100_000

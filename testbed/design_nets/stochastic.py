@@ -7,7 +7,11 @@ import torch
 from torch import Tensor, nn
 from torch.distributions import Categorical, Normal
 
-from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
+from testbed.core.design_spaces import (
+    BoxDesignSpace,
+    DefaultDesignSpace,
+    FiniteDesignSpace,
+)
 from testbed.design_nets.base import DesignNet, DesignProposal
 from testbed.design_nets.encoder import DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.history import PreparedHistory, prepare_history
@@ -48,8 +52,8 @@ class StochasticDesignNet(DesignNet):
             event_shape_y=event_shape_y,
             event_shape_design=self.event_shape_design,
             mask=mask,
-            device=self.design_low.device,
-            dtype=self.design_low.dtype,
+            device=self.outcome_low.device,
+            dtype=self.outcome_low.dtype,
         )
 
         y_flat = prepared.y_flat
@@ -346,7 +350,7 @@ class DeepSetCategoricalActor(CategoricalPolicyActor):
 
 
 class GaussianPolicyNet(StochasticDesignNet):
-    """Gaussian policy for continuous box design spaces.
+    """Gaussian policy for continuous design spaces.
 
     The network proposes values in unconstrained Gaussian coordinates. The
     caller's design space owns the constraint transform and density correction.
@@ -356,7 +360,7 @@ class GaussianPolicyNet(StochasticDesignNet):
 
     def __init__(
         self,
-        design_space: BoxDesignSpace,
+        design_space: BoxDesignSpace | DefaultDesignSpace,
         actor: nn.Module | None = None,
         *,
         encoder: HistoryEncoder | None = None,
@@ -370,7 +374,7 @@ class GaussianPolicyNet(StochasticDesignNet):
 
         Args:
             design_space: Physical continuous design space whose shape defines
-                the proposal and whose bounds support history normalization.
+                the proposal. Box bounds support optional history normalization.
             actor: Optional module mapping flattened histories to Gaussian
                 mean and log standard deviation.
             encoder: Optional history encoder used to build a default Gaussian
@@ -391,8 +395,12 @@ class GaussianPolicyNet(StochasticDesignNet):
         self.event_shape_design = torch.Size(design_space.event_shape)
         self.dim_design = self.event_shape_design.numel()
         self.normalize_design_history = bool(normalize_design_history)
-        self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
-        if (
+        self.design_history_bounds = (
+            tuple(float(x) for x in design_history_bounds)
+            if self.normalize_design_history
+            else None
+        )
+        if self.normalize_design_history and (
             len(self.design_history_bounds) != 2
             or self.design_history_bounds[0] >= self.design_history_bounds[1]
         ):
@@ -418,19 +426,31 @@ class GaussianPolicyNet(StochasticDesignNet):
                 event_shape_design=self.event_shape_design,
             )
 
-        low = design_space.low.reshape(self.dim_design)
-        high = design_space.high.reshape(self.dim_design)
-        if torch.any(low >= high):
-            raise ValueError("GaussianPolicyNet requires finite-width design bounds.")
-        self.register_buffer("design_low", low.clone())
-        self.register_buffer("design_high", high.clone())
+        if isinstance(design_space, BoxDesignSpace):
+            low = design_space.low.reshape(self.dim_design)
+            high = design_space.high.reshape(self.dim_design)
+            if torch.any(low >= high):
+                raise ValueError(
+                    "GaussianPolicyNet requires finite-width design bounds."
+                )
+            self.register_buffer("design_low", low.clone())
+            self.register_buffer("design_high", high.clone())
+            dtype = low.dtype
+        else:
+            if self.normalize_design_history:
+                raise ValueError(
+                    "Design-history normalization requires a BoxDesignSpace."
+                )
+            self.register_buffer("design_low", None)
+            self.register_buffer("design_high", None)
+            dtype = torch.get_default_dtype()
 
         if outcome_bounds is None:
-            outcome_low = torch.tensor(float("nan"), dtype=low.dtype)
-            outcome_high = torch.tensor(float("nan"), dtype=low.dtype)
+            outcome_low = torch.tensor(float("nan"), dtype=dtype)
+            outcome_high = torch.tensor(float("nan"), dtype=dtype)
         else:
             outcome_low, outcome_high = (
-                torch.as_tensor(bound, dtype=low.dtype) for bound in outcome_bounds
+                torch.as_tensor(bound, dtype=dtype) for bound in outcome_bounds
             )
             if torch.any(outcome_low >= outcome_high):
                 raise ValueError("outcome_bounds must satisfy low < high.")
