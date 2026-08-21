@@ -159,7 +159,7 @@ class LinearRegression(Task):
         """Returns a compact representation."""
         return (
             f"LinearRegression("
-            f"dim_y={self.event_shape_design[0]}, "
+            f"dim_y={self.event_shape_y[0]}, "
             f"dim_theta={self.event_shape_theta[0]}, "
             f"dim_design={self.event_shape_design[0]}, "
             f"noise_scale={self.noise_scale})"
