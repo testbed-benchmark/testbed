@@ -12,7 +12,6 @@ seed: 0
 loss:
   _target_: testbed.design_objectives.SortedMSELoss  # testbed.design_objectives.MSELoss also works
   reduction: mean
-  sort_input: false
 # training
 n_train_iter: 5_000
 n_action_warmup_iter: 0
