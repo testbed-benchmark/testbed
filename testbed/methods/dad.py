@@ -57,6 +57,7 @@ class Trainer:
         torch.save(
             {
                 "design_net": self.designer.design_net.state_dict(),
+                "use_raw_history": self.designer.use_raw_history,
                 "step": step,
             },
             save_path,
@@ -119,6 +120,7 @@ class Trainer:
             torch.save(
                 {
                     "design_net": self.designer.design_net.state_dict(),
+                    "use_raw_history": self.designer.use_raw_history,
                     "step": step,
                     "metric": metric_val,
                 },

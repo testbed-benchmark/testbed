@@ -136,13 +136,14 @@ def evaluate_checkpoint(
     design_net.load_state_dict(state[key])
     design_net.eval()
 
-    # use_raw_history mirrors the default the training run was built with, so
-    # evaluation conditions the net on the same history coordinates.
+    use_raw_history = state.get(
+        "use_raw_history", not design_net.produces_policy_log_probs
+    )
     designer = PolicyDesigner(
         task,
         cfg.T,
         design_net,
-        use_raw_history=not design_net.produces_policy_log_probs,
+        use_raw_history=use_raw_history,
     )
 
     lower_gains, upper_gains = [], []

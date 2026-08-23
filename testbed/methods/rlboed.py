@@ -970,7 +970,11 @@ def build_replay_buffer(cfg, task):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="rlboed")
+@hydra.main(
+    version_base="1.3",
+    config_path="../recipes",
+    config_name="experiments/location_finding/rlboed",
+)
 def main(cfg):
     """Entry point for RL-BOED (SAC) training.
 
