@@ -12,7 +12,7 @@ T: 30
 design_space:
   low: -4.0
   high: 4.0
-# complete deployable policy (also reconstructed by the standalone evaluator)
+# complete deployable policy
 design_net:
   _target_: testbed.design_nets.make_rlboed_policy
   task: ${task}
