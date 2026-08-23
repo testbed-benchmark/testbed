@@ -177,7 +177,8 @@ def test_tanh_gaussian_policy_normalizes_physical_histories_for_actor():
 
 def test_tanh_gaussian_proposal_has_raw_density_and_deterministic_value():
     torch.manual_seed(0)
-    policy = make_policy()
+    space = make_space()
+    policy = GaussianPolicyNet(space, event_shape_y=(1,))
     set_actor_output(policy, mean=[0.25, -0.5], log_std=[-0.7, -0.1])
     y_history = torch.empty(4, 0, 1)
     design_history = torch.empty(4, 0, 2)
@@ -200,14 +201,14 @@ def test_tanh_gaussian_proposal_has_raw_density_and_deterministic_value():
         torch.tensor([0.25, -0.5]).expand(4, -1),
     )
 
-    expected_design, expected_log_prob = policy.design_space.to_design(
+    expected_design, expected_log_prob = space.to_design(
         proposal.raw_design, proposal.log_prob
     )
 
-    assert policy.design_space.contains(expected_design)
+    assert space.contains(expected_design)
     torch.testing.assert_close(
         expected_log_prob,
-        proposal.log_prob - policy.design_space._log_det_jacobian(proposal.raw_design),
+        proposal.log_prob - space._log_det_jacobian(proposal.raw_design),
     )
 
 
@@ -258,14 +259,13 @@ def test_tanh_gaussian_policy_supports_scalar_and_multidim_batch_shapes():
 
 
 def test_tanh_gaussian_policy_allows_gradient_flow():
-    policy = make_policy()
+    space = make_space()
+    policy = GaussianPolicyNet(space, event_shape_y=(1,))
     y_history = torch.randn(6, 2, 1)
     design_history = torch.randn(6, 2, 2)
 
     proposal = policy.propose(y_history, design_history, reparameterize_policy=True)
-    design, log_prob = policy.design_space.to_design(
-        proposal.raw_design, proposal.log_prob
-    )
+    design, log_prob = space.to_design(proposal.raw_design, proposal.log_prob)
     loss = design.sum() + log_prob.sum()
     loss.backward()
 
