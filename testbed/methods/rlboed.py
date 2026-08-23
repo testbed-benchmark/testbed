@@ -996,7 +996,6 @@ def main(cfg):
         task,
         cfg.T,
         nets.actor,
-        design_space=design_space,
     )
 
     trainer = Trainer(

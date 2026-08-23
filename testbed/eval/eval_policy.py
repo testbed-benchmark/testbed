@@ -142,7 +142,6 @@ def evaluate_checkpoint(
         task,
         cfg.T,
         design_net,
-        design_space=task.design_space,
         use_raw_history=not design_net.produces_policy_log_probs,
     )
 

@@ -460,7 +460,7 @@ def _build_trainer(cfg, *, manager=None):
     validate_config(task, cfg, design_space)
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = PolicyDesigner(task, cfg.T, nets.actor, design_space=design_space)
+    designer = PolicyDesigner(task, cfg.T, nets.actor)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
 
 
