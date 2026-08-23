@@ -9,7 +9,7 @@ from torch.distributions import Categorical, Normal
 
 from testbed.core.design_spaces import (
     BoxDesignSpace,
-    DefaultDesignSpace,
+    DesignSpace,
     FiniteDesignSpace,
 )
 from testbed.design_nets.base import DesignNet, DesignProposal
@@ -391,7 +391,6 @@ class GaussianPolicyNet(StochasticDesignNet):
         """
         super().__init__()
 
-        self.design_space = design_space
         self.event_shape_design = torch.Size(design_space.event_shape)
         self.dim_design = self.event_shape_design.numel()
         self.normalize_design_history = bool(normalize_design_history)
@@ -551,9 +550,9 @@ class CategoricalPolicyNet(StochasticDesignNet):
     """Categorical policy that maps design indices to physical designs.
 
     Attributes:
-        design_space: Finite set of physical designs.
         event_shape_design: Shape of one physical design.
         dim_design: Flattened design dimension.
+        n_designs: Number of categorical designs.
         normalize_design_history: Whether design histories are normalized.
         design_history_bounds: Target bounds for normalized design histories.
         actor: Module that produces one logit per categorical design.
@@ -597,9 +596,9 @@ class CategoricalPolicyNet(StochasticDesignNet):
             ValueError: If history or outcome bounds are invalid.
         """
         super().__init__()
-        self.design_space = design_space
         self.event_shape_design = torch.Size(design_space.event_shape)
         self.dim_design = self.event_shape_design.numel()
+        self.n_designs = design_space.n_designs
         self.normalize_design_history = bool(normalize_design_history)
         self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
         if self.design_history_bounds[0] >= self.design_history_bounds[1]:
@@ -611,7 +610,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
         elif encoder is not None:
             self.actor = CategoricalPolicyActor(
                 encoder,
-                head or CategoricalHead(encoder.dim_emb, design_space.n_designs),
+                head or CategoricalHead(encoder.dim_emb, self.n_designs),
             )
         elif head is not None:
             raise ValueError("head requires an encoder.")
@@ -623,11 +622,11 @@ class CategoricalPolicyNet(StochasticDesignNet):
             self.actor = DeepSetCategoricalActor(
                 event_shape_y=event_shape_y,
                 event_shape_design=self.event_shape_design,
-                n_designs=design_space.n_designs,
+                n_designs=self.n_designs,
             )
 
         self.register_buffer("design_values", design_space.values.clone())
-        values = self.design_values.reshape(design_space.n_designs, self.dim_design)
+        values = self.design_values.reshape(self.n_designs, self.dim_design)
         if not torch.is_floating_point(values):
             values = values.to(torch.get_default_dtype())
         self.register_buffer("design_low", values.amin(dim=0))
@@ -719,7 +718,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
     ) -> Tensor:
         """Returns validated categorical logits in flattened actor coordinates."""
         logits = self.actor(y_flat, design_flat, mask=mask_flat)
-        expected_shape = (design_flat.shape[0], self.design_space.n_designs)
+        expected_shape = (design_flat.shape[0], self.n_designs)
         if logits.shape != expected_shape:
             raise ValueError(
                 "actor logits must have shape "
@@ -772,11 +771,9 @@ class CategoricalPolicyNet(StochasticDesignNet):
         return log_probs.exp(), log_probs
 
 
-def make_rlboed_policy(
+def make_deepset_stochastic_policy(
     *,
-    task,
-    box_low,
-    box_high,
+    design_space: DesignSpace,
     dim_h,
     dim_emb: int,
     log_std_min: float,
@@ -787,49 +784,10 @@ def make_rlboed_policy(
     outcome_bounds,
     event_shape_y,
     event_shape_design,
-    event_shape_out=None,
 ) -> StochasticDesignNet:
-    """Builds the complete RLBOED policy described by a run configuration.
-
-    A task-declared finite or box space takes precedence. Tasks carrying the
-    unconstrained default space use the configured RLBOED box instead. Runtime
-    event shapes are accepted for compatibility with the common policy loading
-    path and checked against the task used to resolve the design space.
-    """
-    task_event_shape_y = torch.Size(task.event_shape_y)
-    task_event_shape_design = torch.Size(task.event_shape_design)
-    runtime_event_shape_y = torch.Size(event_shape_y)
-    runtime_event_shape_design = torch.Size(event_shape_design)
-    if runtime_event_shape_y != task_event_shape_y:
-        raise ValueError(
-            "event_shape_y must match the configured task; "
-            f"expected {tuple(task_event_shape_y)}, got "
-            f"{tuple(runtime_event_shape_y)}."
-        )
-    if runtime_event_shape_design != task_event_shape_design:
-        raise ValueError(
-            "event_shape_design must match the configured task; "
-            f"expected {tuple(task_event_shape_design)}, got "
-            f"{tuple(runtime_event_shape_design)}."
-        )
-    if (
-        event_shape_out is not None
-        and torch.Size(event_shape_out) != task_event_shape_design
-    ):
-        raise ValueError(
-            "event_shape_out must match the configured task's design shape; "
-            f"expected {tuple(task_event_shape_design)}, got "
-            f"{tuple(torch.Size(event_shape_out))}."
-        )
-
-    if isinstance(task.design_space, DefaultDesignSpace):
-        design_space = BoxDesignSpace(
-            box_low,
-            box_high,
-            event_shape=task_event_shape_design,
-        )
-    else:
-        design_space = task.design_space
+    """Builds a DeepSets stochastic policy for a bounded design space."""
+    event_shape_y = torch.Size(event_shape_y)
+    event_shape_design = torch.Size(event_shape_design)
 
     common_kwargs = {
         "normalize_design_history": normalize_design_history,
@@ -838,8 +796,8 @@ def make_rlboed_policy(
     }
     if isinstance(design_space, BoxDesignSpace):
         actor = DeepSetGaussianActor(
-            event_shape_y=task_event_shape_y,
-            event_shape_design=task_event_shape_design,
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
             dim_h=dim_h,
             dim_emb=dim_emb,
             log_std_min=log_std_min,
@@ -849,14 +807,13 @@ def make_rlboed_policy(
         return GaussianPolicyNet(design_space, actor=actor, **common_kwargs)
     if isinstance(design_space, FiniteDesignSpace):
         actor = DeepSetCategoricalActor(
-            event_shape_y=task_event_shape_y,
-            event_shape_design=task_event_shape_design,
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
             n_designs=design_space.n_designs,
             dim_h=dim_h,
             dim_emb=dim_emb,
         )
         return CategoricalPolicyNet(design_space, actor=actor, **common_kwargs)
     raise TypeError(
-        "RLBOED requires the configured task to resolve to a BoxDesignSpace "
-        "or FiniteDesignSpace."
+        "DeepSets stochastic policies require a BoxDesignSpace or FiniteDesignSpace."
     )

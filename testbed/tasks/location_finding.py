@@ -3,6 +3,7 @@
 import torch
 from torch import Tensor
 
+from ..core.design_spaces import DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
 from .base import Task
@@ -125,6 +126,9 @@ class LocationFinding(Task):
             Exponent in the rate of decay of signal strength (:math:`s`) (default: 2.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default LocationFindingPrior is used.
+        design_space (DesignSpace, optional):
+            Design space for source-location queries. If None, the task retains
+            its unbounded default design space.
     """
 
     def __init__(
@@ -138,6 +142,7 @@ class LocationFinding(Task):
         noise_scale: float = 0.5,
         exponent: float = 2.0,
         prior=None,
+        design_space: DesignSpace | None = None,
     ) -> None:
         """Initializes the location-finding task."""
         # Default prior
@@ -149,6 +154,7 @@ class LocationFinding(Task):
             event_shape_theta=[n_sources, dim_theta],
             event_shape_design=[dim_theta],
             prior=prior,
+            design_space=design_space,
         )
 
         self.base_signal = base_signal

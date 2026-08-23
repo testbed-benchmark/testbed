@@ -12,7 +12,6 @@ import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
-from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import optim
 
@@ -21,7 +20,7 @@ from testbed.core.design_spaces import (
     DesignSpace,
     FiniteDesignSpace,
 )
-from testbed.core.setup import setup
+from testbed.core.setup import instantiate_design_net, setup
 from testbed.design_nets import (
     CategoricalPolicyNet,
     RLBOEDDiscreteQNetwork,
@@ -339,8 +338,8 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
     if not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
         raise TypeError(
-            "This RLBOED SAC implementation requires a BoxDesignSpace or "
-            "FiniteDesignSpace."
+            "RLBOED requires a bounded task configuration with a "
+            "BoxDesignSpace or FiniteDesignSpace."
         )
 
 
@@ -369,15 +368,15 @@ def make_networks(
     event_shape_design = task.event_shape_design
     dim_y = event_shape_y.numel()
     dim_design = event_shape_design.numel()
-    actor = instantiate(
-        cfg.design_net,
-        event_shape_y=event_shape_y,
-        event_shape_design=event_shape_design,
-        event_shape_out=event_shape_design,
-    ).to(device)
+    design_space = task.design_space
+    if not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
+        raise TypeError(
+            "RLBOED requires a bounded task configuration with a "
+            "BoxDesignSpace or FiniteDesignSpace."
+        )
+    actor = instantiate_design_net(cfg.design_net, task).to(device)
     if not isinstance(actor, StochasticDesignNet):
         raise TypeError("cfg.design_net must construct a StochasticDesignNet.")
-    design_space = actor.design_space
 
     if isinstance(design_space, BoxDesignSpace):
         critic_kwargs = {
@@ -574,9 +573,7 @@ def sac_update(
         )
 
     if is_categorical:
-        design_indices = (
-            nets.actor.design_space.encode(data_designs).long().unsqueeze(-1)
-        )
+        design_indices = nets.design_space.encode(data_designs).long().unsqueeze(-1)
         qf1_a_values = nets.qf1(data_obs).gather(1, design_indices).squeeze(-1)
         qf2_a_values = nets.qf2(data_obs).gather(1, design_indices).squeeze(-1)
     else:
@@ -666,7 +663,7 @@ class Trainer:
         self.device = task.device
         if cfg.sac.target_entropy is None:
             self.target_entropy = (
-                0.98 * log(self.nets.actor.design_space.n_designs)
+                0.98 * log(self.nets.design_space.n_designs)
                 if isinstance(self.nets.actor, CategoricalPolicyNet)
                 else -float(task.event_shape_design.numel())
             )
