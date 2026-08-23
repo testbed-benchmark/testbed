@@ -7,16 +7,9 @@ defaults:
 # system (device/save_dir come from the system group)
 seed: 373693
 torch_deterministic: true
-T: 30
-# design space
-design_space:
-  low: -4.0
-  high: 4.0
-# reward / outcome bounds
+# reward
 reward:
   n_contrastive: 100_000
-  outcome_low: -3.0
-  outcome_high: 10.0
 # eval
 eval_every: 0  # no periodic eval during SAC training
 eval_n_contrastive: 1_000_000

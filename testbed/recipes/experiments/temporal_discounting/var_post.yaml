@@ -6,11 +6,7 @@ defaults:
   - override /net@design_net: null
   - override /net@posterior_net: null
   - _self_
-
-
-
 seed: 0
-T: 20
 joint: false
 # objective
 objective:
@@ -60,3 +56,12 @@ posterior_net:
   encoder_dim_h: [256, 256]
   dim_emb: 16
   trunk_dim_h: [128, 16]
+  trunk_activation:
+    _target_: torch.nn.GELU
+    _partial_: true
+  log_scale_min: -7.0
+  log_scale_max: 3.0
+  init_scale: 1.0
+  theta_loc: null
+  theta_scale: null
+  canonicalize_theta: false

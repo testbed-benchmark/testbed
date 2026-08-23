@@ -7,10 +7,6 @@ defaults:
 
 # Discrete SAC settings for the prey-population experiment.
 seed: 0
-T: 10
-reward:
-  outcome_low: 0.0
-  outcome_high: 300.0
 sac:
   num_training_iterations: 1_000
   num_envs: 100

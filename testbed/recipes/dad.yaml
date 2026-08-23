@@ -7,7 +7,6 @@ defaults:
   - _self_
 # system (device/save_dir come from the system group)
 seed: 0
-T: 10
 # objective
 objective:
   name: spce

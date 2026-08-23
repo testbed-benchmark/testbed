@@ -35,9 +35,6 @@ defaults:
 #    encoders don't.
 
 seed: 0
-T: 30 # config/bed_model/location_finding.yaml: T
-
-
 joint: true
 n_posterior_pretrain_iter: 0
 n_train_iter: 200_000 
@@ -73,6 +70,10 @@ design_net:
   _target_: testbed.design_nets.DeepSetPolicyNet
   encoder_dim_h: [256]
   dim_emb: 16
+  decoder_dim_h: 16
+  decoder_activation:
+    _target_: torch.nn.GELU
+    _partial_: true
 
 posterior_net:
   _target_: testbed.design_nets.AttentiveVariationalPosteriorNet
@@ -81,4 +82,13 @@ posterior_net:
   dim_emb: 256
   num_heads: 4
   num_blocks: 3
+  trunk_dim_h: 256
+  trunk_activation:
+    _target_: torch.nn.GELU
+    _partial_: true
+  log_scale_min: -7.0
+  log_scale_max: 3.0
+  init_scale: 1.0
+  theta_loc: null
+  theta_scale: null
   canonicalize_theta: true # exchangeable sources; matches ScoreBED

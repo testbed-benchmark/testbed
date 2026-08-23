@@ -8,14 +8,9 @@ defaults:
   - _self_
 # system (device/save_dir come from the system group)
 seed: 0
-T: 10
 # frozen variant: pretrain the posterior, then freeze it while training the policy
 joint: false
-# objective: plain (non-REINFORCE) Barber-Agakov bound, since the default
-# task/net pairing (location_finding + attentive_policy) is fully
-# reparameterized end to end -- switch to barber_agakov_reinforce for tasks with a
-# non-reparameterized outcome model or a score-function design policy (see
-# experiments/temporal_discounting/var_post.yaml).
+# objective
 objective:
   name: barber_agakov
   reparameterize_policy: false
@@ -30,14 +25,7 @@ posterior_grad_clip: 1.0
 posterior_betas: null  # null -> torch Adam default (0.9, 0.999)
 posterior_warmup_frac: null  # null/0 -> constant posterior_lr; else linear-warmup-then-cosine-decay
 posterior_lr_floor: 1e-6  # only used when posterior_warmup_frac is set
-# ScoreBED "random scale Gaussian" design sampler for the
-# location-finding posterior pretraining: each trajectory draws its own scale
-# s ~ U(scale_low, scale_high), then all T steps of that trajectory are drawn
-# i.i.d. N(0, s^2). 
-pretrain_design_distr:
-  _target_: testbed.core.RandomScaleGaussianDesignDistribution
-  scale_low: 0.5
-  scale_high: 2.0
+pretrain_design_distr: null
 # policy training
 n_train_iter: 25_000
 n_outer: 2_048

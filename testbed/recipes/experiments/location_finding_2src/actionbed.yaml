@@ -10,7 +10,6 @@ defaults:
 # See: ActionBED (Rossa et al., 2026), Table 13.
 
 seed: 42
-T: 30
 # loss
 loss:
   _target_: testbed.design_objectives.PermutationInvariantMSELoss
