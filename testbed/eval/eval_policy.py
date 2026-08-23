@@ -146,10 +146,12 @@ def evaluate_checkpoint(
 
     # use_raw_history mirrors the default the training run was built with, so
     # evaluation conditions the net on the same history coordinates.
+    design_space = getattr(design_net, "design_space", None)
     designer = PolicyDesigner(
         task,
         cfg.T,
         design_net,
+        design_space=(task.design_space if design_space is None else design_space),
         use_raw_history=not design_net.produces_policy_log_probs,
     )
 

@@ -12,6 +12,22 @@ T: 30
 design_space:
   low: -4.0
   high: 4.0
+# complete deployable policy (also reconstructed by the standalone evaluator)
+design_net:
+  _target_: testbed.design_nets.make_rlboed_policy
+  task: ${task}
+  box_low: ${design_space.low}
+  box_high: ${design_space.high}
+  dim_h: [128, 128]
+  dim_emb: 64
+  log_std_min: -20.0
+  log_std_max: 0.0
+  init_std: 0.5773502691896258  # 3 ** -0.5
+  normalize_design_history: true
+  design_history_bounds: [0.0, 1.0]
+  outcome_bounds:
+    - ${reward.outcome_low}
+    - ${reward.outcome_high}
 # reward / outcome bounds
 reward:
   n_contrastive: 100_000
@@ -33,7 +49,6 @@ sac:
   gradient_steps_per_iteration: 64
   policy_lr: 0.0001
   q_lr: 0.0003
-  policy_init_std: 0.5773502691896258  # 3 ** -0.5
   policy_frequency: 1
   target_network_frequency: 1
   alpha: null

@@ -12,21 +12,18 @@ import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import optim
 
 from testbed.core.design_spaces import (
     BoxDesignSpace,
-    DefaultDesignSpace,
     DesignSpace,
     FiniteDesignSpace,
 )
 from testbed.core.setup import setup
 from testbed.design_nets import (
     CategoricalPolicyNet,
-    DeepSetCategoricalActor,
-    DeepSetGaussianActor,
-    GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
     StochasticDesignNet,
@@ -338,8 +335,6 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.learning_starts must be non-negative.")
     if sac.entropy_anneal_rate < 0:
         raise ValueError("sac.entropy_anneal_rate must be non-negative.")
-    if sac.policy_init_std <= 0:
-        raise ValueError("sac.policy_init_std must be positive.")
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
     if not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
@@ -365,7 +360,6 @@ class _SACNetworks:
 
 def make_networks(
     task: Task,
-    design_space: DesignSpace,
     cfg,
     device: torch.device,
 ) -> _SACNetworks:
@@ -375,20 +369,17 @@ def make_networks(
     event_shape_design = task.event_shape_design
     dim_y = event_shape_y.numel()
     dim_design = event_shape_design.numel()
+    actor = instantiate(
+        cfg.design_net,
+        event_shape_y=event_shape_y,
+        event_shape_design=event_shape_design,
+        event_shape_out=event_shape_design,
+    ).to(device)
+    if not isinstance(actor, StochasticDesignNet):
+        raise TypeError("cfg.design_net must construct a StochasticDesignNet.")
+    design_space = actor.design_space
 
     if isinstance(design_space, BoxDesignSpace):
-        actor_module = DeepSetGaussianActor(
-            event_shape_y=event_shape_y,
-            event_shape_design=event_shape_design,
-            init_std=sac.policy_init_std,
-        )
-        actor = GaussianPolicyNet(
-            design_space,
-            actor=actor_module,
-            normalize_design_history=True,
-            design_history_bounds=(0.0, 1.0),
-            outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
-        ).to(device)
         critic_kwargs = {
             "dim_y": dim_y,
             "dim_design": dim_design,
@@ -401,18 +392,6 @@ def make_networks(
         qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
     else:
         values = design_space.values.reshape(design_space.n_designs, dim_design)
-        actor_module = DeepSetCategoricalActor(
-            event_shape_y=event_shape_y,
-            event_shape_design=event_shape_design,
-            n_designs=design_space.n_designs,
-        )
-        actor = CategoricalPolicyNet(
-            design_space,
-            actor=actor_module,
-            normalize_design_history=True,
-            design_history_bounds=(0.0, 1.0),
-            outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
-        ).to(device)
         critic_kwargs = {
             "dim_y": dim_y,
             "dim_design": dim_design,
@@ -908,10 +887,6 @@ class Trainer:
     def build_checkpoint(self, step=None, metric=None):
         """Builds the checkpoint dict holding weights and training state."""
         design_space = self.env.design_space
-        # The trained actor is the deployable designer, so its weights are stored
-        # under both keys: "designer" for inference-only loading and "actor" for
-        # resuming SAC training alongside the critic/optimizers.
-        actor_state_dict = self.nets.actor.state_dict()
         checkpoint = {
             "config": OmegaConf.to_container(
                 self.cfg, resolve=True, throw_on_missing=False
@@ -929,8 +904,7 @@ class Trainer:
             ),
             "outcome_low": torch.as_tensor(self.cfg.reward.outcome_low),
             "outcome_high": torch.as_tensor(self.cfg.reward.outcome_high),
-            "designer": actor_state_dict,
-            "actor": actor_state_dict,
+            "design_net": self.nets.actor.state_dict(),
             "qf1": self.nets.qf1.state_dict(),
             "qf2": self.nets.qf2.state_dict(),
             "qf1_target": self.nets.qf1_target.state_dict(),
@@ -960,24 +934,8 @@ class Trainer:
 
 
 # ============================================================================
-# Helper + factory functions
+# Helper functions
 # ============================================================================
-
-
-def build_design_space(cfg, task):
-    """Returns the task's declared space or configures a continuous box.
-
-    Every task now carries a design space, with ``DefaultDesignSpace`` standing
-    in for "declares no real space of its own", so that -- rather than ``None``
-    -- is what falls back to the configured box.
-    """
-    if not isinstance(task.design_space, DefaultDesignSpace):
-        return task.design_space
-    return BoxDesignSpace(
-        cfg.design_space.low,
-        cfg.design_space.high,
-        event_shape=task.event_shape_design,
-    )
 
 
 def build_env(cfg, task, design_space, *, n_contrastive=None):
@@ -1028,13 +986,12 @@ def main(cfg):
     """
     manager, task = setup(cfg)
 
-    design_space = build_design_space(cfg, task)
-    validate_config(task, cfg, design_space)
-
     # Seed immediately before network construction (mirrors the original
     # fit_rlboed ordering) so weight initialization is reproducible.
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
+    validate_config(task, cfg, design_space)
 
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)

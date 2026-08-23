@@ -16,6 +16,7 @@ from .stochastic import (
     GaussianPolicyActor,
     GaussianPolicyNet,
     StochasticDesignNet,
+    make_rlboed_policy,
 )
 from .variational_posterior import (
     AttentiveVariationalPosteriorNet,

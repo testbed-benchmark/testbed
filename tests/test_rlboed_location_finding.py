@@ -5,6 +5,7 @@ from math import log
 
 import pytest
 import torch
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import nn
 
@@ -21,12 +22,17 @@ from testbed.design_nets import (
 )
 from testbed.designers import PolicyDesigner
 from testbed.envs.history import History
+from testbed.eval.eval_policy import (
+    build_design_net as reconstruct_design_net,
+)
+from testbed.eval.eval_policy import (
+    evaluate_checkpoint,
+)
 from testbed.methods.rlboed import (
     Trainer,
     _CompactEpisodeReplayBuffer,
     _resolve_buffer_device,
     _set_seed,
-    build_design_space,
     build_env,
     build_replay_buffer,
     make_networks,
@@ -393,8 +399,30 @@ def _tiny_cfg(**sac_overrides):
             "torch_deterministic": True,
             "device": "cpu",
             "T": 2,
+            "task": {
+                "_target_": "testbed.tasks.LocationFinding",
+                "n_sources": 1,
+                "dim_theta": 2,
+            },
             "design_space": {"low": -2.0, "high": 3.0},
             "reward": {"n_contrastive": 2, "outcome_low": -3.0, "outcome_high": 10.0},
+            "design_net": {
+                "_target_": "testbed.design_nets.make_rlboed_policy",
+                "task": "${task}",
+                "box_low": "${design_space.low}",
+                "box_high": "${design_space.high}",
+                "dim_h": [128, 128],
+                "dim_emb": 64,
+                "log_std_min": -20.0,
+                "log_std_max": 0.0,
+                "init_std": 3**-0.5,
+                "normalize_design_history": True,
+                "design_history_bounds": [0.0, 1.0],
+                "outcome_bounds": [
+                    "${reward.outcome_low}",
+                    "${reward.outcome_high}",
+                ],
+            },
             "eval_every": 0,
             "eval_n_contrastive": 4,
             "sac": {
@@ -409,7 +437,6 @@ def _tiny_cfg(**sac_overrides):
                 "gradient_steps_per_iteration": 1,
                 "policy_lr": 1e-4,
                 "q_lr": 3e-4,
-                "policy_init_std": 3**-0.5,
                 "policy_frequency": 1,
                 "target_network_frequency": 1,
                 "alpha": None,
@@ -427,10 +454,10 @@ def _tiny_cfg(**sac_overrides):
 
 def _build_trainer(cfg, *, manager=None):
     task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
-    design_space = build_design_space(cfg, task)
-    validate_config(task, cfg, design_space)
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
+    validate_config(task, cfg, design_space)
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
     designer = PolicyDesigner(task, cfg.T, nets.actor, design_space=design_space)
@@ -445,9 +472,9 @@ def _episodic_returns(trainer):
 def test_trainer_requires_policy_designer():
     cfg = _tiny_cfg()
     task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
-    design_space = build_design_space(cfg, task)
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
     env = build_env(cfg, task, design_space)
     replay_buffer = build_replay_buffer(cfg, task)
 
@@ -474,9 +501,13 @@ def test_validate_config_accepts_categorical_design_space():
 def test_rlboed_uses_a_tasks_categorical_design_space():
     cfg = _tiny_cfg()
     task = PreyPopulation()
-    design_space = build_design_space(cfg, task)
+    cfg.task = {
+        "_target_": "testbed.tasks.PreyPopulation",
+    }
+    design_space = make_networks(task, cfg, task.device).design_space
 
-    assert design_space is task.design_space
+    assert isinstance(design_space, FiniteDesignSpace)
+    torch.testing.assert_close(design_space.values, task.design_space.values)
     validate_config(task, cfg, design_space)
 
 
@@ -485,7 +516,7 @@ def test_validate_config_rejects_inverted_outcome_bounds():
     cfg.reward.outcome_low = 10.0
     cfg.reward.outcome_high = -3.0
     task = LocationFinding(n_sources=1, dim_theta=2)
-    design_space = build_design_space(cfg, task)
+    design_space = BoxDesignSpace(-2.0, 3.0, task.event_shape_design)
 
     with pytest.raises(ValueError, match="outcome_low"):
         validate_config(task, cfg, design_space)
@@ -507,10 +538,11 @@ def test_categorical_train_step_updates_networks_with_finite_losses():
     cfg.reward.outcome_low = 0.0
     cfg.reward.outcome_high = 300.0
     task = PreyPopulation().to(cfg.device)
-    design_space = build_design_space(cfg, task)
-    validate_config(task, cfg, design_space)
+    cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
+    validate_config(task, cfg, design_space)
     trainer = Trainer(
         task,
         PolicyDesigner(task, cfg.T, nets.actor),
@@ -542,8 +574,9 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
     cfg.reward.outcome_low = 0.0
     cfg.reward.outcome_high = 300.0
     task = PreyPopulation().to(cfg.device)
-    design_space = build_design_space(cfg, task)
-    nets = make_networks(task, design_space, cfg, task.device)
+    cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
     with torch.no_grad():
         for parameter in nets.actor.parameters():
             parameter.zero_()
@@ -584,8 +617,14 @@ def test_train_writes_checkpoints_and_metrics(tmp_path):
     run_dir = tmp_path / "run"
     final = torch.load(run_dir / "final_step.pt", weights_only=True)
     assert final["step"] == cfg.sac.num_training_iterations - 1
-    assert "designer" in final
+    assert "design_net" in final
+    assert "designer" not in final
+    assert "actor" not in final
     assert (run_dir / "best.pt").exists()
+    best = torch.load(run_dir / "best.pt", weights_only=True)
+    assert "design_net" in best
+    assert "designer" not in best
+    assert "actor" not in best
 
     records = [
         json.loads(line)
@@ -628,7 +667,9 @@ def test_trainer_produces_deployable_designer(tmp_path):
     checkpoint_path = tmp_path / "rlboed.pt"
     torch.save(trainer.build_checkpoint(), checkpoint_path)
     reloaded = torch.load(checkpoint_path, weights_only=True)
-    assert "designer" in reloaded
+    assert "design_net" in reloaded
+    assert "designer" not in reloaded
+    assert "actor" not in reloaded
     assert "actor_optimizer" in reloaded
 
 
@@ -643,3 +684,106 @@ def test_rlboed_fixed_alpha_disables_temperature_optimizer(alpha):
     checkpoint = trainer.build_checkpoint()
     assert checkpoint["alpha"].item() == pytest.approx(alpha)
     assert checkpoint["alpha_optimizer"] is None
+
+
+@pytest.mark.parametrize(
+    ("task_config", "outcome_bounds"),
+    [
+        (
+            {
+                "_target_": "testbed.tasks.LocationFinding",
+                "n_sources": 1,
+                "dim_theta": 2,
+            },
+            (-3.0, 10.0),
+        ),
+        ({"_target_": "testbed.tasks.PreyPopulation"}, (0.0, 300.0)),
+    ],
+)
+def test_config_reconstructs_rlboed_policy_for_all_history_forms(
+    task_config, outcome_bounds
+):
+    cfg = _tiny_cfg()
+    cfg.task = task_config
+    cfg.reward.outcome_low, cfg.reward.outcome_high = outcome_bounds
+    task = instantiate(cfg.task)
+    trained = make_networks(task, cfg, task.device).actor
+    reconstructed = reconstruct_design_net(cfg, task)
+
+    reconstructed.load_state_dict(trained.state_dict())
+    design_space = reconstructed.design_space
+    batch_size = 2
+    histories = [
+        (
+            torch.zeros(batch_size, 0, *task.event_shape_y),
+            torch.zeros(batch_size, 0, *task.event_shape_design),
+            None,
+        ),
+        (
+            torch.zeros(batch_size, 2, *task.event_shape_y),
+            design_space.sample((batch_size, 2)),
+            None,
+        ),
+        (
+            torch.zeros(batch_size, 3, *task.event_shape_y),
+            design_space.sample((batch_size, 3)),
+            torch.tensor([[True, True, False], [True, False, False]]),
+        ),
+    ]
+
+    for outcomes, designs, mask in histories:
+        proposal = reconstructed.propose(outcomes, designs, mask=mask)
+        emitted = (
+            proposal.raw_design
+            if reconstructed.raw_designs_are_physical
+            else design_space.to_design(proposal.raw_design)
+        )
+        assert emitted.shape == (batch_size, *task.event_shape_design)
+        assert design_space.contains(emitted)
+
+
+@pytest.mark.parametrize(
+    ("task_config", "outcome_bounds"),
+    [
+        (
+            {
+                "_target_": "testbed.tasks.LocationFinding",
+                "n_sources": 1,
+                "dim_theta": 2,
+            },
+            (-3.0, 10.0),
+        ),
+        ({"_target_": "testbed.tasks.PreyPopulation"}, (0.0, 300.0)),
+    ],
+)
+def test_standalone_evaluator_uses_reconstructed_policy_space(
+    tmp_path, task_config, outcome_bounds
+):
+    cfg = _tiny_cfg()
+    cfg.task = task_config
+    cfg.reward.outcome_low, cfg.reward.outcome_high = outcome_bounds
+    task = instantiate(cfg.task)
+    design_net = make_networks(task, cfg, task.device).actor
+    hydra_dir = tmp_path / ".hydra"
+    hydra_dir.mkdir()
+    OmegaConf.save(cfg, hydra_dir / "config.yaml")
+    torch.save({"design_net": design_net.state_dict()}, tmp_path / "final_step.pt")
+
+    result = evaluate_checkpoint(
+        tmp_path,
+        n_outer=2,
+        n_contrastive=2,
+        outer_batch_size=1,
+        contrastive_chunk_size=1,
+    )
+    reconstructed = reconstruct_design_net(cfg, task)
+    reconstructed.load_state_dict(design_net.state_dict())
+    rollout = PolicyDesigner(
+        task,
+        cfg.T,
+        reconstructed,
+        design_space=reconstructed.design_space,
+    ).rollout(task.sample_prior(2))
+
+    assert result["weights_used"] == "design_net"
+    assert reconstructed.design_space.contains(rollout.design_history)
