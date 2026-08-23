@@ -403,14 +403,17 @@ def _tiny_cfg(**sac_overrides):
                 "_target_": "testbed.tasks.LocationFinding",
                 "n_sources": 1,
                 "dim_theta": 2,
+                "design_space": {
+                    "_target_": "testbed.core.design_spaces.BoxDesignSpace",
+                    "low": "${design_space.low}",
+                    "high": "${design_space.high}",
+                    "event_shape": [2],
+                },
             },
             "design_space": {"low": -2.0, "high": 3.0},
             "reward": {"n_contrastive": 2, "outcome_low": -3.0, "outcome_high": 10.0},
             "design_net": {
-                "_target_": "testbed.design_nets.make_rlboed_policy",
-                "task": "${task}",
-                "box_low": "${design_space.low}",
-                "box_high": "${design_space.high}",
+                "_target_": "testbed.design_nets.make_deepset_stochastic_policy",
                 "dim_h": [128, 128],
                 "dim_emb": 64,
                 "log_std_min": -20.0,
@@ -453,12 +456,12 @@ def _tiny_cfg(**sac_overrides):
 
 
 def _build_trainer(cfg, *, manager=None):
-    task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
+    task = instantiate(cfg.task).to(cfg.device)
     _set_seed(cfg.seed, cfg.torch_deterministic)
     nets = make_networks(task, cfg, task.device)
     design_space = nets.design_space
     validate_config(task, cfg, design_space)
-    env = build_env(cfg, task, design_space)
+    env = build_env(cfg, task)
     replay_buffer = build_replay_buffer(cfg, task)
     designer = PolicyDesigner(task, cfg.T, nets.actor)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
@@ -471,11 +474,10 @@ def _episodic_returns(trainer):
 
 def test_trainer_requires_policy_designer():
     cfg = _tiny_cfg()
-    task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
+    task = instantiate(cfg.task).to(cfg.device)
     _set_seed(cfg.seed, cfg.torch_deterministic)
     nets = make_networks(task, cfg, task.device)
-    design_space = nets.design_space
-    env = build_env(cfg, task, design_space)
+    env = build_env(cfg, task)
     replay_buffer = build_replay_buffer(cfg, task)
 
     with pytest.raises(AssertionError):
@@ -546,7 +548,7 @@ def test_categorical_train_step_updates_networks_with_finite_losses():
     trainer = Trainer(
         task,
         PolicyDesigner(task, cfg.T, nets.actor),
-        build_env(cfg, task, design_space),
+        build_env(cfg, task),
         build_replay_buffer(cfg, task),
         nets,
         cfg,
@@ -584,7 +586,7 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
     trainer = Trainer(
         task,
         PolicyDesigner(task, cfg.T, nets.actor),
-        build_env(cfg, task, design_space),
+        build_env(cfg, task),
         build_replay_buffer(cfg, task),
         nets,
         cfg,

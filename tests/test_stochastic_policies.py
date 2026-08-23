@@ -212,12 +212,16 @@ def test_tanh_gaussian_proposal_has_raw_density_and_deterministic_value():
 
 
 def test_tanh_gaussian_policy_accepts_history_tensors_from_observation():
-    task = LocationFinding(n_sources=1, dim_theta=2, noise_scale=0.2)
     space = make_space()
+    task = LocationFinding(
+        n_sources=1,
+        dim_theta=2,
+        noise_scale=0.2,
+        design_space=space,
+    )
     env = BEDEnv(
         task,
         horizon=3,
-        design_space=space,
         reward_fn=ZeroReward(),
         batch_shape=(4,),
     )

@@ -75,8 +75,9 @@ def test_actionbed_recipe_wires_design_and_action_nets():
 def test_rlboed_recipe_uses_default_location_finding_task():
     cfg = _compose("rlboed")
     assert cfg.task.n_sources == 1
-    assert cfg.design_net._target_ == "testbed.design_nets.make_rlboed_policy"
-    assert cfg.design_net.task._target_ == cfg.task._target_
+    assert (
+        cfg.design_net._target_ == "testbed.design_nets.make_deepset_stochastic_policy"
+    )
     assert cfg.design_net.dim_h == [128, 128]
     assert cfg.design_net.dim_emb == 64
     assert cfg.design_net.log_std_min == -20.0

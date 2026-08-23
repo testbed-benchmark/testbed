@@ -2,7 +2,9 @@
 
 defaults:
   - /rlboed
-  - override /task: location_finding_2src
+  - override /task: location_finding_rlboed
   - _self_
 
-# Select the two-source task; its constructor settings live in the task recipe.
+# Select the two-source task while retaining RLBOED's bounded design space.
+task:
+  n_sources: 2

@@ -487,7 +487,7 @@ def collect_episode_batch(
 
     for _ in range(horizon):
         with torch.no_grad():
-            designs, _ = _propose_design(actor, env.design_space, obs)
+            designs, _ = _propose_design(actor, task.design_space, obs)
         next_obs, rewards, terminations, truncations, _ = env.step(designs)
 
         dones = terminations | truncations
@@ -814,7 +814,6 @@ class Trainer:
         eval_env = build_env(
             self.cfg,
             self.task,
-            self.env.design_space,
             n_contrastive=self.cfg.eval_n_contrastive,
         )
         obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
@@ -823,7 +822,7 @@ class Trainer:
             raw_designs = self.designer.design_net(
                 obs.outcomes, obs.designs, mask=obs.mask
             )
-            designs = eval_env.design_space.to_design(raw_designs)
+            designs = self.task.design_space.to_design(raw_designs)
             obs, rewards, _, _, _ = eval_env.step(designs)
             returns += rewards
 
@@ -883,7 +882,7 @@ class Trainer:
 
     def build_checkpoint(self, step=None, metric=None):
         """Builds the checkpoint dict holding weights and training state."""
-        design_space = self.env.design_space
+        design_space = self.task.design_space
         checkpoint = {
             "config": OmegaConf.to_container(
                 self.cfg, resolve=True, throw_on_missing=False
@@ -935,7 +934,7 @@ class Trainer:
 # ============================================================================
 
 
-def build_env(cfg, task, design_space, *, n_contrastive=None):
+def build_env(cfg, task, *, n_contrastive=None):
     """Instantiates the BED environment with the RL-BOED dense reward.
 
     ``n_contrastive`` overrides ``cfg.reward.n_contrastive`` for the reward's
@@ -947,7 +946,6 @@ def build_env(cfg, task, design_space, *, n_contrastive=None):
     return BEDEnv(
         task,
         horizon=cfg.T,
-        design_space=design_space,
         reward_fn=RLBOEDDenseReward(n_contrastive),
         batch_shape=(cfg.sac.num_envs,),
     )
@@ -990,7 +988,7 @@ def main(cfg):
     design_space = nets.design_space
     validate_config(task, cfg, design_space)
 
-    env = build_env(cfg, task, design_space)
+    env = build_env(cfg, task)
     replay_buffer = build_replay_buffer(cfg, task)
     designer = PolicyDesigner(
         task,

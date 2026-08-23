@@ -1,0 +1,9 @@
+_target_: testbed.tasks.LocationFinding
+n_sources: 1
+dim_theta: 2
+design_space:
+  _target_: testbed.core.design_spaces.BoxDesignSpace
+  low: ${design_space.low}
+  high: ${design_space.high}
+  event_shape:
+    - ${task.dim_theta}
