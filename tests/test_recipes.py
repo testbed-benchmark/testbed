@@ -23,6 +23,7 @@ ENTRY_POINT_RECIPES = [
     "rlboed",
     "var_post",
     "joint_var_post",
+    "experiments/location_finding/rlboed",
     "experiments/location_finding_2src/actionbed",
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",

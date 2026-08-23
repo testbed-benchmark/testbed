@@ -1,6 +1,6 @@
 defaults:
   - system: default
-  - task: location_finding_rlboed
+  - task: location_finding
   - wandb: default
   - hydra_run: default
   - _self_

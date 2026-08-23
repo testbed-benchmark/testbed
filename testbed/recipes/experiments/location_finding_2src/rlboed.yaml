@@ -1,10 +1,9 @@
 # @package _global_
 
 defaults:
-  - /rlboed
-  - override /task: location_finding_rlboed
+  - /experiments/location_finding/rlboed
   - _self_
 
-# Select the two-source task while retaining RLBOED's bounded design space.
+# Select the two-source task while retaining the bounded design-space override.
 task:
   n_sources: 2
