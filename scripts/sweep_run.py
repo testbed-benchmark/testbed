@@ -4,9 +4,10 @@ A W&B sweep agent invokes this script once per queued seed. It translates the
 queue item into Hydra overrides, shells out to the recipe's entry point, and
 then evaluates the resulting checkpoint in the same job.
 
-The sweep YAML pins ``--recipe``; the agent appends ``--seed=<value>`` from the
-grid via the ``${args}`` macro. Extra positional arguments are forwarded as
-Hydra overrides.
+The sweep YAML pins ``--recipe``; the agent appends the swept parameters via
+the ``${args_no_hyphens}`` macro, which writes them as Hydra overrides
+(``seed=3 lr=1e-3``). Any parameter can be swept this way. ``seed`` must be
+among them, since it names the run.
 
 Run directories are named ``<task>_<method>_seed<n>_<timestamp>_<jobid>_<taskid>``,
 following the hydra_run group's convention; Manager copies that basename into
@@ -23,7 +24,7 @@ Set ``WANDB_ENTITY`` to log to a team rather than your default entity.
 Usage (normally via ``wandb agent``, but runnable by hand from the repo root)::
 
     python scripts/sweep_run.py \
-        --recipe experiments/location_finding_2src/actionbed --seed 3
+        --recipe experiments/location_finding_2src/actionbed seed=3
 """
 
 from __future__ import annotations
@@ -60,7 +61,6 @@ def main() -> None:
         help="Recipe path under testbed/recipes, e.g. "
         "experiments/location_finding_2src/actionbed.",
     )
-    parser.add_argument("--seed", required=True, type=int)
     parser.add_argument(
         "--method",
         default=None,
@@ -74,12 +74,27 @@ def main() -> None:
     parser.add_argument(
         "overrides",
         nargs="*",
-        help="Extra Hydra overrides forwarded to the entry point.",
+        help="Hydra overrides forwarded to the entry point, including the "
+        "swept parameters. Must contain seed=<n>.",
     )
     args = parser.parse_args()
 
     task = os.path.basename(os.path.dirname(args.recipe))
     method = args.method or os.path.basename(args.recipe)
+
+    # The seed is swept like any other parameter, but it also names the run, so
+    # read it back out of the overrides.
+    seed = next(
+        (
+            override.split("=", 1)[1]
+            for override in reversed(args.overrides)
+            if override.startswith("seed=")
+        ),
+        None,
+    )
+    if seed is None:
+        print("no seed=<n> among the overrides", file=sys.stderr)
+        sys.exit(2)
 
     entry_point = os.path.join(REPO_ROOT, "testbed", "methods", f"{method}.py")
     if not os.path.exists(entry_point):
@@ -92,7 +107,7 @@ def main() -> None:
         [
             task,
             method,
-            f"seed{args.seed}",
+            f"seed{seed}",
             time.strftime("%Y-%m-%d_%H-%M-%S"),
             os.environ.get("SLURM_ARRAY_JOB_ID", "0"),
             os.environ.get("SLURM_ARRAY_TASK_ID", "0"),
@@ -105,9 +120,8 @@ def main() -> None:
         entry_point,
         "--config-name",
         args.recipe,
-        f"seed={args.seed}",  # hydra overrides need this format x=x
         "wandb.enabled=true",
-        f"wandb.tags=[seed{args.seed}]",
+        f"wandb.tags=[seed{seed}]",
         f"hydra.run.dir={run_dir}",
     ]
     entity = os.environ.get("WANDB_ENTITY")

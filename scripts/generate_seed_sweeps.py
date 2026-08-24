@@ -106,10 +106,11 @@ def write_sweep_yaml(
         f"  - --recipe\n"
         f"  - {recipe}\n"
         f"{eval_flag}"
-        # ${args} expands to "--seed=<value>" since `seed` is the only parameter.
-        # Using ${seed} directly is NOT a supported wandb macro; it gets silently
-        # stripped and the agent runs the recipe's default seed instead.
-        f"  - ${{args}}\n"
+        # ${args_no_hyphens} expands to "seed=3", i.e. Hydra override syntax, so
+        # every swept parameter reaches the run the same way. Plain ${args} would
+        # give "--seed=3", and ${seed} is not a wandb macro at all: it gets
+        # silently stripped, leaving the recipe's default seed.
+        f"  - ${{args_no_hyphens}}\n"
     )
 
 

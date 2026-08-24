@@ -16,4 +16,4 @@ command:
   - ${program}
   - --recipe
   - experiments/location_finding_2src/dad
-  - ${args}
+  - ${args_no_hyphens}

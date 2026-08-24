@@ -98,33 +98,62 @@ wandb sweep sweeps/location_finding_2src_actionbed.yaml   # new id, only the str
 
 When every seed is done the YAML is deleted rather than left behind as an empty queue.
 
-## How a seed reaches the training run
+## How a swept parameter reaches the training run
 
-The agent appends the sampled seed to the `command` block in the sweep YAML through the
-`${args}` macro, which expands to `--seed=<value>`. `scripts/sweep_run.py` then runs:
+The agent appends the sampled parameters to the `command` block through the
+`${args_no_hyphens}` macro, which writes them as `seed=3 lr=1e-3`, i.e. Hydra override
+syntax. `scripts/sweep_run.py` forwards them untouched and runs:
 
 ```sh
 python testbed/methods/<method>.py --config-name experiments/<task>/<method> \
-    seed=<n> wandb.enabled=true 'wandb.tags=[seed<n>]' \
-    'hydra.run.dir=${save_dir}/<task>_<method>_seed<n>_${now:%Y-%m-%d_%H-%M-%S}'
+    wandb.enabled=true 'wandb.tags=[seed<n>]' \
+    'hydra.run.dir=<save_dir>/<task>_<method>_seed<n>_<timestamp>_<jobid>_<taskid>' \
+    seed=<n> [other swept parameters]
 ```
 
-so the seed is identifiable three ways in W&B: as a `seed` column in the runs table
+The seed is identifiable three ways in W&B: as a `seed` column in the runs table
 (the whole config is snapshotted, and that is what the generator queries), in the run
 name, and as a `seed<n>` tag. The run directory carries the same name as the W&B run,
 so local output and W&B line up one-to-one.
 
-```{warning}
-Use `${args}` in the `command` block, never `${seed}`. The latter is not a W&B macro —
-it is silently dropped, and every run in the sweep then trains with the recipe's default
-seed.
-```
+
 
 ## Sweeping something other than seeds
 
-Nothing here is seed-specific except the generated grid. To sweep a hyperparameter,
-write a sweep YAML by hand with extra `parameters` and pass them through as Hydra
-overrides, or use Hydra's own multirun for a quick local grid:
+Nothing in the wrapper is seed-specific: every swept parameter arrives as a Hydra
+override, so any config key can be swept. `seed` must be among the parameters, since it
+names the run. To sweep learning rate across seeds, write the YAML by hand:
+
+```yaml
+name: location_finding_2src-actionbed-lr
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: location_finding_2src
+
+parameters:
+  seed:
+    values: [0, 1, 2]
+  lr:
+    values: [1e-4, 5e-4, 1e-3]
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/location_finding_2src/actionbed
+  - ${args_no_hyphens}
+```
+
+Then `wandb sweep` and `wandb agent` as usual, for all nine runs.
+
+`scripts/generate_seed_sweeps.py` will not build this queue for you: it diffs on
+`run.config["seed"]` alone, so it cannot work out which learning rates are still
+missing. A hyperparameter sweep is written by hand and re-run in full if it is
+interrupted.
+
+For a quick one-off grid on a single machine, Hydra's own multirun is simpler and needs
+no sweep at all:
 
 ```sh
 python testbed/methods/actionbed.py --multirun \
@@ -132,8 +161,8 @@ python testbed/methods/actionbed.py --multirun \
     lr=1e-4,5e-4,1e-3
 ```
 
-Hydra multirun is simpler for a one-off on a single machine; a W&B sweep is what you
-want when several machines share the work or when runs need to survive crashes.
+Reach for a W&B sweep instead when several machines share the work, or when runs need to
+survive crashes.
 
 ## Adding a new recipe to the system
 
