@@ -28,7 +28,7 @@ cd "$(dirname "$0")/.."  # sweep YAMLs name scripts/sweep_run.py relative to the
 
 # The agent needs to reach api.wandb.ai from the compute node to be handed a
 # seed; WANDB_MODE=offline cannot substitute, as there is no server to ask.
-export WANDB_ENTITY=${WANDB_ENTITY:-rainml-testbed}
+export WANDB_ENTITY="${WANDB_ENTITY:?WANDB_ENTITY must be set}"
 
 # --count 1 keeps one array task to one seed. Without it a single agent drains
 # the whole queue sequentially while the other tasks exit with nothing to do.
