@@ -17,7 +17,7 @@ the W&B run id up front (``WANDB_RUN_ID``) so eval metrics join the training
 run instead of opening a new one.
 
 Evaluation is best-effort: a failure is reported but does not fail the run,
-since the checkpoint is already saved. Pass ``--no-eval`` to skip it 
+since the checkpoint is already saved. Pass ``--no-eval`` to skip it.
 
 Set ``WANDB_ENTITY`` to log to a team rather than your default entity.
 
