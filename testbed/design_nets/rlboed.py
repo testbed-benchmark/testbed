@@ -14,8 +14,8 @@ class RLBOEDQNetwork(nn.Module):
     Args:
         dim_y: Flattened outcome dimension.
         dim_design: Flattened design dimension.
-        design_low: Per-coordinate physical lower design bounds.
-        design_high: Per-coordinate physical upper design bounds.
+        design_low: Per-coordinate lower references for design normalization.
+        design_high: Per-coordinate upper references for design normalization.
         outcome_low: Per-coordinate lower outcome bounds.
         outcome_high: Per-coordinate upper outcome bounds.
         dim_h: Hidden layer widths; an integer specifies one layer.
@@ -41,8 +41,8 @@ class RLBOEDQNetwork(nn.Module):
         Args:
             dim_y: Flattened outcome dimension.
             dim_design: Flattened design dimension.
-            design_low: Per-coordinate physical lower design bounds.
-            design_high: Per-coordinate physical upper design bounds.
+            design_low: Per-coordinate lower references for design normalization.
+            design_high: Per-coordinate upper references for design normalization.
             outcome_low: Per-coordinate lower outcome bounds.
             outcome_high: Per-coordinate upper outcome bounds.
             dim_h: Hidden layer widths; an integer specifies one layer.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import random
 import time
+import warnings
 from dataclasses import dataclass
 from math import ceil, log
 
@@ -17,12 +18,14 @@ from torch import optim
 
 from testbed.core.design_spaces import (
     BoxDesignSpace,
+    DefaultDesignSpace,
     DesignSpace,
     FiniteDesignSpace,
 )
 from testbed.core.setup import instantiate_design_net, setup
 from testbed.design_nets import (
     CategoricalPolicyNet,
+    GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
     StochasticDesignNet,
@@ -336,10 +339,17 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.entropy_anneal_rate must be non-negative.")
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
-    if not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
+    if isinstance(design_space, DefaultDesignSpace):
+        warnings.warn(
+            "RLBOED is training with an unconstrained design space; SAC may "
+            "be unstable and the policy can diverge.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    elif not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
         raise TypeError(
-            "RLBOED requires a bounded task configuration with a "
-            "BoxDesignSpace or FiniteDesignSpace."
+            "RLBOED requires a BoxDesignSpace, FiniteDesignSpace, or "
+            "DefaultDesignSpace."
         )
 
 
@@ -369,11 +379,6 @@ def make_networks(
     dim_y = event_shape_y.numel()
     dim_design = event_shape_design.numel()
     design_space = task.design_space
-    if not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
-        raise TypeError(
-            "RLBOED requires a bounded task configuration with a "
-            "BoxDesignSpace or FiniteDesignSpace."
-        )
     actor = instantiate_design_net(cfg.design_net, task).to(device)
     if not isinstance(actor, StochasticDesignNet):
         raise TypeError("cfg.design_net must construct a StochasticDesignNet.")
@@ -384,6 +389,21 @@ def make_networks(
             "dim_design": dim_design,
             "design_low": design_space.low.to(device),
             "design_high": design_space.high.to(device),
+            "outcome_low": cfg.reward.outcome_low,
+            "outcome_high": cfg.reward.outcome_high,
+        }
+        qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
+        qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
+    elif isinstance(design_space, DefaultDesignSpace):
+        if not isinstance(actor, GaussianPolicyNet):
+            raise TypeError(
+                "Unconstrained RLBOED design spaces require a GaussianPolicyNet."
+            )
+        critic_kwargs = {
+            "dim_y": dim_y,
+            "dim_design": dim_design,
+            "design_low": actor.design_low.detach().clone(),
+            "design_high": actor.design_high.detach().clone(),
             "outcome_low": cfg.reward.outcome_low,
             "outcome_high": cfg.reward.outcome_high,
         }
@@ -888,16 +908,6 @@ class Trainer:
                 self.cfg, resolve=True, throw_on_missing=False
             ),
             "horizon": self.env.horizon,
-            "design_low": (
-                design_space.low.detach().cpu()
-                if isinstance(design_space, BoxDesignSpace)
-                else design_space.values.amin(dim=0).detach().cpu()
-            ),
-            "design_high": (
-                design_space.high.detach().cpu()
-                if isinstance(design_space, BoxDesignSpace)
-                else design_space.values.amax(dim=0).detach().cpu()
-            ),
             "outcome_low": torch.as_tensor(self.cfg.reward.outcome_low),
             "outcome_high": torch.as_tensor(self.cfg.reward.outcome_high),
             "design_net": self.nets.actor.state_dict(),
@@ -920,8 +930,15 @@ class Trainer:
             "training_iterations": self.cfg.sac.num_training_iterations,
             "global_step": self.cfg.sac.num_training_iterations,
         }
-        if isinstance(design_space, FiniteDesignSpace):
+        if isinstance(design_space, BoxDesignSpace):
+            checkpoint["design_low"] = design_space.low.detach().cpu()
+            checkpoint["design_high"] = design_space.high.detach().cpu()
+        elif isinstance(design_space, FiniteDesignSpace):
+            checkpoint["design_low"] = design_space.values.amin(dim=0).detach().cpu()
+            checkpoint["design_high"] = design_space.values.amax(dim=0).detach().cpu()
             checkpoint["design_values"] = design_space.values.detach().cpu()
+        # DefaultDesignSpace has no physical bounds. Its normalization
+        # references are already part of the actor and critic state dicts.
         if step is not None:
             checkpoint["step"] = step
         if metric is not None:
