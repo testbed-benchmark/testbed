@@ -7,6 +7,7 @@ from torch import Tensor
 from ..core.rollout import Rollout
 from ..tasks.base import Task
 from .base_objective import DesignObjective, RolloutObjective
+from .contrastive import contrastive_logsumexps
 
 
 class SPCE(RolloutObjective):
@@ -24,10 +25,16 @@ class SPCE(RolloutObjective):
     where theta_0' = theta_i and theta_l' ~ p(theta) for l >= 1.
     """
 
-    def __init__(self, task: Task, n_contrastive: int):
-        """Initializes the SPCE estimator."""
+    def __init__(self, task: Task, n_contrastive: int, chunk_size: int = None):
+        """Initializes the SPCE estimator.
+
+        chunk_size caps how many contrastive samples are scored at once; the
+        default scores all of them together. Set it when n_contrastive is too
+        large to materialize, as evaluation does.
+        """
         super().__init__(task)
         self.n_contrastive = int(n_contrastive)
+        self.chunk_size = None if chunk_size is None else int(chunk_size)
 
     def __call__(self, rollout: Rollout):
         """Estimates gain for a simulated rollout."""
@@ -45,44 +52,24 @@ class SPCE(RolloutObjective):
 
         returns: [b] per-sample SPCE estimates.
         """
-        task = self.task
-        n_contrastive = self.n_contrastive
-        y_history, design_history, theta_0 = (
-            rollout.y_history,
-            rollout.design_history,
-            rollout.theta,
+        logp_joint, chunk_logsumexps = contrastive_logsumexps(
+            self.task, rollout, self.n_contrastive, self.chunk_size
         )
-        b = theta_0.shape[0]
-        L_plus_1 = n_contrastive + 1
-
-        theta_contrastive = task.sample_current_prior(b * n_contrastive)
-        theta_contrastive = theta_contrastive.reshape(
-            b, n_contrastive, *task.event_shape_theta
+        return self.gain_from_logsumexps(
+            logp_joint, chunk_logsumexps, self.n_contrastive
         )
 
-        # [b, L_plus_1, *event_shape_theta]
-        theta_all = torch.cat([theta_0.unsqueeze(1), theta_contrastive], dim=1)
-        theta_flat = theta_all.reshape(b * L_plus_1, *task.event_shape_theta)
+    @staticmethod
+    def gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive):
+        """Per-sample SPCE from log-likelihoods produced by contrastive_logsumexps.
 
-        # Repeat each history L_plus_1 times: [b*L_plus_1, T, *event_shape_*]
-        y_rep = (
-            y_history.unsqueeze(1)
-            .expand(b, L_plus_1, *y_history.shape[1:])
-            .reshape(b * L_plus_1, *y_history.shape[1:])
-        )
-        design_rep = (
-            design_history.unsqueeze(1)
-            .expand(b, L_plus_1, *design_history.shape[1:])
-            .reshape(b * L_plus_1, *design_history.shape[1:])
-        )
-
-        logp_all = task.history_logp(y_rep, design_rep, theta_flat).reshape(
-            b, L_plus_1
-        )  # [b, L_plus_1]
-
-        logp_joint = logp_all[:, 0]
-        logp_marginal = torch.logsumexp(logp_all, dim=1) - np.log(L_plus_1)
-
+        The joint sample joins the marginal, which therefore averages over
+        L+1 samples. Split out so a caller holding the log-likelihoods (e.g.
+        testbed.eval) can take both bounds from one set of draws.
+        """
+        logp_marginal = torch.logsumexp(
+            torch.cat([logp_joint.unsqueeze(1), chunk_logsumexps], dim=1), dim=1
+        ) - np.log(n_contrastive + 1)
         return logp_joint - logp_marginal
 
 

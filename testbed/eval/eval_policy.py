@@ -9,17 +9,11 @@ If the checkpoint has a `"design_net_ema"` key (currently only
 `policy_train_state.params_ema` -- pass `--use_raw_weights` to force the raw
 weights instead.
 
-`testbed.design_objectives.SPCE`/`SNMC` materialize all `L` contrastive
-samples in one tensor (`[b*(L+1), T, ...]`), which is fine for their usual
-training-time L (tens) but not for large L (e.g. L=500_000): that would need.
-This module reimplements the same bound formulas
-(SPCE: `logp_joint - logsumexp([logp_joint] + logp_contrastive) + log(L+1)`;
-SNMC: same but excluding logp_joint from the marginal, `+ log(L)`) with the
-contrastive dimension processed in chunks, combined via the
-logsumexp-associativity identity `logsumexp(all) ==
-logsumexp(stack([logsumexp(chunk) for chunk in chunks]))`
- -- so results are identical to calling SPCE/SNMC directly,
-just without ever materializing all L contrastive samples at once.
+The bounds come from `testbed.design_objectives`: contrastive samples are
+scored by `contrastive_logsumexps` in chunks (evaluation uses L=500_000, which
+does not fit as one `[b*L, T, ...]` tensor), and combined by
+`SPCE.gain_from_logsumexps` / `SNMC.gain_from_logsumexps`. Both bounds share
+one set of draws, so the sampling is paid for once.
 
 Usage:
     python -m testbed.eval.eval_policy <run_dir> [--checkpoint final_step.pt]
@@ -33,11 +27,12 @@ and the checkpoint file).
 import argparse
 from pathlib import Path
 
-import numpy as np
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
+from testbed.design_objectives import SNMC, SPCE
+from testbed.design_objectives.contrastive import contrastive_logsumexps
 from testbed.designers import PolicyDesigner
 
 
@@ -55,66 +50,17 @@ def build_design_net(cfg, task):
     )
 
 
-def _chunked_contrastive_logsumexps(task, rollout, n_contrastive, chunk_size):
-    """Per-chunk logsumexp of contrastive log-likelihoods, plus logp_joint.
-
-    Returns (logp_joint: [b], chunk_logsumexps: [b, n_chunks]), where
-    chunk_logsumexps holds log(sum_{i in chunk} p(y | theta_i)) for each
-    chunk of the n_contrastive prior draws (theta_0/logp_joint is NOT
-    included in chunk_logsumexps -- callers combine as needed for
-    SPCE (include) vs SNMC (exclude), matching their exact conventions).
-    """
-    y_history, design_history, theta_0 = (
-        rollout.y_history,
-        rollout.design_history,
-        rollout.theta,
-    )
-    b = theta_0.shape[0]
-    logp_joint = task.history_logp(y_history, design_history, theta_0)  # [b]
-
-    chunk_logsumexps = []
-    remaining = n_contrastive
-    while remaining > 0:
-        c = min(chunk_size, remaining)
-        theta_c = task.sample_current_prior(b * c).reshape(
-            b, c, *task.event_shape_theta
-        )
-        theta_flat = theta_c.reshape(b * c, *task.event_shape_theta)
-        y_rep = (
-            y_history.unsqueeze(1)
-            .expand(b, c, *y_history.shape[1:])
-            .reshape(b * c, *y_history.shape[1:])
-        )
-        design_rep = (
-            design_history.unsqueeze(1)
-            .expand(b, c, *design_history.shape[1:])
-            .reshape(b * c, *design_history.shape[1:])
-        )
-        logp_c = task.history_logp(y_rep, design_rep, theta_flat).reshape(b, c)
-        chunk_logsumexps.append(torch.logsumexp(logp_c, dim=1))  # [b]
-        remaining -= c
-
-    return logp_joint, torch.stack(chunk_logsumexps, dim=1)  # [b], [b, n_chunks]
-
-
 def chunked_spce_snmc(task, rollout, n_contrastive, chunk_size):
     """SPCE (lower) and SNMC (upper) per-sample gains, chunked over n_contrastive.
 
-    Identical formulas to testbed.design_objectives.SPCE/SNMC.per_sample_gain,
-    just computed without materializing all n_contrastive samples at once.
+    Both bounds come from one set of contrastive draws, so the expensive
+    sampling is paid for once rather than per bound.
     """
-    logp_joint, chunk_logsumexps = _chunked_contrastive_logsumexps(
+    logp_joint, chunk_logsumexps = contrastive_logsumexps(
         task, rollout, n_contrastive, chunk_size
     )
-
-    lower_marginal = torch.logsumexp(
-        torch.cat([logp_joint.unsqueeze(1), chunk_logsumexps], dim=1), dim=1
-    ) - np.log(n_contrastive + 1)
-    lower = logp_joint - lower_marginal  # sPCE
-
-    upper_marginal = torch.logsumexp(chunk_logsumexps, dim=1) - np.log(n_contrastive)
-    upper = logp_joint - upper_marginal  # sNMC
-
+    lower = SPCE.gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive)
+    upper = SNMC.gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive)
     return lower, upper
 
 
