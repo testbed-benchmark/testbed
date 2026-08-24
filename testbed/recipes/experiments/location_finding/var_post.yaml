@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - /method/var_post
+  - _self_
+
+# ScoreBED's location-finding posterior-pretraining proposal: each trajectory
+# samples s ~ U(scale_low, scale_high), then draws all T designs from N(0, s^2).
+pretrain_design_distr:
+  _target_: testbed.core.RandomScaleGaussianDesignDistribution
+  scale_low: 0.5
+  scale_high: 2.0

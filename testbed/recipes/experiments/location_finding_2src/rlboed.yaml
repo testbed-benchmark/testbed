@@ -1,9 +1,16 @@
 # @package _global_
 
 defaults:
-  - /experiments/location_finding/rlboed
+  - /method/rlboed
+  - override /task: location_finding_2src
   - _self_
 
-# Select the two-source task while retaining the bounded design-space override.
+# The task recipe supplies its constructor settings, horizon, and bounds;
+# RL-BOED additionally requires those bounds to be instantiated on the task.
 task:
-  n_sources: 2
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: ${design_space.low}
+    high: ${design_space.high}
+    event_shape:
+      - ${task.dim_theta}

@@ -1,1 +1,14 @@
-_target_: testbed.tasks.PreyPopulation
+# @package _global_
+
+# Task defaults
+T: 10
+
+task:
+  _target_: testbed.tasks.PreyPopulation
+  duration: 24.0
+  prior: null  # use the standard Blau et al. prior
+
+# Bounds used by methods that normalize the task outcomes.
+reward:
+  outcome_low: 0.0
+  outcome_high: 300.0

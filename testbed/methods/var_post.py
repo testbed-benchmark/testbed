@@ -387,7 +387,7 @@ def build_pretrain_designer(cfg, task):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="var_post")
+@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/var_post")
 def main(cfg):
     """Entry point for BarberAgakov training.
 

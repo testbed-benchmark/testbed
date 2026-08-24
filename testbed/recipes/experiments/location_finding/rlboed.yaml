@@ -1,9 +1,10 @@
 # @package _global_
 
 defaults:
-  - /rlboed
+  - /method/rlboed
   - _self_
 
+# RL-BOED requires a bounded design space for this otherwise unbounded task.
 task:
   design_space:
     _target_: testbed.core.design_spaces.BoxDesignSpace
