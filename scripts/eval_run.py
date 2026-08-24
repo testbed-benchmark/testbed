@@ -1,6 +1,5 @@
-"""
-scripts/eval_run.py — post-training evaluation for a run directory
-==================================================================
+"""Post-training evaluation for a run directory.
+
 Computes sPCE/sNMC bounds for a finished run's checkpoint and writes them to
 ``<run_dir>/eval.json``. When the run was logged to W&B, the bounds are added
 to that same run rather than a new one, so each seed stays a single row.
@@ -39,7 +38,9 @@ def log_to_wandb(run_dir: Path, run_id: str, results: dict) -> None:
         project=OmegaConf.select(cfg, "wandb.project"),
         entity=OmegaConf.select(cfg, "wandb.entity"),
     )
-    scalars = {f"eval/{k}": v for k, v in results.items() if isinstance(v, (int, float))}
+    scalars = {
+        f"eval/{k}": v for k, v in results.items() if isinstance(v, (int, float))
+    }
     run.log(scalars)
     # Summary is what surfaces as a column in the runs table.
     run.summary.update(scalars)
@@ -47,6 +48,7 @@ def log_to_wandb(run_dir: Path, run_id: str, results: dict) -> None:
 
 
 def main() -> None:
+    """Evaluates one run directory and records the bounds."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--checkpoint", default="final_step.pt")
@@ -55,10 +57,14 @@ def main() -> None:
     parser.add_argument("--outer-batch-size", type=int, default=256)
     parser.add_argument("--contrastive-chunk-size", type=int, default=200_000)
     parser.add_argument("--use-raw-weights", action="store_true")
-    parser.add_argument("--device", default=None,
-                        help="Default: the device the run was trained on.")
-    parser.add_argument("--wandb-run-id", default=None,
-                        help="Default: read from <run_dir>/wandb_run_id.")
+    parser.add_argument(
+        "--device", default=None, help="Default: the device the run was trained on."
+    )
+    parser.add_argument(
+        "--wandb-run-id",
+        default=None,
+        help="Default: read from <run_dir>/wandb_run_id.",
+    )
     parser.add_argument("--no-wandb", action="store_true")
     args = parser.parse_args()
 
@@ -87,8 +93,10 @@ def main() -> None:
         try:
             log_to_wandb(run_dir, run_id, results)
         except Exception as error:
-            print(f"could not add eval metrics to wandb run {run_id}: {error}",
-                  file=sys.stderr)
+            print(
+                f"could not add eval metrics to wandb run {run_id}: {error}",
+                file=sys.stderr,
+            )
 
 
 if __name__ == "__main__":

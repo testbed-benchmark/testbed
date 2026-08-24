@@ -1,6 +1,5 @@
-"""
-scripts/generate_seed_sweeps.py — emit per-recipe W&B seed sweeps
-=================================================================
+r"""Emit per-recipe W&B seed sweeps.
+
 Queries W&B for the seeds a recipe has already finished and writes a grid
 sweep containing only the missing ones, so agents never repeat completed work.
 Crashed and killed runs are not ``finished``, so re-running this rebuilds a
@@ -29,10 +28,10 @@ seed out once.
 Usage
 -----
     export WANDB_ENTITY=rainml-testbed
-    python scripts/generate_seed_sweeps.py \\
+    python scripts/generate_seed_sweeps.py \
         --recipe experiments/location_finding_2src/actionbed
-    python scripts/generate_seed_sweeps.py \\
-        --recipe experiments/location_finding_2src/{actionbed,dad,rlboed} \\
+    python scripts/generate_seed_sweeps.py \
+        --recipe experiments/location_finding_2src/{actionbed,dad,rlboed} \
         --seeds 0 1 2 3 4
 """
 
@@ -40,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
@@ -74,8 +72,15 @@ def finished_seeds(api, entity: str, project: str, group: str) -> set[int]:
     return seeds
 
 
-def write_sweep_yaml(path: Path, recipe: str, entity: str, project: str,
-                     group: str, missing: list[int], no_eval: bool = False) -> None:
+def write_sweep_yaml(
+    path: Path,
+    recipe: str,
+    entity: str,
+    project: str,
+    group: str,
+    missing: list[int],
+    no_eval: bool = False,
+) -> None:
     """Writes a grid sweep over the missing seeds."""
     seeds = ", ".join(str(seed) for seed in missing)
     task = os.path.basename(os.path.dirname(recipe))
@@ -109,17 +114,26 @@ def write_sweep_yaml(path: Path, recipe: str, entity: str, project: str,
 
 
 def main() -> None:
+    """Writes a sweep YAML per recipe covering its unfinished seeds."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--recipe", nargs="+", required=True,
-                        help="Recipe paths, e.g. "
-                             "experiments/location_finding_2src/actionbed.")
+    parser.add_argument(
+        "--recipe",
+        nargs="+",
+        required=True,
+        help="Recipe paths, e.g. experiments/location_finding_2src/actionbed.",
+    )
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3, 4])
-    parser.add_argument("--entity", default=os.environ.get("WANDB_ENTITY"),
-                        help="W&B team/user (default: $WANDB_ENTITY).")
+    parser.add_argument(
+        "--entity",
+        default=os.environ.get("WANDB_ENTITY"),
+        help="W&B team/user (default: $WANDB_ENTITY).",
+    )
     parser.add_argument("--out-dir", default=str(REPO_ROOT / "sweeps"))
-    parser.add_argument("--no-eval", action="store_true",
-                        help="Emit sweeps that skip the post-training eval."
-                            )
+    parser.add_argument(
+        "--no-eval",
+        action="store_true",
+        help="Emit sweeps that skip the post-training eval.",
+    )
     args = parser.parse_args()
 
     if not args.entity:
@@ -148,15 +162,24 @@ def main() -> None:
         yaml_path = out_dir / f"{task}_{method}.yaml"
 
         if missing:
-            write_sweep_yaml(yaml_path, recipe, args.entity, project, group,
-                             missing, no_eval=args.no_eval)
+            write_sweep_yaml(
+                yaml_path,
+                recipe,
+                args.entity,
+                project,
+                group,
+                missing,
+                no_eval=args.no_eval,
+            )
             status = str(yaml_path.relative_to(REPO_ROOT))
         else:
             # Drop stale YAMLs so a finished recipe has no queue left behind.
             yaml_path.unlink(missing_ok=True)
             status = "(complete — no YAML)"
-        print(f"{recipe:<50}  {len(args.seeds) - len(missing)}/{len(args.seeds)}"
-              f"            {status}")
+        print(
+            f"{recipe:<50}  {len(args.seeds) - len(missing)}/{len(args.seeds)}"
+            f"            {status}"
+        )
 
     print("\nNext steps:")
     print("  wandb sweep sweeps/<task>_<method>.yaml        # prints <sweep_id>")

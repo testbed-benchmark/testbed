@@ -1,6 +1,5 @@
-"""
-scripts/sweep_run.py — sweep-agent wrapper for TestBED seed sweeps
-==================================================================
+r"""Sweep-agent wrapper for TestBED seed sweeps.
+
 A W&B sweep agent invokes this script once per queued seed. It translates the
 queue item into Hydra overrides, shells out to the recipe's entry point, and
 then evaluates the resulting checkpoint in the same job.
@@ -23,7 +22,7 @@ Set ``WANDB_ENTITY`` to log to a team rather than your default entity.
 
 Usage (normally via ``wandb agent``, but runnable by hand from the repo root)::
 
-    python scripts/sweep_run.py \\
+    python scripts/sweep_run.py \
         --recipe experiments/location_finding_2src/actionbed --seed 3
 """
 
@@ -53,6 +52,7 @@ def resolve_save_dir(recipe: str, overrides: list[str]) -> str:
 
 
 def main() -> None:
+    """Trains one seed of a recipe, then evaluates its checkpoint."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--recipe",
@@ -66,8 +66,9 @@ def main() -> None:
         default=None,
         help="Entry point under testbed/methods (default: the recipe's basename).",
     )
-    parser.add_argument("--no-eval", action="store_true",
-                        help="Skip the post-training evaluation.")
+    parser.add_argument(
+        "--no-eval", action="store_true", help="Skip the post-training evaluation."
+    )
     parser.add_argument("--eval-n-outer", type=int, default=None)
     parser.add_argument("--eval-n-contrastive", type=int, default=None)
     parser.add_argument(
@@ -87,14 +88,16 @@ def main() -> None:
 
     # The SLURM ids point back at the job's slurm-<jobid>_<taskid>.out, and are
     # 0_0 off a cluster.
-    run_name = "_".join([
-        task,
-        method,
-        f"seed{args.seed}",
-        time.strftime("%Y-%m-%d_%H-%M-%S"),
-        os.environ.get("SLURM_ARRAY_JOB_ID", "0"),
-        os.environ.get("SLURM_ARRAY_TASK_ID", "0"),
-    ])
+    run_name = "_".join(
+        [
+            task,
+            method,
+            f"seed{args.seed}",
+            time.strftime("%Y-%m-%d_%H-%M-%S"),
+            os.environ.get("SLURM_ARRAY_JOB_ID", "0"),
+            os.environ.get("SLURM_ARRAY_TASK_ID", "0"),
+        ]
+    )
     run_dir = os.path.join(resolve_save_dir(args.recipe, args.overrides), run_name)
 
     command = [
@@ -129,8 +132,10 @@ def main() -> None:
     eval_command = [
         sys.executable,
         os.path.join(REPO_ROOT, "scripts", "eval_run.py"),
-        "--run-dir", run_dir,
-        "--wandb-run-id", wandb_run_id,
+        "--run-dir",
+        run_dir,
+        "--wandb-run-id",
+        wandb_run_id,
     ]
     if args.eval_n_outer is not None:
         eval_command += ["--n-outer", str(args.eval_n_outer)]
@@ -142,8 +147,10 @@ def main() -> None:
     if eval_status != 0:
         # Training succeeded and the checkpoint is on disk, so don't fail the
         # run; eval_run.py can be re-run against the directory.
-        print(f"eval failed ({eval_status}); checkpoint kept at {run_dir}",
-              file=sys.stderr)
+        print(
+            f"eval failed ({eval_status}); checkpoint kept at {run_dir}",
+            file=sys.stderr,
+        )
 
     sys.exit(train_status)
 
