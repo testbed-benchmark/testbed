@@ -181,15 +181,24 @@ survive crashes.
 
 ## Adding a new recipe to the system
 
-Give the recipe a `wandb:` block and it works with no further changes:
+Give the recipe a `wandb:` block and select its method as a defaults group:
 
 ```yaml
+defaults:
+  - /method: actionbed    # group syntax, not `- /method/actionbed`
+  - override /task: <task>
+  - _self_
+
 wandb:
   project: <task>    # one project per task; methods separate by group
   group: <method>
 ```
 
-Leave `entity` alone — it stays `null` in `testbed/recipes/wandb/default.yaml` so that
+The group syntax is what records the choice in `hydra.runtime.choices`, which is how
+`scripts/sweep_run.py` finds the entry point to run. Writing `- /method/actionbed`
+instead includes the same file but records no choice, and the wrapper will refuse the
+recipe. Taking it from the config means the filename need not match the method:
+`var_post_scorebed_repro.yaml` correctly runs `testbed/methods/var_post.py`.
+
+Leave `entity` alone: it stays `null` in `testbed/recipes/wandb/default.yaml` so that
 anyone using TestBED logs to their own account, and `WANDB_ENTITY` supplies yours.
-`scripts/sweep_run.py` derives the entry point from the recipe's basename; pass
-`--method` when the file is named something other than its method.

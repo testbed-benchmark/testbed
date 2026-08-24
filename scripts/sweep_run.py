@@ -42,16 +42,20 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RECIPES_DIR = os.path.join(REPO_ROOT, "testbed", "recipes")
 
 
-def resolve_save_dir(recipe: str, overrides: list[str]) -> str:
+def compose_recipe(recipe: str):
+    """Composes a recipe, keeping Hydra's own block for the defaults choices."""
+    from hydra import compose, initialize_config_dir
+
+    with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
+        return compose(config_name=recipe, return_hydra_config=True)
+
+
+def resolve_save_dir(cfg, overrides: list[str]) -> str:
     """Returns the save_dir the training run will use."""
     for override in reversed(overrides):
         if override.startswith("save_dir="):
             return override.split("=", 1)[1]
-
-    from hydra import compose, initialize_config_dir
-
-    with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
-        return compose(config_name=recipe).save_dir
+    return cfg.save_dir
 
 
 def main() -> None:
@@ -64,11 +68,6 @@ def main() -> None:
         "experiments/location_finding_2src/actionbed.",
     )
     parser.add_argument(
-        "--method",
-        default=None,
-        help="Entry point under testbed/methods (default: the recipe's basename).",
-    )
-    parser.add_argument(
         "overrides",
         nargs="*",
         help="Hydra overrides forwarded to the entry point, including the "
@@ -77,7 +76,16 @@ def main() -> None:
     args = parser.parse_args()
 
     task = os.path.basename(os.path.dirname(args.recipe))
-    method = args.method or os.path.basename(args.recipe)
+
+    cfg = compose_recipe(args.recipe)
+    method = cfg.hydra.runtime.choices.get("method")
+    if method is None:
+        print(
+            f"{args.recipe} does not select a method; its defaults list needs "
+            f"`- /method: <name>` rather than `- /method/<name>`",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # The seed is swept like any other parameter, but it also names the run, so
     # read it back out of the overrides.
@@ -110,7 +118,7 @@ def main() -> None:
             os.environ.get("SLURM_ARRAY_TASK_ID", "0"),
         ]
     )
-    run_dir = os.path.join(resolve_save_dir(args.recipe, args.overrides), run_name)
+    run_dir = os.path.join(resolve_save_dir(cfg, args.overrides), run_name)
 
     command = [
         sys.executable,

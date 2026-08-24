@@ -1,7 +1,7 @@
 # @package _global_
 
 defaults:
-  - /method/dad
+  - /method: dad
   - override /task: location_finding_2src
   - _self_
 
