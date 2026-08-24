@@ -14,12 +14,3 @@ task:
   noise_scale: 0.5
   exponent: 2.0
   prior: null  # use the standard isotropic Gaussian source prior
-
-# Bounds used by methods that need an explicit box design space or outcome
-# normalization range.
-design_space:
-  low: -4.0
-  high: 4.0
-reward:
-  outcome_low: -3.0
-  outcome_high: 10.0

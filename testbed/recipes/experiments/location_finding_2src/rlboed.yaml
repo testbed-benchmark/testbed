@@ -5,7 +5,21 @@ defaults:
   - override /task: location_finding_2src
   - _self_
 
-# The task recipe supplies the constructor settings, horizon, and task bounds.
+# Reference range used to normalize outcome histories for RL-BOED's policy and
+# critic networks. This does not constrain or clip task outcomes; observations
+# outside the range are simply mapped outside [0, 1].
+reward:
+  outcome_low: -3.0
+  outcome_high: 10.0
+
+# RL-BOED requires a bounded design space for this otherwise unbounded task.
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: -4.0
+    high: 4.0
+    event_shape:
+      - ${task.dim_theta}
 
 wandb:
   project: location_finding_2src  # one project per task; methods separate by group

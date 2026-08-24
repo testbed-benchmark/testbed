@@ -6,6 +6,7 @@ from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets import (
     CategoricalPolicyNet,
     DeepSetPolicyNet,
+    DesignProposal,
     GaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner
@@ -48,24 +49,30 @@ def test_default_transform_designs_matches_task_design_space():
     assert not torch.allclose(raw_design_history, rollout.design_history)
 
 
-def test_explicit_design_space_transforms_instead_of_task_default():
-    torch.manual_seed(0)
-    task = LocationFinding(n_sources=1, dim_theta=2)
+def test_task_design_space_transforms_and_corrects_log_prob(monkeypatch):
     design_space = BoxDesignSpace(low=-2.0, high=3.0, event_shape=(2,))
+    task = LocationFinding(n_sources=1, dim_theta=2, design_space=design_space)
     policy_net = GaussianPolicyNet(design_space, event_shape_y=task.event_shape_y)
-    designer = PolicyDesigner(
-        task,
-        T=2,
-        design_net=policy_net,
-        design_space=design_space,
+    proposal = DesignProposal(
+        raw_design=torch.tensor([[0.25, -0.5]]),
+        log_prob=torch.tensor([-1.5]),
     )
+    monkeypatch.setattr(policy_net, "propose", lambda *args, **kwargs: proposal)
+    designer = PolicyDesigner(task, T=2, design_net=policy_net)
     y_history, design_history = designer.make_empty_history(1)
 
-    design, raw_design, _ = designer.design_from_history(y_history, design_history)
+    assert not hasattr(designer, "design_space")
+    design, raw_design, log_prob = designer.design_from_history(
+        y_history, design_history
+    )
+    expected_design, expected_log_prob = task.design_space.to_design(
+        proposal.raw_design, proposal.log_prob
+    )
 
-    torch.testing.assert_close(design, design_space.to_design(raw_design))
-    assert not torch.equal(design, task.design_space.to_design(raw_design))
-    assert design_space.contains(design)
+    torch.testing.assert_close(raw_design, proposal.raw_design)
+    torch.testing.assert_close(design, expected_design)
+    torch.testing.assert_close(log_prob, expected_log_prob)
+    assert task.design_space.contains(design)
 
 
 def test_transform_designs_false_opts_out():

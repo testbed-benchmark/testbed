@@ -56,7 +56,8 @@ class Trainer:
         save_path = self.manager.path("final_step.pt")
         torch.save(
             {
-                "model": self.designer.design_net.state_dict(),
+                "design_net": self.designer.design_net.state_dict(),
+                "use_raw_history": self.designer.use_raw_history,
                 "step": step,
             },
             save_path,
@@ -118,7 +119,8 @@ class Trainer:
 
             torch.save(
                 {
-                    "model": self.designer.design_net.state_dict(),
+                    "design_net": self.designer.design_net.state_dict(),
+                    "use_raw_history": self.designer.use_raw_history,
                     "step": step,
                     "metric": metric_val,
                 },

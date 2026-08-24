@@ -5,6 +5,7 @@ from math import log
 
 import pytest
 import torch
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import nn
 
@@ -21,12 +22,17 @@ from testbed.design_nets import (
 )
 from testbed.designers import PolicyDesigner
 from testbed.envs.history import History
+from testbed.eval.eval_policy import (
+    build_design_net as reconstruct_design_net,
+)
+from testbed.eval.eval_policy import (
+    evaluate_checkpoint,
+)
 from testbed.methods.rlboed import (
     Trainer,
     _CompactEpisodeReplayBuffer,
     _resolve_buffer_device,
     _set_seed,
-    build_design_space,
     build_env,
     build_replay_buffer,
     make_networks,
@@ -393,8 +399,33 @@ def _tiny_cfg(**sac_overrides):
             "torch_deterministic": True,
             "device": "cpu",
             "T": 2,
+            "task": {
+                "_target_": "testbed.tasks.LocationFinding",
+                "n_sources": 1,
+                "dim_theta": 2,
+                "design_space": {
+                    "_target_": "testbed.core.design_spaces.BoxDesignSpace",
+                    "low": "${design_space.low}",
+                    "high": "${design_space.high}",
+                    "event_shape": [2],
+                },
+            },
             "design_space": {"low": -2.0, "high": 3.0},
             "reward": {"n_contrastive": 2, "outcome_low": -3.0, "outcome_high": 10.0},
+            "design_net": {
+                "_target_": "testbed.design_nets.make_deepset_stochastic_policy",
+                "dim_h": [128, 128],
+                "dim_emb": 64,
+                "log_std_min": -20.0,
+                "log_std_max": 0.0,
+                "init_std": 3**-0.5,
+                "normalize_design_history": True,
+                "design_history_bounds": [0.0, 1.0],
+                "outcome_bounds": [
+                    "${reward.outcome_low}",
+                    "${reward.outcome_high}",
+                ],
+            },
             "eval_every": 0,
             "eval_n_contrastive": 4,
             "sac": {
@@ -409,7 +440,6 @@ def _tiny_cfg(**sac_overrides):
                 "gradient_steps_per_iteration": 1,
                 "policy_lr": 1e-4,
                 "q_lr": 3e-4,
-                "policy_init_std": 3**-0.5,
                 "policy_frequency": 1,
                 "target_network_frequency": 1,
                 "alpha": None,
@@ -426,14 +456,14 @@ def _tiny_cfg(**sac_overrides):
 
 
 def _build_trainer(cfg, *, manager=None):
-    task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
-    design_space = build_design_space(cfg, task)
-    validate_config(task, cfg, design_space)
+    task = instantiate(cfg.task).to(cfg.device)
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
-    env = build_env(cfg, task, design_space)
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
+    validate_config(task, cfg, design_space)
+    env = build_env(cfg, task)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = PolicyDesigner(task, cfg.T, nets.actor, design_space=design_space)
+    designer = PolicyDesigner(task, cfg.T, nets.actor)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
 
 
@@ -444,11 +474,10 @@ def _episodic_returns(trainer):
 
 def test_trainer_requires_policy_designer():
     cfg = _tiny_cfg()
-    task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
-    design_space = build_design_space(cfg, task)
+    task = instantiate(cfg.task).to(cfg.device)
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
-    env = build_env(cfg, task, design_space)
+    nets = make_networks(task, cfg, task.device)
+    env = build_env(cfg, task)
     replay_buffer = build_replay_buffer(cfg, task)
 
     with pytest.raises(AssertionError):
@@ -474,9 +503,13 @@ def test_validate_config_accepts_categorical_design_space():
 def test_rlboed_uses_a_tasks_categorical_design_space():
     cfg = _tiny_cfg()
     task = PreyPopulation()
-    design_space = build_design_space(cfg, task)
+    cfg.task = {
+        "_target_": "testbed.tasks.PreyPopulation",
+    }
+    design_space = make_networks(task, cfg, task.device).design_space
 
-    assert design_space is task.design_space
+    assert isinstance(design_space, FiniteDesignSpace)
+    torch.testing.assert_close(design_space.values, task.design_space.values)
     validate_config(task, cfg, design_space)
 
 
@@ -485,7 +518,7 @@ def test_validate_config_rejects_inverted_outcome_bounds():
     cfg.reward.outcome_low = 10.0
     cfg.reward.outcome_high = -3.0
     task = LocationFinding(n_sources=1, dim_theta=2)
-    design_space = build_design_space(cfg, task)
+    design_space = BoxDesignSpace(-2.0, 3.0, task.event_shape_design)
 
     with pytest.raises(ValueError, match="outcome_low"):
         validate_config(task, cfg, design_space)
@@ -507,14 +540,15 @@ def test_categorical_train_step_updates_networks_with_finite_losses():
     cfg.reward.outcome_low = 0.0
     cfg.reward.outcome_high = 300.0
     task = PreyPopulation().to(cfg.device)
-    design_space = build_design_space(cfg, task)
-    validate_config(task, cfg, design_space)
+    cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
+    validate_config(task, cfg, design_space)
     trainer = Trainer(
         task,
         PolicyDesigner(task, cfg.T, nets.actor),
-        build_env(cfg, task, design_space),
+        build_env(cfg, task),
         build_replay_buffer(cfg, task),
         nets,
         cfg,
@@ -542,8 +576,9 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
     cfg.reward.outcome_low = 0.0
     cfg.reward.outcome_high = 300.0
     task = PreyPopulation().to(cfg.device)
-    design_space = build_design_space(cfg, task)
-    nets = make_networks(task, design_space, cfg, task.device)
+    cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
     with torch.no_grad():
         for parameter in nets.actor.parameters():
             parameter.zero_()
@@ -551,7 +586,7 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
     trainer = Trainer(
         task,
         PolicyDesigner(task, cfg.T, nets.actor),
-        build_env(cfg, task, design_space),
+        build_env(cfg, task),
         build_replay_buffer(cfg, task),
         nets,
         cfg,
@@ -584,8 +619,14 @@ def test_train_writes_checkpoints_and_metrics(tmp_path):
     run_dir = tmp_path / "run"
     final = torch.load(run_dir / "final_step.pt", weights_only=True)
     assert final["step"] == cfg.sac.num_training_iterations - 1
-    assert "designer" in final
+    assert "design_net" in final
+    assert "designer" not in final
+    assert "actor" not in final
     assert (run_dir / "best.pt").exists()
+    best = torch.load(run_dir / "best.pt", weights_only=True)
+    assert "design_net" in best
+    assert "designer" not in best
+    assert "actor" not in best
 
     records = [
         json.loads(line)
@@ -628,7 +669,9 @@ def test_trainer_produces_deployable_designer(tmp_path):
     checkpoint_path = tmp_path / "rlboed.pt"
     torch.save(trainer.build_checkpoint(), checkpoint_path)
     reloaded = torch.load(checkpoint_path, weights_only=True)
-    assert "designer" in reloaded
+    assert "design_net" in reloaded
+    assert "designer" not in reloaded
+    assert "actor" not in reloaded
     assert "actor_optimizer" in reloaded
 
 
