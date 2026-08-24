@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import random
 import time
+import warnings
 from dataclasses import dataclass
 from math import ceil, log
 
@@ -21,11 +22,9 @@ from testbed.core.design_spaces import (
     DesignSpace,
     FiniteDesignSpace,
 )
-from testbed.core.setup import setup
+from testbed.core.setup import instantiate_design_net, setup
 from testbed.design_nets import (
     CategoricalPolicyNet,
-    DeepSetCategoricalActor,
-    DeepSetGaussianActor,
     GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
@@ -338,14 +337,19 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.learning_starts must be non-negative.")
     if sac.entropy_anneal_rate < 0:
         raise ValueError("sac.entropy_anneal_rate must be non-negative.")
-    if sac.policy_init_std <= 0:
-        raise ValueError("sac.policy_init_std must be positive.")
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
-    if not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
+    if isinstance(design_space, DefaultDesignSpace):
+        warnings.warn(
+            "RLBOED is training with an unconstrained design space; SAC may "
+            "be unstable and the policy can diverge.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    elif not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
         raise TypeError(
-            "This RLBOED SAC implementation requires a BoxDesignSpace or "
-            "FiniteDesignSpace."
+            "RLBOED requires a BoxDesignSpace, FiniteDesignSpace, or "
+            "DefaultDesignSpace."
         )
 
 
@@ -365,7 +369,6 @@ class _SACNetworks:
 
 def make_networks(
     task: Task,
-    design_space: DesignSpace,
     cfg,
     device: torch.device,
 ) -> _SACNetworks:
@@ -375,20 +378,12 @@ def make_networks(
     event_shape_design = task.event_shape_design
     dim_y = event_shape_y.numel()
     dim_design = event_shape_design.numel()
+    design_space = task.design_space
+    actor = instantiate_design_net(cfg.design_net, task).to(device)
+    if not isinstance(actor, StochasticDesignNet):
+        raise TypeError("cfg.design_net must construct a StochasticDesignNet.")
 
     if isinstance(design_space, BoxDesignSpace):
-        actor_module = DeepSetGaussianActor(
-            event_shape_y=event_shape_y,
-            event_shape_design=event_shape_design,
-            init_std=sac.policy_init_std,
-        )
-        actor = GaussianPolicyNet(
-            design_space,
-            actor=actor_module,
-            normalize_design_history=True,
-            design_history_bounds=(0.0, 1.0),
-            outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
-        ).to(device)
         critic_kwargs = {
             "dim_y": dim_y,
             "dim_design": dim_design,
@@ -399,20 +394,23 @@ def make_networks(
         }
         qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
         qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
+    elif isinstance(design_space, DefaultDesignSpace):
+        if not isinstance(actor, GaussianPolicyNet):
+            raise TypeError(
+                "Unconstrained RLBOED design spaces require a GaussianPolicyNet."
+            )
+        critic_kwargs = {
+            "dim_y": dim_y,
+            "dim_design": dim_design,
+            "design_low": actor.design_low.detach().clone(),
+            "design_high": actor.design_high.detach().clone(),
+            "outcome_low": cfg.reward.outcome_low,
+            "outcome_high": cfg.reward.outcome_high,
+        }
+        qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
+        qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
     else:
         values = design_space.values.reshape(design_space.n_designs, dim_design)
-        actor_module = DeepSetCategoricalActor(
-            event_shape_y=event_shape_y,
-            event_shape_design=event_shape_design,
-            n_designs=design_space.n_designs,
-        )
-        actor = CategoricalPolicyNet(
-            design_space,
-            actor=actor_module,
-            normalize_design_history=True,
-            design_history_bounds=(0.0, 1.0),
-            outcome_bounds=(cfg.reward.outcome_low, cfg.reward.outcome_high),
-        ).to(device)
         critic_kwargs = {
             "dim_y": dim_y,
             "dim_design": dim_design,
@@ -509,7 +507,7 @@ def collect_episode_batch(
 
     for _ in range(horizon):
         with torch.no_grad():
-            designs, _ = _propose_design(actor, env.design_space, obs)
+            designs, _ = _propose_design(actor, task.design_space, obs)
         next_obs, rewards, terminations, truncations, _ = env.step(designs)
 
         dones = terminations | truncations
@@ -595,9 +593,7 @@ def sac_update(
         )
 
     if is_categorical:
-        design_indices = (
-            nets.actor.design_space.encode(data_designs).long().unsqueeze(-1)
-        )
+        design_indices = nets.design_space.encode(data_designs).long().unsqueeze(-1)
         qf1_a_values = nets.qf1(data_obs).gather(1, design_indices).squeeze(-1)
         qf2_a_values = nets.qf2(data_obs).gather(1, design_indices).squeeze(-1)
     else:
@@ -687,7 +683,7 @@ class Trainer:
         self.device = task.device
         if cfg.sac.target_entropy is None:
             self.target_entropy = (
-                0.98 * log(self.nets.actor.design_space.n_designs)
+                0.98 * log(self.nets.design_space.n_designs)
                 if isinstance(self.nets.actor, CategoricalPolicyNet)
                 else -float(task.event_shape_design.numel())
             )
@@ -838,7 +834,6 @@ class Trainer:
         eval_env = build_env(
             self.cfg,
             self.task,
-            self.env.design_space,
             n_contrastive=self.cfg.eval_n_contrastive,
         )
         obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
@@ -847,7 +842,7 @@ class Trainer:
             raw_designs = self.designer.design_net(
                 obs.outcomes, obs.designs, mask=obs.mask
             )
-            designs = eval_env.design_space.to_design(raw_designs)
+            designs = self.task.design_space.to_design(raw_designs)
             obs, rewards, _, _, _ = eval_env.step(designs)
             returns += rewards
 
@@ -907,30 +902,15 @@ class Trainer:
 
     def build_checkpoint(self, step=None, metric=None):
         """Builds the checkpoint dict holding weights and training state."""
-        design_space = self.env.design_space
-        # The trained actor is the deployable designer, so its weights are stored
-        # under both keys: "designer" for inference-only loading and "actor" for
-        # resuming SAC training alongside the critic/optimizers.
-        actor_state_dict = self.nets.actor.state_dict()
+        design_space = self.task.design_space
         checkpoint = {
             "config": OmegaConf.to_container(
                 self.cfg, resolve=True, throw_on_missing=False
             ),
             "horizon": self.env.horizon,
-            "design_low": (
-                design_space.low.detach().cpu()
-                if isinstance(design_space, BoxDesignSpace)
-                else design_space.values.amin(dim=0).detach().cpu()
-            ),
-            "design_high": (
-                design_space.high.detach().cpu()
-                if isinstance(design_space, BoxDesignSpace)
-                else design_space.values.amax(dim=0).detach().cpu()
-            ),
             "outcome_low": torch.as_tensor(self.cfg.reward.outcome_low),
             "outcome_high": torch.as_tensor(self.cfg.reward.outcome_high),
-            "designer": actor_state_dict,
-            "actor": actor_state_dict,
+            "design_net": self.nets.actor.state_dict(),
             "qf1": self.nets.qf1.state_dict(),
             "qf2": self.nets.qf2.state_dict(),
             "qf1_target": self.nets.qf1_target.state_dict(),
@@ -950,8 +930,15 @@ class Trainer:
             "training_iterations": self.cfg.sac.num_training_iterations,
             "global_step": self.cfg.sac.num_training_iterations,
         }
-        if isinstance(design_space, FiniteDesignSpace):
+        if isinstance(design_space, BoxDesignSpace):
+            checkpoint["design_low"] = design_space.low.detach().cpu()
+            checkpoint["design_high"] = design_space.high.detach().cpu()
+        elif isinstance(design_space, FiniteDesignSpace):
+            checkpoint["design_low"] = design_space.values.amin(dim=0).detach().cpu()
+            checkpoint["design_high"] = design_space.values.amax(dim=0).detach().cpu()
             checkpoint["design_values"] = design_space.values.detach().cpu()
+        # DefaultDesignSpace has no physical bounds. Its normalization
+        # references are already part of the actor and critic state dicts.
         if step is not None:
             checkpoint["step"] = step
         if metric is not None:
@@ -960,27 +947,11 @@ class Trainer:
 
 
 # ============================================================================
-# Helper + factory functions
+# Helper functions
 # ============================================================================
 
 
-def build_design_space(cfg, task):
-    """Returns the task's declared space or configures a continuous box.
-
-    Every task now carries a design space, with ``DefaultDesignSpace`` standing
-    in for "declares no real space of its own", so that -- rather than ``None``
-    -- is what falls back to the configured box.
-    """
-    if not isinstance(task.design_space, DefaultDesignSpace):
-        return task.design_space
-    return BoxDesignSpace(
-        cfg.design_space.low,
-        cfg.design_space.high,
-        event_shape=task.event_shape_design,
-    )
-
-
-def build_env(cfg, task, design_space, *, n_contrastive=None):
+def build_env(cfg, task, *, n_contrastive=None):
     """Instantiates the BED environment with the RL-BOED dense reward.
 
     ``n_contrastive`` overrides ``cfg.reward.n_contrastive`` for the reward's
@@ -992,7 +963,6 @@ def build_env(cfg, task, design_space, *, n_contrastive=None):
     return BEDEnv(
         task,
         horizon=cfg.T,
-        design_space=design_space,
         reward_fn=RLBOEDDenseReward(n_contrastive),
         batch_shape=(cfg.sac.num_envs,),
     )
@@ -1017,7 +987,11 @@ def build_replay_buffer(cfg, task):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/rlboed")
+@hydra.main(
+    version_base="1.3",
+    config_path="../recipes",
+    config_name="experiments/location_finding/rlboed",
+)
 def main(cfg):
     """Entry point for RL-BOED (SAC) training.
 
@@ -1028,21 +1002,19 @@ def main(cfg):
     """
     manager, task = setup(cfg)
 
-    design_space = build_design_space(cfg, task)
-    validate_config(task, cfg, design_space)
-
     # Seed immediately before network construction (mirrors the original
     # fit_rlboed ordering) so weight initialization is reproducible.
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
+    validate_config(task, cfg, design_space)
 
-    env = build_env(cfg, task, design_space)
+    env = build_env(cfg, task)
     replay_buffer = build_replay_buffer(cfg, task)
     designer = PolicyDesigner(
         task,
         cfg.T,
         nets.actor,
-        design_space=design_space,
     )
 
     trainer = Trainer(

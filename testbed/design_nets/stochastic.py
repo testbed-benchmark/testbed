@@ -7,7 +7,12 @@ import torch
 from torch import Tensor, nn
 from torch.distributions import Categorical, Normal
 
-from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
+from testbed.core.design_spaces import (
+    BoxDesignSpace,
+    DefaultDesignSpace,
+    DesignSpace,
+    FiniteDesignSpace,
+)
 from testbed.design_nets.base import DesignNet, DesignProposal
 from testbed.design_nets.encoder import DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.history import PreparedHistory, prepare_history
@@ -346,7 +351,7 @@ class DeepSetCategoricalActor(CategoricalPolicyActor):
 
 
 class GaussianPolicyNet(StochasticDesignNet):
-    """Gaussian policy for continuous box design spaces.
+    """Gaussian policy for continuous design spaces.
 
     The network proposes values in unconstrained Gaussian coordinates. The
     caller's design space owns the constraint transform and density correction.
@@ -356,7 +361,7 @@ class GaussianPolicyNet(StochasticDesignNet):
 
     def __init__(
         self,
-        design_space: BoxDesignSpace,
+        design_space: BoxDesignSpace | DefaultDesignSpace,
         actor: nn.Module | None = None,
         *,
         encoder: HistoryEncoder | None = None,
@@ -369,8 +374,9 @@ class GaussianPolicyNet(StochasticDesignNet):
         """Initializes the policy network.
 
         Args:
-            design_space: Physical continuous design space whose shape defines
-                the proposal and whose bounds support history normalization.
+            design_space: Continuous design space whose shape defines the
+                proposal. Box bounds support history normalization; an
+                unconstrained space uses [-1, 1] as a reference scale only.
             actor: Optional module mapping flattened histories to Gaussian
                 mean and log standard deviation.
             encoder: Optional history encoder used to build a default Gaussian
@@ -387,7 +393,6 @@ class GaussianPolicyNet(StochasticDesignNet):
         """
         super().__init__()
 
-        self.design_space = design_space
         self.event_shape_design = torch.Size(design_space.event_shape)
         self.dim_design = self.event_shape_design.numel()
         self.normalize_design_history = bool(normalize_design_history)
@@ -418,10 +423,22 @@ class GaussianPolicyNet(StochasticDesignNet):
                 event_shape_design=self.event_shape_design,
             )
 
-        low = design_space.low.reshape(self.dim_design)
-        high = design_space.high.reshape(self.dim_design)
+        if isinstance(design_space, BoxDesignSpace):
+            low = design_space.low.reshape(self.dim_design)
+            high = design_space.high.reshape(self.dim_design)
+        elif isinstance(design_space, DefaultDesignSpace):
+            # Reference scale for network inputs only; DefaultDesignSpace keeps
+            # policy proposals unconstrained.
+            low = torch.full((self.dim_design,), -1.0)
+            high = torch.full((self.dim_design,), 1.0)
+        else:
+            raise TypeError(
+                "GaussianPolicyNet requires a BoxDesignSpace or DefaultDesignSpace."
+            )
         if torch.any(low >= high):
-            raise ValueError("GaussianPolicyNet requires finite-width design bounds.")
+            raise ValueError(
+                "GaussianPolicyNet requires finite-width reference bounds."
+            )
         self.register_buffer("design_low", low.clone())
         self.register_buffer("design_high", high.clone())
 
@@ -547,9 +564,9 @@ class CategoricalPolicyNet(StochasticDesignNet):
     """Categorical policy that maps design indices to physical designs.
 
     Attributes:
-        design_space: Finite set of physical designs.
         event_shape_design: Shape of one physical design.
         dim_design: Flattened design dimension.
+        n_designs: Number of categorical designs.
         normalize_design_history: Whether design histories are normalized.
         design_history_bounds: Target bounds for normalized design histories.
         actor: Module that produces one logit per categorical design.
@@ -593,9 +610,9 @@ class CategoricalPolicyNet(StochasticDesignNet):
             ValueError: If history or outcome bounds are invalid.
         """
         super().__init__()
-        self.design_space = design_space
         self.event_shape_design = torch.Size(design_space.event_shape)
         self.dim_design = self.event_shape_design.numel()
+        self.n_designs = design_space.n_designs
         self.normalize_design_history = bool(normalize_design_history)
         self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
         if self.design_history_bounds[0] >= self.design_history_bounds[1]:
@@ -607,7 +624,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
         elif encoder is not None:
             self.actor = CategoricalPolicyActor(
                 encoder,
-                head or CategoricalHead(encoder.dim_emb, design_space.n_designs),
+                head or CategoricalHead(encoder.dim_emb, self.n_designs),
             )
         elif head is not None:
             raise ValueError("head requires an encoder.")
@@ -619,11 +636,11 @@ class CategoricalPolicyNet(StochasticDesignNet):
             self.actor = DeepSetCategoricalActor(
                 event_shape_y=event_shape_y,
                 event_shape_design=self.event_shape_design,
-                n_designs=design_space.n_designs,
+                n_designs=self.n_designs,
             )
 
         self.register_buffer("design_values", design_space.values.clone())
-        values = self.design_values.reshape(design_space.n_designs, self.dim_design)
+        values = self.design_values.reshape(self.n_designs, self.dim_design)
         if not torch.is_floating_point(values):
             values = values.to(torch.get_default_dtype())
         self.register_buffer("design_low", values.amin(dim=0))
@@ -715,7 +732,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
     ) -> Tensor:
         """Returns validated categorical logits in flattened actor coordinates."""
         logits = self.actor(y_flat, design_flat, mask=mask_flat)
-        expected_shape = (design_flat.shape[0], self.design_space.n_designs)
+        expected_shape = (design_flat.shape[0], self.n_designs)
         if logits.shape != expected_shape:
             raise ValueError(
                 "actor logits must have shape "
@@ -766,3 +783,52 @@ class CategoricalPolicyNet(StochasticDesignNet):
         """
         log_probs = torch.log_softmax(self.logits_from_observation(obs), dim=-1)
         return log_probs.exp(), log_probs
+
+
+def make_deepset_stochastic_policy(
+    *,
+    design_space: DesignSpace,
+    dim_h,
+    dim_emb: int,
+    log_std_min: float,
+    log_std_max: float,
+    init_std: float,
+    normalize_design_history: bool,
+    design_history_bounds,
+    outcome_bounds,
+    event_shape_y,
+    event_shape_design,
+) -> StochasticDesignNet:
+    """Builds a DeepSets stochastic policy for a supported design space."""
+    event_shape_y = torch.Size(event_shape_y)
+    event_shape_design = torch.Size(event_shape_design)
+
+    common_kwargs = {
+        "normalize_design_history": normalize_design_history,
+        "design_history_bounds": tuple(design_history_bounds),
+        "outcome_bounds": tuple(outcome_bounds),
+    }
+    if isinstance(design_space, (BoxDesignSpace, DefaultDesignSpace)):
+        actor = DeepSetGaussianActor(
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+            log_std_min=log_std_min,
+            log_std_max=log_std_max,
+            init_std=init_std,
+        )
+        return GaussianPolicyNet(design_space, actor=actor, **common_kwargs)
+    if isinstance(design_space, FiniteDesignSpace):
+        actor = DeepSetCategoricalActor(
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
+            n_designs=design_space.n_designs,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+        )
+        return CategoricalPolicyNet(design_space, actor=actor, **common_kwargs)
+    raise TypeError(
+        "DeepSets stochastic policies require a BoxDesignSpace, "
+        "DefaultDesignSpace, or FiniteDesignSpace."
+    )

@@ -43,7 +43,8 @@ class Task(ABC, nn.Module):
         implicit_likelihood (bool):
             Whether the likelihood is implicit (default: False).
         design_space (optional):
-            Constraints on the space of designs (default: None).
+            Constraints on the space of designs. Its event shape must match
+            ``event_shape_design`` (default: None).
         validate_designs (bool):
             Whether outcome_logp/sample_outcome/history_logp/sample_joint check
             incoming designs against design_space.contains(...) and raise if a
@@ -100,11 +101,18 @@ class Task(ABC, nn.Module):
         self.discrete_y = discrete_y
         self.discrete_theta = discrete_theta
 
-        self.design_space = (
+        resolved_design_space = (
             design_space
             if design_space is not None
             else DefaultDesignSpace(self.event_shape_design)
         )
+        if resolved_design_space.event_shape != self.event_shape_design:
+            raise ValueError(
+                "design_space.event_shape must match event_shape_design; "
+                f"expected {tuple(self.event_shape_design)}, got "
+                f"{tuple(resolved_design_space.event_shape)}."
+            )
+        self.design_space = resolved_design_space
         self.validate_designs = validate_designs
 
     @property

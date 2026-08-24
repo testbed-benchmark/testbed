@@ -22,7 +22,6 @@ class PolicyDesigner(Designer):
         T,
         design_net,
         *,
-        design_space=None,
         reparameterize_policy: bool = False,
         hooks: Sequence[RolloutHook] = (),
         use_raw_history: bool = False,
@@ -34,8 +33,6 @@ class PolicyDesigner(Designer):
             task: Task for which designs are produced.
             T: Number of experimental steps.
             design_net: Network implementing the common ``propose()`` API.
-            design_space: Space used to transform proposals. Defaults to the
-                task's design space.
             reparameterize_policy: Request reparameterized samples from policy
                 networks that support them.
             hooks: Optional rollout hooks.
@@ -52,11 +49,6 @@ class PolicyDesigner(Designer):
             transform_designs=transform_designs,
         )
         self.design_net = design_net
-        self.design_space = task.design_space if design_space is None else design_space
-        if self.design_space.event_shape != task.event_shape_design:
-            raise ValueError(
-                "design_space.event_shape must match task.event_shape_design."
-            )
         self.reparameterize_policy = bool(reparameterize_policy)
         self.use_raw_history = bool(use_raw_history)
         normalizes_physical_history = bool(self.design_net.normalize_design_history)
@@ -138,10 +130,10 @@ class PolicyDesigner(Designer):
             return proposal.raw_design, proposal.raw_design, proposal.log_prob
 
         if proposal.log_prob is None:
-            design = self.design_space.to_design(proposal.raw_design)
+            design = self.task.design_space.to_design(proposal.raw_design)
             return design, proposal.raw_design, None
 
-        design, log_prob = self.design_space.to_design(
+        design, log_prob = self.task.design_space.to_design(
             proposal.raw_design,
             proposal.log_prob,
         )

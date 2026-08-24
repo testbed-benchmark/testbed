@@ -113,7 +113,7 @@ def test_maybe_save_best_saves_checkpoint_on_improvement(tmp_path):
     best_path = tmp_path / "test" / "best.pt"
     assert best_path.exists()
     checkpoint = torch.load(best_path, weights_only=True)
-    assert set(checkpoint.keys()) >= {"model", "step", "metric"}
+    assert set(checkpoint.keys()) >= {"design_net", "step", "metric"}
     assert checkpoint["metric"] == pytest.approx(5.0)
     assert checkpoint["step"] == 0
 
@@ -139,7 +139,7 @@ def test_train_runs_with_periodic_evaluation(tmp_path):
     run_dir = tmp_path / "train_test"
     checkpoint = torch.load(run_dir / "final_step.pt", weights_only=True)
     assert checkpoint["step"] == cfg.n_train_iter - 1
-    assert "model" in checkpoint
+    assert "design_net" in checkpoint
 
     records = [
         json.loads(line)

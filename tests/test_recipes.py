@@ -23,6 +23,7 @@ ENTRY_POINT_RECIPES = [
     "method/rlboed",
     "method/var_post",
     "method/joint_var_post",
+    "experiments/location_finding/rlboed",
     "experiments/location_finding_2src/actionbed",
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
@@ -72,17 +73,39 @@ def test_actionbed_recipe_wires_design_and_action_nets():
     )
 
 
-def test_rlboed_recipe_uses_default_location_finding_task():
+def test_rlboed_method_recipe_requires_environment_outcome_bounds():
     cfg = _compose("method/rlboed")
     assert cfg.task.n_sources == 1
+    assert (
+        cfg.design_net._target_ == "testbed.design_nets.make_deepset_stochastic_policy"
+    )
+    assert cfg.design_net.dim_h == [128, 128]
+    assert cfg.design_net.dim_emb == 64
+    assert cfg.design_net.log_std_min == -20.0
+    assert cfg.design_net.log_std_max == 0.0
+    assert cfg.design_net.init_std == pytest.approx(3**-0.5)
+    assert cfg.design_net.normalize_design_history is True
+    assert cfg.design_net.design_history_bounds == [0.0, 1.0]
+    assert OmegaConf.is_missing(cfg.reward, "outcome_low")
+    assert OmegaConf.is_missing(cfg.reward, "outcome_high")
+    assert "design_space" not in cfg
     assert cfg.sac.num_envs > 0
+
+
+def test_location_finding_rlboed_recipe_supplies_environment_bounds():
+    cfg = _compose("experiments/location_finding/rlboed")
+    assert "design_space" not in cfg
+    assert (cfg.task.design_space.low, cfg.task.design_space.high) == (-4.0, 4.0)
+    assert (cfg.reward.outcome_low, cfg.reward.outcome_high) == (-3.0, 10.0)
+    assert cfg.design_net.outcome_bounds == [-3.0, 10.0]
 
 
 def test_two_source_rlboed_recipe_uses_two_source_task():
     cfg = _compose("experiments/location_finding_2src/rlboed")
     assert cfg.task.n_sources == 2
     assert cfg.T == 30
-    assert (cfg.design_space.low, cfg.design_space.high) == (-4.0, 4.0)
+    assert "design_space" not in cfg
+    assert (cfg.task.design_space.low, cfg.task.design_space.high) == (-4.0, 4.0)
     assert (cfg.reward.outcome_low, cfg.reward.outcome_high) == (-3.0, 10.0)
 
 

@@ -38,21 +38,13 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
+from testbed.core.setup import instantiate_design_net
 from testbed.designers import PolicyDesigner
 
 
 def build_design_net(cfg, task):
-    """Instantiates a design policy net from a saved run config.
-
-    (Duplicated in dad.py/actionbed.py/var_post.py; kept local here so
-    this script has no dependency on any one method's Trainer module.)
-    """
-    return instantiate(
-        cfg.design_net,
-        event_shape_y=task.event_shape_y,
-        event_shape_design=task.event_shape_design,
-        event_shape_out=task.event_shape_design,
-    )
+    """Instantiates a design policy net from a saved run config."""
+    return instantiate_design_net(cfg.design_net, task)
 
 
 def _chunked_contrastive_logsumexps(task, rollout, n_contrastive, chunk_size):
@@ -144,13 +136,14 @@ def evaluate_checkpoint(
     design_net.load_state_dict(state[key])
     design_net.eval()
 
-    # use_raw_history mirrors the default the training run was built with, so
-    # evaluation conditions the net on the same history coordinates.
+    use_raw_history = state.get(
+        "use_raw_history", not design_net.produces_policy_log_probs
+    )
     designer = PolicyDesigner(
         task,
         cfg.T,
         design_net,
-        use_raw_history=not design_net.produces_policy_log_probs,
+        use_raw_history=use_raw_history,
     )
 
     lower_gains, upper_gains = [], []
