@@ -24,6 +24,10 @@ design_net:
     - ${reward.outcome_high}
 # reward
 reward:
+  # Environment-specific reference range for normalizing outcome histories in
+  # the policy and critic networks; experiment recipes must supply both values.
+  outcome_low: ???
+  outcome_high: ???
   n_contrastive: 100_000
 # eval
 eval_every: 0  # no periodic eval during SAC training
