@@ -1,8 +1,25 @@
-_target_: testbed.tasks.LocationFinding
-n_sources: 2
-dim_theta: 2
-# Default hyperparameters, explicitly pinned for the two-source experiment.
-amplitude: 1.0
-base_signal: 0.1
-max_signal: 1e-4
-noise_scale: 0.5
+# @package _global_
+
+# Task defaults
+T: 30
+
+task:
+  _target_: testbed.tasks.LocationFinding
+  n_sources: 2
+  dim_theta: 2
+  dim_y: 1
+  base_signal: 0.1
+  max_signal: 1e-4
+  amplitude: 1.0
+  noise_scale: 0.5
+  exponent: 2.0
+  prior: null  # use the standard isotropic Gaussian source prior
+
+# Bounds used by methods that need an explicit box design space or outcome
+# normalization range.
+design_space:
+  low: -4.0
+  high: 4.0
+reward:
+  outcome_low: -3.0
+  outcome_high: 10.0

@@ -1,18 +1,19 @@
+# @package _global_
+
 defaults:
-  - system: default
-  - task: location_finding
-  - net@design_net: attentive_policy
-  - net@action_net: attentive_policy
-  - wandb: default
-  - hydra_run: default
+  - /system: default
+  - /task: location_finding
+  - /net@design_net: attentive_policy
+  - /net@action_net: attentive_policy
+  - /wandb: default
+  - /hydra_run: default
   - _self_
 # system (device/save_dir come from the system group)
 seed: 0
-T: 10
 # loss
 loss:
   _target_: testbed.design_objectives.SortedMSELoss  # testbed.design_objectives.MSELoss also works
-  # epsilon: 1e-8  # Only needed for the LogMSE variants
+  reduction: mean
 # training
 n_train_iter: 5_000
 n_action_warmup_iter: 0

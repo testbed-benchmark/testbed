@@ -4,7 +4,14 @@ encoder_dim_h: 256
 dim_emb: 128
 num_heads: 4
 num_blocks: 3
-# sources are exchangeable for multi-source LocationFinding tasks (n.b. a no-op
-# for the default single-source task); experiments/location_finding_2src/
-# var_post_scorebed_repro.yaml turns this on.
+trunk_dim_h: null  # use dim_emb
+trunk_activation:
+  _target_: torch.nn.GELU
+  _partial_: true
+log_scale_min: -7.0
+log_scale_max: 3.0
+init_scale: 1.0
+theta_loc: null
+theta_scale: null
+# Combination recipes can enable this for tasks with exchangeable object axes.
 canonicalize_theta: false

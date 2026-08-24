@@ -321,7 +321,9 @@ def build_loss_fn(cfg, task):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="actionbed")
+@hydra.main(
+    version_base="1.3", config_path="../recipes", config_name="method/actionbed"
+)
 def main(cfg):
     """Entry point for ActionBED training.
 
