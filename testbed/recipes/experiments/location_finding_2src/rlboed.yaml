@@ -6,3 +6,7 @@ defaults:
   - _self_
 
 # The task recipe supplies the constructor settings, horizon, and task bounds.
+
+wandb:
+  project: location_finding_2src  # one project per task; methods separate by group
+  group: rlboed

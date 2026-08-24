@@ -9,7 +9,12 @@ defaults:
 # Hyperparameter settings for reproducing ActionBED on the 2D, 2 source LF problem
 # See: ActionBED (Rossa et al., 2026), Table 13.
 
-seed: 42
+seed: 42  # single-run default; seed sweeps override this
+
+wandb:
+  project: location_finding_2src  # one project per task; methods separate by group
+  group: actionbed
+
 # loss
 loss:
   _target_: testbed.design_objectives.PermutationInvariantMSELoss
