@@ -16,15 +16,15 @@ does not fit as one `[b*L, T, ...]` tensor), and combined by
 one set of draws, so the sampling is paid for once.
 
 Usage:
-    python -m testbed.eval.eval_policy <run_dir> [--checkpoint final_step.pt]
-        [--n_outer 2048] [--n_contrastive 500000] [--outer_batch_size 256]
-        [--contrastive_chunk_size 2000] [--use_raw_weights]
+    python -m testbed.eval.eval_policy <run_dir>
 
 <run_dir> is a training run's output directory (containing .hydra/config.yaml
-and the checkpoint file).
+and the checkpoint file). Checkpoint, sample sizes and device all come from the
+run's saved `final_eval` block, so they are set in the recipe and overridden
+like any other Hydra value (`final_eval.n_outer=32`).
 """
 
-import argparse
+import sys
 from pathlib import Path
 
 import torch
@@ -122,25 +122,27 @@ def evaluate_checkpoint(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("run_dir")
-    parser.add_argument("--checkpoint", default="final_step.pt")
-    parser.add_argument("--n_outer", type=int, default=2048)
-    parser.add_argument("--n_contrastive", type=int, default=500_000)
-    parser.add_argument("--outer_batch_size", type=int, default=256)
-    parser.add_argument("--contrastive_chunk_size", type=int, default=2_000)
-    parser.add_argument("--use_raw_weights", action="store_true")
-    parser.add_argument("--device", default="cpu")
-    args = parser.parse_args()
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: python -m testbed.eval.eval_policy <run_dir>")
 
-    results = evaluate_checkpoint(
-        args.run_dir,
-        checkpoint=args.checkpoint,
-        n_outer=args.n_outer,
-        n_contrastive=args.n_contrastive,
-        outer_batch_size=args.outer_batch_size,
-        contrastive_chunk_size=args.contrastive_chunk_size,
-        use_raw_weights=args.use_raw_weights,
-        device=args.device,
+    run_dir = Path(sys.argv[1])
+    cfg = OmegaConf.load(run_dir / ".hydra" / "config.yaml")
+    settings = OmegaConf.select(cfg, "final_eval")
+    if settings is None:
+        raise SystemExit(
+            f"{run_dir} has no final_eval block; add `- /final_eval: default` to "
+            f"the method recipe's defaults."
+        )
+
+    print(
+        evaluate_checkpoint(
+            str(run_dir),
+            checkpoint=settings.checkpoint,
+            n_outer=settings.n_outer,
+            n_contrastive=settings.n_contrastive,
+            outer_batch_size=settings.outer_batch_size,
+            contrastive_chunk_size=settings.contrastive_chunk_size,
+            use_raw_weights=settings.use_raw_weights,
+            device=cfg.device,
+        )
     )
-    print(results)

@@ -16,8 +16,10 @@ the W&B run name. The path is resolved here rather than left to Hydra's
 the W&B run id up front (``WANDB_RUN_ID``) so eval metrics join the training
 run instead of opening a new one.
 
-Evaluation is best-effort: a failure is reported but does not fail the run,
-since the checkpoint is already saved. Pass ``--no-eval`` to skip it.
+Evaluation is configured by the recipe's ``final_eval`` block, so its sizes are
+overridden like any other Hydra value (``final_eval.n_outer=32``) and
+``final_eval.enabled=false`` skips it. A failure there is reported but does not
+fail the run, since the checkpoint is already saved.
 
 Set ``WANDB_ENTITY`` to log to a team rather than your default entity.
 
@@ -66,11 +68,6 @@ def main() -> None:
         default=None,
         help="Entry point under testbed/methods (default: the recipe's basename).",
     )
-    parser.add_argument(
-        "--no-eval", action="store_true", help="Skip the post-training evaluation."
-    )
-    parser.add_argument("--eval-n-outer", type=int, default=None)
-    parser.add_argument("--eval-n-contrastive", type=int, default=None)
     parser.add_argument(
         "overrides",
         nargs="*",
@@ -136,7 +133,7 @@ def main() -> None:
 
     print(f"→ {' '.join(command)}")
     train_status = subprocess.call(command, env=env)
-    if train_status != 0 or args.no_eval:
+    if train_status != 0:
         sys.exit(train_status)
 
     # Recorded so a later manual eval_run.py lands on the same W&B run.
@@ -151,10 +148,6 @@ def main() -> None:
         "--wandb-run-id",
         wandb_run_id,
     ]
-    if args.eval_n_outer is not None:
-        eval_command += ["--n-outer", str(args.eval_n_outer)]
-    if args.eval_n_contrastive is not None:
-        eval_command += ["--n-contrastive", str(args.eval_n_contrastive)]
 
     print(f"→ {' '.join(eval_command)}")
     eval_status = subprocess.call(eval_command, env=env)

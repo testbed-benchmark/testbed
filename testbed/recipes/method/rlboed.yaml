@@ -4,6 +4,7 @@ defaults:
   - /system: default
   - /task: location_finding
   - /wandb: default
+  - /final_eval: default
   - /hydra_run: default
   - _self_
 # system (device/save_dir come from the system group)

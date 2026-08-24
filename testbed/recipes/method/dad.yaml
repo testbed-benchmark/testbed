@@ -5,6 +5,7 @@ defaults:
   - /task: location_finding
   - /net@design_net: attentive_policy
   - /wandb: default
+  - /final_eval: default
   - /hydra_run: default
   - _self_
 # system (device/save_dir come from the system group)

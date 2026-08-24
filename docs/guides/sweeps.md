@@ -80,9 +80,24 @@ python scripts/eval_run.py --run-dir runs/location_finding_2src_actionbed_seed3_
 The run id is read back from `<run_dir>/wandb_run_id`, so a later manual eval still
 lands on the original W&B run. Pass `--no-wandb` to only write the JSON.
 
+Evaluation is configured by the `final_eval` group, which every method recipe composes
+alongside `wandb`:
 
-Size the evaluation with `--eval-n-outer` and `--eval-n-contrastive` on
-`scripts/sweep_run.py` when the defaults do not fit the time available.
+```yaml
+final_eval:
+  enabled: true
+  checkpoint: final_step.pt
+  n_outer: 2_048
+  n_contrastive: 1_000_000
+  outer_batch_size: 256
+  contrastive_chunk_size: 200_000
+  use_raw_weights: false
+```
+
+ Add `final_eval.n_outer=32` to a sweep's `command` block when the defaults do not fit the
+time available, and `final_eval.enabled=false` to skip evaluation for that recipe.
+These are not wrapper flags: the values are read back from the run's saved config, which
+is also how `python -m testbed.eval.eval_policy <run_dir>` sizes itself.
 
 ## Picking up after crashes
 

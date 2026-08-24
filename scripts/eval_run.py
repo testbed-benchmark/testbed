@@ -9,10 +9,13 @@ run. It is also runnable by hand on any run directory::
 
     python scripts/eval_run.py --run-dir runs/location_finding_2src_actionbed_seed3_...
 
+Sizes come from the run's saved ``final_eval`` config block, so they are set in
+the recipe and overridden like any other Hydra value
+(``final_eval.n_outer=32``), and ``final_eval.enabled=false`` skips evaluation.
+
 The W&B run id is read from ``<run_dir>/wandb_run_id``, which sweep_run.py
 writes; pass ``--wandb-run-id`` to override it, or ``--no-wandb`` to only write
 the JSON.
-
 """
 
 from __future__ import annotations
@@ -51,12 +54,6 @@ def main() -> None:
     """Evaluates one run directory and records the bounds."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True)
-    parser.add_argument("--checkpoint", default="final_step.pt")
-    parser.add_argument("--n-outer", type=int, default=2048)
-    parser.add_argument("--n-contrastive", type=int, default=1_000_000)
-    parser.add_argument("--outer-batch-size", type=int, default=256)
-    parser.add_argument("--contrastive-chunk-size", type=int, default=200_000)
-    parser.add_argument("--use-raw-weights", action="store_true")
     parser.add_argument(
         "--device", default=None, help="Default: the device the run was trained on."
     )
@@ -66,21 +63,36 @@ def main() -> None:
         help="Default: read from <run_dir>/wandb_run_id.",
     )
     parser.add_argument("--no-wandb", action="store_true")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Evaluate even when the run's final_eval.enabled is false.",
+    )
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
     cfg = OmegaConf.load(run_dir / ".hydra" / "config.yaml")
-    device = args.device or cfg.device
+
+    # Settings come from the run's own config, so they are set and overridden
+    settings = OmegaConf.select(cfg, "final_eval")
+    if settings is None:
+        raise SystemExit(
+            f"{run_dir} has no final_eval block; add `- /final_eval: default` to "
+            f"the method recipe's defaults."
+        )
+    if not settings.enabled and not args.force:
+        print("final_eval.enabled is false; skipping")
+        return
 
     results = evaluate_checkpoint(
         str(run_dir),
-        checkpoint=args.checkpoint,
-        n_outer=args.n_outer,
-        n_contrastive=args.n_contrastive,
-        outer_batch_size=args.outer_batch_size,
-        contrastive_chunk_size=args.contrastive_chunk_size,
-        use_raw_weights=args.use_raw_weights,
-        device=device,
+        checkpoint=settings.checkpoint,
+        n_outer=settings.n_outer,
+        n_contrastive=settings.n_contrastive,
+        outer_batch_size=settings.outer_batch_size,
+        contrastive_chunk_size=settings.contrastive_chunk_size,
+        use_raw_weights=settings.use_raw_weights,
+        device=args.device or cfg.device,
     )
     (run_dir / "eval.json").write_text(json.dumps(results, indent=2))
     print(results)
