@@ -9,7 +9,7 @@ Training entry points use [Hydra](https://hydra.cc/) recipes from
 
 - `task/` recipes own the task constructor settings, the default horizon `T`,
   and task-specific ranges used by methods.
-- Root method recipes such as `actionbed.yaml` own only method and training
+- `method/` recipes such as `method/actionbed.yaml` own only method and training
   defaults. They select a task recipe so that the entry point remains directly
   runnable, but do not redefine its settings.
 - `experiments/<task>/<method>.yaml` recipes contain only overrides needed by
@@ -20,21 +20,21 @@ location finding task with ActionBED are the following:
 
 ```text
 recipes/
-  actionbed.yaml                         # ActionBED defaults
+  method/actionbed.yaml                  # ActionBED defaults
   task/location_finding_2src.yaml        # task settings and default horizon
   experiments/location_finding_2src/
     actionbed.yaml                       # task–method overrides
 ```
 
 The file `experiments/location_finding_2src/actionbed.yaml` starts from
-`/actionbed`, changes the task selection, and then applies only its local
+`/method/actionbed`, changes the task selection, and then applies only its local
 method-task settings. `_self_` is last, so those settings override the method
 and task defaults.
 
 ```yaml
 # @package _global_
 defaults:
-  - /actionbed
+  - /method/actionbed
   - override /task: location_finding_2src
   - override /net@action_net: null
   - _self_

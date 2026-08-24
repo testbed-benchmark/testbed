@@ -1,9 +1,11 @@
+# @package _global_
+
 defaults:
-  - system: default
-  - task: location_finding
-  - net@design_net: attentive_policy
-  - wandb: default
-  - hydra_run: default
+  - /system: default
+  - /task: location_finding
+  - /net@design_net: attentive_policy
+  - /wandb: default
+  - /hydra_run: default
   - _self_
 # system (device/save_dir come from the system group)
 seed: 0

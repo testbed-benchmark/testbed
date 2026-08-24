@@ -176,7 +176,7 @@ def build_objective(cfg, task):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="dad")
+@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/dad")
 def main(cfg):
     """Entry point for DAD training.
 

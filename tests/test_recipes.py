@@ -18,11 +18,11 @@ from omegaconf import OmegaConf
 RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
 
 ENTRY_POINT_RECIPES = [
-    "dad",
-    "actionbed",
-    "rlboed",
-    "var_post",
-    "joint_var_post",
+    "method/dad",
+    "method/actionbed",
+    "method/rlboed",
+    "method/var_post",
+    "method/joint_var_post",
     "experiments/location_finding_2src/actionbed",
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
@@ -54,13 +54,13 @@ def test_recipe_composes(recipe):
 
 
 def test_dad_recipe_wires_design_net():
-    cfg = _compose("dad")
+    cfg = _compose("method/dad")
     assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
     assert cfg.objective.name == "spce"
 
 
 def test_actionbed_recipe_wires_design_and_action_nets():
-    cfg = _compose("actionbed")
+    cfg = _compose("method/actionbed")
     assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
     assert cfg.action_net._target_ == "testbed.design_nets.AttentivePolicyNet"
 
@@ -73,7 +73,7 @@ def test_actionbed_recipe_wires_design_and_action_nets():
 
 
 def test_rlboed_recipe_uses_default_location_finding_task():
-    cfg = _compose("rlboed")
+    cfg = _compose("method/rlboed")
     assert cfg.task.n_sources == 1
     assert cfg.sac.num_envs > 0
 
@@ -104,7 +104,7 @@ def test_temporal_discounting_dad_preserves_objective_defaults():
 
 
 def test_var_post_recipe_wires_posterior_net():
-    cfg = _compose("var_post")
+    cfg = _compose("method/var_post")
     assert (
         cfg.posterior_net._target_
         == "testbed.design_nets.AttentiveVariationalPosteriorNet"
@@ -115,7 +115,7 @@ def test_var_post_recipe_wires_posterior_net():
 
 
 def test_joint_var_post_recipe_sets_joint_true():
-    cfg = _compose("joint_var_post")
+    cfg = _compose("method/joint_var_post")
     assert cfg.joint is True
     assert cfg.posterior_net.n_components == 10
 
