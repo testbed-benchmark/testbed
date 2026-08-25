@@ -92,6 +92,7 @@ class CESPrior(Distribution):
         rho = self.rho_beta.sample((n_samples, 1))
         # a hack from the VBOED paper to prevent rho being too small
         # c.f. https://github.com/ae-foster/pyro/blob/vboed-reproduce/examples/contrib/oed/ces.py#L38
+        # following VBOED, this is not accounted for in the prior log_prob.
         rho = 0.01 + 0.99 * rho
 
         alpha = self.alpha_dirichlet.sample((n_samples,))
