@@ -21,6 +21,7 @@ dependencies = [
     "torch>=2.1",
     'pyyaml',
     'hydra-core',
+    'tqdm',
 ]
 
 [project.optional-dependencies]
