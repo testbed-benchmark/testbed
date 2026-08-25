@@ -32,28 +32,13 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from testbed.core.setup import instantiate_design_net
-from testbed.design_objectives import SNMC, SPCE
-from testbed.design_objectives.contrastive import contrastive_logsumexps
 from testbed.designers import PolicyDesigner
+from testbed.eval import eval_spce_snmc
 
 
 def build_design_net(cfg, task):
     """Instantiates a design policy net from a saved run config."""
     return instantiate_design_net(cfg.design_net, task)
-
-
-def chunked_spce_snmc(task, rollout, n_contrastive, chunk_size):
-    """SPCE (lower) and SNMC (upper) per-sample gains, chunked over n_contrastive.
-
-    Both bounds come from one set of contrastive draws, so the expensive
-    sampling is paid for once rather than per bound.
-    """
-    logp_joint, chunk_logsumexps = contrastive_logsumexps(
-        task, rollout, n_contrastive, chunk_size
-    )
-    lower = SPCE.gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive)
-    upper = SNMC.gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive)
-    return lower, upper
 
 
 def evaluate_checkpoint(
@@ -92,33 +77,16 @@ def evaluate_checkpoint(
         use_raw_history=use_raw_history,
     )
 
-    lower_gains, upper_gains = [], []
-    remaining = n_outer
-    with torch.no_grad():
-        while remaining > 0:
-            b = min(outer_batch_size, remaining)
-            theta0 = task.sample_prior(b)
-            rollout = designer.rollout(theta0)
-            lower, upper = chunked_spce_snmc(
-                task, rollout, n_contrastive, contrastive_chunk_size
-            )
-            lower_gains.append(lower)
-            upper_gains.append(upper)
-            remaining -= b
-
-    lower_gains = torch.cat(lower_gains)
-    upper_gains = torch.cat(upper_gains)
-    n = lower_gains.shape[0]
-
-    return {
-        "lower_bound": lower_gains.mean().item(),
-        "lower_bound_se": (lower_gains.std(unbiased=True) / n**0.5).item(),
-        "upper_bound": upper_gains.mean().item(),
-        "upper_bound_se": (upper_gains.std(unbiased=True) / n**0.5).item(),
-        "weights_used": key,
-        "n_outer": n,
-        "n_contrastive": n_contrastive,
-    }
+    out = eval_spce_snmc(
+        task,
+        designer,
+        n_outer=n_outer,
+        n_contrastive=n_contrastive,
+        outer_batch_size=outer_batch_size,
+        contrastive_chunk_size=contrastive_chunk_size,
+    )
+    out["weights_used"] = key
+    return out
 
 
 if __name__ == "__main__":
