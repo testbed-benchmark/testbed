@@ -24,7 +24,6 @@ set -euo pipefail
 
 SWEEP=${1:?usage: sbatch --array=0-N scripts/agent.sbatch <entity>/<project>/<sweep_id>}
 
-mkdir -p logs
 cd "$(dirname "$0")/.."  # sweep YAMLs name scripts/sweep_run.py relative to the repo root
 
 # The agent needs to reach api.wandb.ai from the compute node to be handed a
