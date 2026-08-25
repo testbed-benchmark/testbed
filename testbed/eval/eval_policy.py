@@ -9,105 +9,36 @@ If the checkpoint has a `"design_net_ema"` key (currently only
 `policy_train_state.params_ema` -- pass `--use_raw_weights` to force the raw
 weights instead.
 
-`testbed.design_objectives.SPCE`/`SNMC` materialize all `L` contrastive
-samples in one tensor (`[b*(L+1), T, ...]`), which is fine for their usual
-training-time L (tens) but not for large L (e.g. L=500_000): that would need.
-This module reimplements the same bound formulas
-(SPCE: `logp_joint - logsumexp([logp_joint] + logp_contrastive) + log(L+1)`;
-SNMC: same but excluding logp_joint from the marginal, `+ log(L)`) with the
-contrastive dimension processed in chunks, combined via the
-logsumexp-associativity identity `logsumexp(all) ==
-logsumexp(stack([logsumexp(chunk) for chunk in chunks]))`
- -- so results are identical to calling SPCE/SNMC directly,
-just without ever materializing all L contrastive samples at once.
+The bounds come from `testbed.design_objectives`: contrastive samples are
+scored by `contrastive_logsumexps` in chunks (evaluation uses L=500_000, which
+does not fit as one `[b*L, T, ...]` tensor), and combined by
+`SPCE.gain_from_logsumexps` / `SNMC.gain_from_logsumexps`. Both bounds share
+one set of draws, so the sampling is paid for once.
 
 Usage:
-    python -m testbed.eval.eval_policy <run_dir> [--checkpoint final_step.pt]
-        [--n_outer 2048] [--n_contrastive 500000] [--outer_batch_size 256]
-        [--contrastive_chunk_size 2000] [--use_raw_weights]
+    python -m testbed.eval.eval_policy <run_dir>
 
 <run_dir> is a training run's output directory (containing .hydra/config.yaml
-and the checkpoint file).
+and the checkpoint file). Checkpoint, sample sizes and device all come from the
+run's saved `final_eval` block, so they are set in the recipe and overridden
+like any other Hydra value (`final_eval.n_outer=32`).
 """
 
-import argparse
+import sys
 from pathlib import Path
 
-import numpy as np
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from testbed.core.setup import instantiate_design_net
 from testbed.designers import PolicyDesigner
+from testbed.eval import eval_spce_snmc
 
 
 def build_design_net(cfg, task):
     """Instantiates a design policy net from a saved run config."""
     return instantiate_design_net(cfg.design_net, task)
-
-
-def _chunked_contrastive_logsumexps(task, rollout, n_contrastive, chunk_size):
-    """Per-chunk logsumexp of contrastive log-likelihoods, plus logp_joint.
-
-    Returns (logp_joint: [b], chunk_logsumexps: [b, n_chunks]), where
-    chunk_logsumexps holds log(sum_{i in chunk} p(y | theta_i)) for each
-    chunk of the n_contrastive prior draws (theta_0/logp_joint is NOT
-    included in chunk_logsumexps -- callers combine as needed for
-    SPCE (include) vs SNMC (exclude), matching their exact conventions).
-    """
-    y_history, design_history, theta_0 = (
-        rollout.y_history,
-        rollout.design_history,
-        rollout.theta,
-    )
-    b = theta_0.shape[0]
-    logp_joint = task.history_logp(y_history, design_history, theta_0)  # [b]
-
-    chunk_logsumexps = []
-    remaining = n_contrastive
-    while remaining > 0:
-        c = min(chunk_size, remaining)
-        theta_c = task.sample_current_prior(b * c).reshape(
-            b, c, *task.event_shape_theta
-        )
-        theta_flat = theta_c.reshape(b * c, *task.event_shape_theta)
-        y_rep = (
-            y_history.unsqueeze(1)
-            .expand(b, c, *y_history.shape[1:])
-            .reshape(b * c, *y_history.shape[1:])
-        )
-        design_rep = (
-            design_history.unsqueeze(1)
-            .expand(b, c, *design_history.shape[1:])
-            .reshape(b * c, *design_history.shape[1:])
-        )
-        logp_c = task.history_logp(y_rep, design_rep, theta_flat).reshape(b, c)
-        chunk_logsumexps.append(torch.logsumexp(logp_c, dim=1))  # [b]
-        remaining -= c
-
-    return logp_joint, torch.stack(chunk_logsumexps, dim=1)  # [b], [b, n_chunks]
-
-
-def chunked_spce_snmc(task, rollout, n_contrastive, chunk_size):
-    """SPCE (lower) and SNMC (upper) per-sample gains, chunked over n_contrastive.
-
-    Identical formulas to testbed.design_objectives.SPCE/SNMC.per_sample_gain,
-    just computed without materializing all n_contrastive samples at once.
-    """
-    logp_joint, chunk_logsumexps = _chunked_contrastive_logsumexps(
-        task, rollout, n_contrastive, chunk_size
-    )
-
-    lower_marginal = torch.logsumexp(
-        torch.cat([logp_joint.unsqueeze(1), chunk_logsumexps], dim=1), dim=1
-    ) - np.log(n_contrastive + 1)
-    lower = logp_joint - lower_marginal  # sPCE
-
-    upper_marginal = torch.logsumexp(chunk_logsumexps, dim=1) - np.log(n_contrastive)
-    upper = logp_joint - upper_marginal  # sNMC
-
-    return lower, upper
 
 
 def evaluate_checkpoint(
@@ -146,55 +77,40 @@ def evaluate_checkpoint(
         use_raw_history=use_raw_history,
     )
 
-    lower_gains, upper_gains = [], []
-    remaining = n_outer
-    with torch.no_grad():
-        while remaining > 0:
-            b = min(outer_batch_size, remaining)
-            theta0 = task.sample_prior(b)
-            rollout = designer.rollout(theta0)
-            lower, upper = chunked_spce_snmc(
-                task, rollout, n_contrastive, contrastive_chunk_size
-            )
-            lower_gains.append(lower)
-            upper_gains.append(upper)
-            remaining -= b
-
-    lower_gains = torch.cat(lower_gains)
-    upper_gains = torch.cat(upper_gains)
-    n = lower_gains.shape[0]
-
-    return {
-        "lower_bound": lower_gains.mean().item(),
-        "lower_bound_se": (lower_gains.std(unbiased=True) / n**0.5).item(),
-        "upper_bound": upper_gains.mean().item(),
-        "upper_bound_se": (upper_gains.std(unbiased=True) / n**0.5).item(),
-        "weights_used": key,
-        "n_outer": n,
-        "n_contrastive": n_contrastive,
-    }
+    out = eval_spce_snmc(
+        task,
+        designer,
+        n_outer=n_outer,
+        n_contrastive=n_contrastive,
+        outer_batch_size=outer_batch_size,
+        contrastive_chunk_size=contrastive_chunk_size,
+    )
+    out["weights_used"] = key
+    return out
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("run_dir")
-    parser.add_argument("--checkpoint", default="final_step.pt")
-    parser.add_argument("--n_outer", type=int, default=2048)
-    parser.add_argument("--n_contrastive", type=int, default=500_000)
-    parser.add_argument("--outer_batch_size", type=int, default=256)
-    parser.add_argument("--contrastive_chunk_size", type=int, default=2_000)
-    parser.add_argument("--use_raw_weights", action="store_true")
-    parser.add_argument("--device", default="cpu")
-    args = parser.parse_args()
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: python -m testbed.eval.eval_policy <run_dir>")
 
-    results = evaluate_checkpoint(
-        args.run_dir,
-        checkpoint=args.checkpoint,
-        n_outer=args.n_outer,
-        n_contrastive=args.n_contrastive,
-        outer_batch_size=args.outer_batch_size,
-        contrastive_chunk_size=args.contrastive_chunk_size,
-        use_raw_weights=args.use_raw_weights,
-        device=args.device,
+    run_dir = Path(sys.argv[1])
+    cfg = OmegaConf.load(run_dir / ".hydra" / "config.yaml")
+    settings = OmegaConf.select(cfg, "final_eval")
+    if settings is None:
+        raise SystemExit(
+            f"{run_dir} has no final_eval block; add `- /final_eval: default` to "
+            f"the method recipe's defaults."
+        )
+
+    print(
+        evaluate_checkpoint(
+            str(run_dir),
+            checkpoint=settings.checkpoint,
+            n_outer=settings.n_outer,
+            n_contrastive=settings.n_contrastive,
+            outer_batch_size=settings.outer_batch_size,
+            contrastive_chunk_size=settings.contrastive_chunk_size,
+            use_raw_weights=settings.use_raw_weights,
+            device=cfg.device,
+        )
     )
-    print(results)

@@ -1,7 +1,7 @@
 # @package _global_
 
 defaults:
-  - /method/rlboed
+  - /method: rlboed
   - override /task: location_finding_2src
   - _self_
 
@@ -20,3 +20,7 @@ task:
     high: 4.0
     event_shape:
       - ${task.dim_theta}
+
+wandb:
+  project: location_finding_2src  # one project per task; methods separate by group
+  group: rlboed

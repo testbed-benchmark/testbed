@@ -1,0 +1,9 @@
+# @package _global_
+
+# Task defaults
+T: 10
+
+task:
+  _target_: testbed.tasks.CES
+  tau: 0.005
+  prior: null  # use the standard prior

@@ -90,6 +90,11 @@ class CESPrior(Distribution):
                 A tensor of shape ``[n_samples, 5]``.
         """
         rho = self.rho_beta.sample((n_samples, 1))
+        # a hack from the VBOED paper to prevent rho being too small
+        # c.f. https://github.com/ae-foster/pyro/blob/vboed-reproduce/examples/contrib/oed/ces.py#L38
+        # following VBOED, this is not accounted for in the prior log_prob.
+        rho = 0.01 + 0.99 * rho
+
         alpha = self.alpha_dirichlet.sample((n_samples,))
         u = self.u_lognormal.sample((n_samples, 1))
         return torch.cat([rho, alpha, u], dim=-1)
