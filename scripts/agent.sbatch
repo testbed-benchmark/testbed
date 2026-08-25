@@ -18,6 +18,7 @@
 ## Cluster-specific; uncomment and set:
 ##SBATCH --partition=
 ##SBATCH --account=
+##SBATCH --nodes=1
 
 set -euo pipefail
 
