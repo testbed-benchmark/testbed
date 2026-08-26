@@ -154,6 +154,7 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
         event_shape_out,
         encoder_dim_h=(128, 128),
         dim_emb=64,
+        encoder_activation=nn.ReLU,
         decoder_dim_h=None,
         decoder_activation=nn.GELU,
     ):
@@ -165,6 +166,7 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
             event_shape_out: Shape of one proposed design.
             encoder_dim_h: Hidden widths in the per-token encoder.
             dim_emb: History embedding width.
+            encoder_activation: Encoder activation class.
             decoder_dim_h: Optional decoder hidden widths.
             decoder_activation: Decoder activation class.
         """
@@ -173,6 +175,7 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
             event_shape_design,
             dim_h=encoder_dim_h,
             dim_emb=dim_emb,
+            activation=encoder_activation,
         )
         super().__init__(
             encoder,

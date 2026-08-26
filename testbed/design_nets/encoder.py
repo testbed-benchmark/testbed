@@ -300,8 +300,12 @@ class DeepSetEncoder(HistoryEncoder):
         dim_h=(128, 128),
         dim_emb=64,
         dim_token=None,
+        activation=nn.ReLU,
     ):
-        """dim_h: per-layer hidden widths as a list; an int is a single layer."""
+        """dim_h: per-layer hidden widths as a list; an int is a single layer.
+
+        activation: activation class for the per-step MLP, e.g. nn.Softplus.
+        """
         super().__init__(
             event_shape_y,
             event_shape_design,
@@ -311,7 +315,7 @@ class DeepSetEncoder(HistoryEncoder):
 
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         layer_widths = [self.dim_token] + hidden_widths + [dim_emb]
-        self.encoder_net = MLP(layer_widths, activation=nn.ReLU)
+        self.encoder_net = MLP(layer_widths, activation=activation)
 
     def encode_tokens(self, tokens, mask=None):
         """Runs the forward pass of the encoder."""
