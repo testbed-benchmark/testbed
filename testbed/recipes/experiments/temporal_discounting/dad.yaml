@@ -58,3 +58,7 @@ design_net:
   decoder_activation:
     _target_: torch.nn.Softplus
     _partial_: true
+
+wandb:
+  project: temporal_discounting  # one project per task; methods separate by group
+  group: dad
