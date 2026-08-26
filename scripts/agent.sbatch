@@ -12,23 +12,28 @@
 #
 #SBATCH --job-name=testbed-sweep
 #SBATCH --output=logs/slurm-%A_%a.out
-#SBATCH --gpus-per-task=1
-#SBATCH --cpus-per-task=8
-#SBATCH --time=12:00:00
-## Cluster-specific; uncomment and set:
-##SBATCH --partition=
-##SBATCH --account=
-##SBATCH --nodes=1
+#SBATCH --nodes=1
+#SBATCH --gpus=1
+#SBATCH --time=02:00:00
 
 set -euo pipefail
 
+cd "${SLURM_SUBMIT_DIR:?Submit this job from the repository root}"
+
+# Repo-root venv by default; override with VENV_PATH=... for another location.
+VENV_PATH="${VENV_PATH:-.venv}"
+[[ -f "$VENV_PATH/bin/activate" ]] || {
+  echo "no venv at $VENV_PATH (set VENV_PATH)" >&2
+  exit 1
+}
+source "$VENV_PATH/bin/activate"
+
+export WANDB_ENTITY="${WANDB_ENTITY:-rainml-testbed}"
+
 SWEEP=${1:?usage: sbatch --array=0-N scripts/agent.sbatch <entity>/<project>/<sweep_id>}
 
-cd "$(dirname "$0")/.."  # sweep YAMLs name scripts/sweep_run.py relative to the repo root
-
-# The agent needs to reach api.wandb.ai from the compute node to be handed a
-# seed; WANDB_MODE=offline cannot substitute, as there is no server to ask.
-export WANDB_ENTITY="${WANDB_ENTITY:?WANDB_ENTITY must be set}"
+export WANDB_DIR="$SLURM_SUBMIT_DIR/logs/wandb-${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+mkdir -p "$WANDB_DIR"
 
 # --count 1 keeps one array task to one seed. Without it a single agent drains
 # the whole queue sequentially while the other tasks exit with nothing to do.

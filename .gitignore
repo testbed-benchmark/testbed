@@ -195,3 +195,9 @@ uv.lock
 temp/
 tmp/
 runs/
+wandb/
+
+# SLURM opens --output=logs/... before the job script runs, so the directory
+# has to exist in a fresh clone; its contents do not belong in git.
+logs/*
+!logs/.gitkeep
