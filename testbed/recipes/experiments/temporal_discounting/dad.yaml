@@ -40,11 +40,11 @@ n_outer_eval: 1_024
 n_inner_eval: 100_000
 
 # design policy network
-# The paper's HTD net (Appendix D.2): encoder [2 -> 256 -> 256 -> 2 x 16] over
+# The DAD paper's HTD net (Appendix D.2): encoder [2 -> 256 -> 256 -> 2 x 16] over
 # the design alone, its two heads mixed by the binary outcome, + sum pooling;
 # emitter [16 -> 256 -> 256 -> 2], softplus throughout. The one remaining
 # difference is the null encoding, which is learnable here but fixed to zero in
-# the paper.
+# the DAD paper.
 
 
 design_net:
