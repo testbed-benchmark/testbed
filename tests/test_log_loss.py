@@ -25,6 +25,11 @@ class _ToyGaussianTask(Task):
     event shape via a bare ``reshape(..., -1)``.
     """
 
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """False: _sample_outcome uses a non-reparameterized ``sample()``."""
+        return False
+
     def __init__(self):
         prior = TorchDistribution(Independent(Normal(torch.zeros(2), torch.ones(2)), 1))
         super().__init__(

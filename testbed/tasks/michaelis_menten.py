@@ -115,6 +115,11 @@ class MichaelisMenten(Task):
             default prior admits, where the response has saturated.
     """
 
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """Gaussian noise added to a differentiable mean."""
+        return True
+
     def __init__(
         self,
         noise_scale: float = 2.5,

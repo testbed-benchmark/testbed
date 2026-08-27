@@ -143,12 +143,18 @@ class CES(Task):
             ``[0, 100]^6`` is used.
     """
 
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """The latent eta is Gaussian, so the censored sigmoid is pathwise."""
+        return True
+
     def __init__(
         self,
         tau: float = 0.005,
         epsilon: float = 2**-22,
         prior=None,
         design_space: DesignSpace | None = None,
+        reparameterize_outcomes: bool = True,
     ) -> None:
         """Initializes the CES task."""
         if prior is None:
@@ -165,6 +171,7 @@ class CES(Task):
             event_shape_design=[6],
             prior=prior,
             design_space=design_space,
+            reparameterize_outcomes=reparameterize_outcomes,
         )
 
         self.tau = tau

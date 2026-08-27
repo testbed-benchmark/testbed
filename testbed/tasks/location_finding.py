@@ -131,6 +131,11 @@ class LocationFinding(Task):
             its unbounded default design space.
     """
 
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """Gaussian noise added to a differentiable mean."""
+        return True
+
     def __init__(
         self,
         n_sources: int,

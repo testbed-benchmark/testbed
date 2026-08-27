@@ -127,6 +127,11 @@ class LinearRegression(Task):
             on ``||x|| = 1``, which this box attains.
     """
 
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """Gaussian noise added to a differentiable mean."""
+        return True
+
     def __init__(
         self,
         dim: int,

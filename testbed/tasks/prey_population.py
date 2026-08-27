@@ -99,6 +99,11 @@ class PreyPopulation(Task):
             300 prey.
     """
 
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """False: Binomial counts have no reparameterized sampler."""
+        return False
+
     def __init__(
         self,
         duration: float = 24.0,
