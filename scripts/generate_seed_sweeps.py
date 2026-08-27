@@ -60,9 +60,22 @@ def read_wandb_target(recipe: str) -> tuple[str, str]:
 
 
 def finished_seeds(api, entity: str, project: str, group: str) -> set[int]:
-    """Returns the seeds of every finished run in a project's group."""
-    runs = api.runs(f"{entity}/{project}", filters={"group": group})
+    """Returns the seeds of every finished run in a project's group.
+
+    A project W&B has never seen has no finished runs, so the first sweep for
+    a recipe starts from an empty set. W&B creates the project itself on the
+    first run.
+    """
     seeds = set()
+    try:
+        # Listed eagerly: api.runs paginates lazily, so a missing project
+        # raises on iteration rather than at the call.
+        runs = list(api.runs(f"{entity}/{project}", filters={"group": group}))
+    except ValueError as error:
+        if "Could not find project" not in str(error):
+            raise
+        return seeds
+
     for run in runs:
         if run.state != "finished":
             continue

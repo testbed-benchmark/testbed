@@ -1,0 +1,13 @@
+# Design network of the DAD HTD experiment (Foster et al. 2021, Appendix D.2).
+# The per-step encoder takes the design alone and mixes two dim_emb heads with
+# the binary outcome. Requires a scalar outcome.
+_target_: testbed.design_nets.GatedDeepSetPolicyNet
+encoder_dim_h: [256, 256]
+dim_emb: 16
+encoder_activation:
+  _target_: torch.nn.Softplus
+  _partial_: true
+decoder_dim_h: [256, 256]
+decoder_activation:
+  _target_: torch.nn.Softplus
+  _partial_: true

@@ -16,7 +16,9 @@ from testbed.designers import PolicyDesigner
 class Trainer:
     """Training class for DAD-style training."""
 
-    def __init__(self, task, designer, objective, optimizer, cfg, manager=None):
+    def __init__(
+        self, task, designer, objective, optimizer, cfg, manager=None, scheduler=None
+    ):
         """Initializes the trainer."""
         assert isinstance(designer, PolicyDesigner), (
             "This Trainer assumes your designer is a PolicyDesigner object."
@@ -27,6 +29,7 @@ class Trainer:
         self.objective = objective
         self.optimizer = optimizer
         self.cfg = cfg
+        self.scheduler = scheduler
         self.manager = manager
 
         # checkpointing
@@ -84,9 +87,12 @@ class Trainer:
             )
 
         self.optimizer.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
 
         return {
             "gain": gain.item(),
+            "lr": self.optimizer.param_groups[0]["lr"],
         }
 
     def evaluate(self):
@@ -199,6 +205,7 @@ def main(cfg):
         cfg.T,
         policy_net,
         reparameterize_policy=cfg.objective.reparameterize_policy,
+        use_raw_history=cfg.use_raw_history,
     )
     # Update config to match the designer's proposal/gradient capability.
     cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
@@ -208,7 +215,15 @@ def main(cfg):
     optimizer = torch.optim.Adam(
         policy_net.parameters(),
         lr=cfg.lr,
+        betas=cfg.betas,
     )
+
+    # Multiply the LR by lr_gamma once every lr_anneal_every steps (DAD paper D.2).
+    scheduler = None
+    if cfg.lr_anneal_every is not None and cfg.lr_gamma is not None:
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=cfg.lr_anneal_every, gamma=cfg.lr_gamma
+        )
 
     trainer = Trainer(
         task=task,
@@ -217,6 +232,7 @@ def main(cfg):
         optimizer=optimizer,
         cfg=cfg,
         manager=manager,
+        scheduler=scheduler,
     )
 
     trainer.train()

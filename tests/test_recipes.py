@@ -28,6 +28,7 @@ ENTRY_POINT_RECIPES = [
     "experiments/location_finding_2src/dad",
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
+    "experiments/constant_elasticity_of_substitution/dad",
 ]
 
 
@@ -51,6 +52,7 @@ def test_recipe_composes(recipe):
     assert cfg.task._target_ in {
         "testbed.tasks.LocationFinding",
         "testbed.tasks.PreyPopulation",
+        "testbed.tasks.CES",
     }
     assert cfg.wandb.enabled is False
 
@@ -125,6 +127,9 @@ def test_temporal_discounting_dad_preserves_objective_defaults():
     assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
     assert cfg.objective.reparameterize_policy is False
     assert cfg.objective.requires_policy_log_probs is False
+    # The paper's HTD encoder gates two heads with the binary outcome.
+    assert cfg.design_net._target_ == "testbed.design_nets.GatedDeepSetPolicyNet"
+    assert cfg.use_raw_history is True
 
 
 def test_var_post_recipe_wires_posterior_net():

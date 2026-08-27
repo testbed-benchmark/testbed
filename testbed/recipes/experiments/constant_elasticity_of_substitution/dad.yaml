@@ -1,0 +1,66 @@
+# @package _global_
+
+defaults:
+  - /method: dad
+  - override /task: constant_elasticity_of_substitution
+  - override /net@design_net: null
+  - _self_
+
+# DAD on the CES model. The likelihood is reparameterizable (the outcome is a
+# censored sigmoid of a Gaussian), so this trains with the pathwise sPCE
+# gradient (DAD paper Eq. 14) rather than REINFORCE.
+#
+
+
+seed: 0
+# designer
+# Condition on the unconstrained designs the policy emits rather than on the
+# baskets in [0, 100]^6. The tanh squash makes the two bijective, and the raw
+# values are O(1), so the encoder needs no input normalization.
+use_raw_history: true
+# objective
+objective:
+  name: spce
+  n_inner: 1_024  # "number of negative samples"
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false
+# training
+n_train_iter: 50_000  # gradient steps 
+n_outer: 1_024  # batch size
+
+# optimizer
+lr: 1e-4
+betas: [0.9, 0.999]
+grad_clip: 1.0
+lr_anneal_every: 1_000  # annealing frequency (Table 20)
+lr_gamma: 0.955  # 0.955 ** (50_000 / 1_000) ~= 0.1, i.e. 1e-4 -> 1e-5 
+
+# eval
+eval_every: 0  # eval is expensive here; off for this recipe
+n_outer_eval: 2_048
+n_inner_eval: 100_000
+
+# design policy network
+# embed y (1) and the design (6) separately to 32 each and
+# concatenate to 64 before the encoder. Those embeddings are just the first
+# stage of the per-step encoder, so they are folded into it here: the encoder
+# is [7 -> 64 -> 128 -> 32] + sum pooling, and the emitter is [32 -> 128 -> 6],
+# ReLU throughout, with no activation on the emitter output because
+# BoxDesignSpace applies the tanh squash.
+
+design_net:
+  _target_: testbed.design_nets.DeepSetPolicyNet
+  encoder_dim_h: [64, 128]
+  dim_emb: 32
+  encoder_activation:
+    _target_: torch.nn.ReLU
+    _partial_: true
+  decoder_dim_h: [128]
+  decoder_activation:
+    _target_: torch.nn.ReLU
+    _partial_: true
+
+wandb:
+  project: constant_elasticity_of_substitution  # one project per task; methods separate by group
+  group: dad

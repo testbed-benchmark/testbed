@@ -11,6 +11,10 @@ defaults:
 # DAD paper HTD experiment (Foster et al. 2021, Appendix D.2).
 
 seed: 0
+# designer
+# Condition on the unconstrained (x_d, x_r) the policy emits, as the DAD paper's
+# HTD encoder does, rather than on (D_1, R_0) with D_1 unbounded and R_0 <= 100.
+use_raw_history: true
 # objective
 objective:
   name: reinforce
@@ -24,8 +28,11 @@ n_train_iter: 100_000
 n_outer: 1_024
 
 # optimizer
-lr: 5e-5
-grad_clip: 1.0
+lr: 1e-4
+betas: [0.9, 0.999]
+grad_clip: null
+lr_anneal_every: 1_000
+lr_gamma: 0.96
 
 # eval
 eval_every: 0  # eval is expensive here; off for this recipe
@@ -33,18 +40,25 @@ n_outer_eval: 1_024
 n_inner_eval: 100_000
 
 # design policy network
-# DeepSets net in the spirit of the DAD paper: encoder [3 -> 256 -> 256 -> 16]
-# + sum pooling, emitter [16 -> 128 -> 16 -> 2], ReLU throughout. Not an exact
-# match to the paper's HTD net (Appendix D.2): that encoder takes the design only
-# with two 16-dim heads gated by the binary outcome, uses softplus activations,
-# a [16 -> 256 -> 256 -> 2] emitter, and a fixed-zero null encoding.
+# The DAD paper's HTD net (Appendix D.2): encoder [2 -> 256 -> 256 -> 2 x 16] over
+# the design alone, its two heads mixed by the binary outcome, + sum pooling;
+# emitter [16 -> 256 -> 256 -> 2], softplus throughout. The one remaining
+# difference is the null encoding, which is learnable here but fixed to zero in
+# the DAD paper.
 
 
 design_net:
-  _target_: testbed.design_nets.DeepSetPolicyNet
+  _target_: testbed.design_nets.GatedDeepSetPolicyNet
   encoder_dim_h: [256, 256]
   dim_emb: 16
-  decoder_dim_h: [128, 16]
-  decoder_activation:
-    _target_: torch.nn.ReLU
+  encoder_activation:
+    _target_: torch.nn.Softplus
     _partial_: true
+  decoder_dim_h: [256, 256]
+  decoder_activation:
+    _target_: torch.nn.Softplus
+    _partial_: true
+
+wandb:
+  project: temporal_discounting  # one project per task; methods separate by group
+  group: dad

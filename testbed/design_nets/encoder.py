@@ -300,8 +300,12 @@ class DeepSetEncoder(HistoryEncoder):
         dim_h=(128, 128),
         dim_emb=64,
         dim_token=None,
+        activation=nn.ReLU,
     ):
-        """dim_h: per-layer hidden widths as a list; an int is a single layer."""
+        """dim_h: per-layer hidden widths as a list; an int is a single layer.
+
+        activation: activation class for the per-step MLP, e.g. nn.Softplus.
+        """
         super().__init__(
             event_shape_y,
             event_shape_design,
@@ -311,21 +315,28 @@ class DeepSetEncoder(HistoryEncoder):
 
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         layer_widths = [self.dim_token] + hidden_widths + [dim_emb]
-        self.encoder_net = MLP(layer_widths, activation=nn.ReLU)
+        self.encoder_net = MLP(layer_widths, activation=activation)
 
-    def encode_tokens(self, tokens, mask=None):
-        """Runs the forward pass of the encoder."""
-        b, T, _ = tokens.shape
+    def sum_pool(self, encodings, mask=None):
+        """Sum-pools per-step encodings over time.
+
+        Args:
+            encodings: Per-step encodings with shape ``[b, T, dim_emb]``.
+            mask: Optional validity mask with shape ``[b, T]``.
+
+        Returns:
+            Tensor: Pooled encodings with shape ``[b, dim_emb]``. Empty and
+            fully masked histories return the learned ``null_enc``.
+        """
+        b, T, _ = encodings.shape
 
         if T == 0:
             return self.empty_encoding(b)
 
-        enc = self.encoder_net(tokens)  # [b, T, dim_emb]
-
         if mask is not None:
-            m = mask.to(enc.dtype).unsqueeze(-1)  # [b, T, 1]
-            enc = enc * m
-            pooled = enc.sum(dim=1)  # [b, dim_emb]
+            m = mask.to(encodings.dtype).unsqueeze(-1)  # [b, T, 1]
+            encodings = encodings * m
+            pooled = encodings.sum(dim=1)  # [b, dim_emb]
 
             # Need to handle the case that the tokens are fully masked
             # Here, we return self.null_enc instead of just zeroes
@@ -336,4 +347,65 @@ class DeepSetEncoder(HistoryEncoder):
 
             return pooled
 
-        return enc.sum(dim=1)  # [b, dim_emb]
+        return encodings.sum(dim=1)  # [b, dim_emb]
+
+    def encode_tokens(self, tokens, mask=None):
+        """Runs the forward pass of the encoder."""
+        return self.sum_pool(self.encoder_net(tokens), mask)
+
+
+class GatedDeepSetEncoder(DeepSetEncoder):
+    """DeepSets encoder whose per-step embedding is gated by a binary outcome.
+
+    The per-step network sees the design alone and emits two ``dim_emb`` heads,
+    which are mixed by the outcome: ``y * h_one + (1 - y) * h_zero``. This is the
+    encoder of the DAD hyperbolic temporal discounting experiment (Foster et al.,
+    2021, Appendix D.2), where the outcome is a binary choice rather than a
+    feature the network has to disentangle from the design.
+
+    Requires a scalar outcome. Use :class:`DeepSetEncoder` otherwise.
+    """
+
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        dim_h=(256, 256),
+        dim_emb=16,
+        activation=nn.Softplus,
+    ):
+        """dim_h: per-layer hidden widths as a list; an int is a single layer.
+
+        activation: activation class for the per-step MLP, e.g. nn.Softplus.
+        """
+        if prod(torch.Size(event_shape_y)) != 1:
+            raise ValueError(
+                "GatedDeepSetEncoder gates on a scalar outcome; got "
+                f"event_shape_y={tuple(event_shape_y)}."
+            )
+
+        super().__init__(
+            event_shape_y,
+            event_shape_design,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+            activation=activation,
+        )
+
+        # Tokens stay [y, design] so that encode_tokens can gate on y, but the
+        # network itself sees the design alone and emits both gate heads. This
+        # replaces the concatenation-width net built by DeepSetEncoder.
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
+        layer_widths = [self.dim_design] + hidden_widths + [2 * self.dim_emb]
+        self.encoder_net = MLP(layer_widths, activation=activation)
+
+    def encode_tokens(self, tokens, mask=None):
+        """Runs the forward pass of the encoder."""
+        y_flat = tokens[..., : self.dim_y]  # [b, T, 1]
+        design_flat = tokens[..., self.dim_y :]  # [b, T, dim_design]
+
+        h_one, h_zero = self.encoder_net(design_flat).chunk(2, dim=-1)
+
+        # A convex mix rather than a gather, so relaxed outcomes also work.
+        enc = y_flat * h_one + (1.0 - y_flat) * h_zero  # [b, T, dim_emb]
+        return self.sum_pool(enc, mask)
