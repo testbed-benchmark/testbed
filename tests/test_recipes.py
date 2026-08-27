@@ -125,6 +125,9 @@ def test_temporal_discounting_dad_preserves_objective_defaults():
     assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
     assert cfg.objective.reparameterize_policy is False
     assert cfg.objective.requires_policy_log_probs is False
+    # The paper's HTD encoder gates two heads with the binary outcome.
+    assert cfg.design_net._target_ == "testbed.design_nets.GatedDeepSetPolicyNet"
+    assert cfg.use_raw_history is True
 
 
 def test_var_post_recipe_wires_posterior_net():

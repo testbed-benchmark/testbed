@@ -4,7 +4,9 @@ Not collected by pytest (no test_ prefix); run manually:
     python tests/temporal_discounting.py
 
 Trains a DAD policy with the REINFORCE gradient estimator (DAD paper Eq. 16),
-then evaluates SPCE/SNMC bounds against a random-design baseline.
+then evaluates SPCE/SNMC bounds against a random-design baseline. Covers both
+selectable policy nets: the outcome-gated encoder of the paper's HTD experiment
+and the general-purpose concatenation DeepSets encoder.
 """
 
 import time
@@ -16,7 +18,7 @@ from rich.panel import Panel
 from rich.progress import track
 from rich.table import Table
 
-from testbed.design_nets import DeepSetPolicyNet
+from testbed.design_nets import DeepSetPolicyNet, GatedDeepSetPolicyNet
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import PolicyDesigner, RandomDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
@@ -42,10 +44,10 @@ N_INNER_EVAL = 50_000
 console = Console()
 
 
-def make_policy_designer(task, device):
+def make_policy_designer(task, device, policy_cls):
     # task.design_space (an HTDDesignSpace) maps the net's raw output to valid
     # (D_1, R_0); no wrapper needed.
-    design_net = DeepSetPolicyNet(
+    design_net = policy_cls(
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
@@ -101,24 +103,37 @@ def evaluate(task, designer):
     return sum(spce_vals) / N_EVAL_RUNS, sum(snmc_vals) / N_EVAL_RUNS
 
 
+# Both policy nets are usable from the config, so cover both here. The gated net
+# reproduces the paper's HTD encoder (Appendix D.2); the concat net is the
+# general-purpose DeepSets baseline.
+POLICY_NETS = {
+    "DAD gated (reinforce)": GatedDeepSetPolicyNet,
+    "DAD concat (reinforce)": DeepSetPolicyNet,
+}
+
+# Only the paper-matching net is held to the paper's number.
+REFERENCE_NET = "DAD gated (reinforce)"
+
+
 def test_dad_reinforce_eig():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    torch.manual_seed(0)
 
     task = HyperbolicTemporalDiscounting().to(device)
 
-    random_designer = make_random_designer(task)
-    policy_designer = make_policy_designer(task, device)
+    results = {"Random": evaluate(task, make_random_designer(task))}
+    train_min = 0.0
+    for name, policy_cls in POLICY_NETS.items():
+        # Same seed per net so the comparison isn't an initialization lottery.
+        torch.manual_seed(0)
+        designer = make_policy_designer(task, device, policy_cls)
 
-    start = time.perf_counter()
-    train(task, policy_designer)
-    train_min = (time.perf_counter() - start) / 60
+        console.log(f"[bold]{name}[/bold]")
+        start = time.perf_counter()
+        train(task, designer)
+        train_min += (time.perf_counter() - start) / 60
 
-    policy_designer.design_net.eval()
-    results = {
-        "Random": evaluate(task, random_designer),
-        "DAD (reinforce)": evaluate(task, policy_designer),
-    }
+        designer.design_net.eval()
+        results[name] = evaluate(task, designer)
 
     table = Table(
         "Designer",
@@ -143,7 +158,7 @@ def test_dad_reinforce_eig():
             Group(
                 table,
                 f"{expected}   |   "
-                f"[green]Training: {train_min:.1f} min[/green]   |   "
+                f"[green]Training ({len(POLICY_NETS)} nets): {train_min:.1f} min[/green]   |   "
                 f"T={T}, n_train_iter={N_TRAIN_ITER:,}, n_contrastive={N_INNER_EVAL:,}, device={device}",
             ),
             title="EIG -- DAD trained with REINFORCE (HTD)",
@@ -151,14 +166,18 @@ def test_dad_reinforce_eig():
         )
     )
 
-    dad_spce = results["DAD (reinforce)"][0]
     random_spce = results["Random"][0]
-    assert dad_spce > random_spce, (
-        f"Trained policy ({dad_spce:.4f}) should beat random designs ({random_spce:.4f})"
-    )
+    for name in POLICY_NETS:
+        assert results[name][0] > random_spce, (
+            f"{name} ({results[name][0]:.4f}) should beat random designs "
+            f"({random_spce:.4f})"
+        )
+
+    reference_spce = results[REFERENCE_NET][0]
     if EXPECTED_SPCE is not None:
-        assert abs(dad_spce - EXPECTED_SPCE) <= SPCE_TOL, (
-            f"Trained sPCE {dad_spce:.4f} not within {SPCE_TOL} of {EXPECTED_SPCE}"
+        assert abs(reference_spce - EXPECTED_SPCE) <= SPCE_TOL, (
+            f"{REFERENCE_NET} sPCE {reference_spce:.4f} not within {SPCE_TOL} "
+            f"of {EXPECTED_SPCE}"
         )
 
 

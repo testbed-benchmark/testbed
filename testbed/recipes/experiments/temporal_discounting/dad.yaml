@@ -40,15 +40,15 @@ n_outer_eval: 1_024
 n_inner_eval: 100_000
 
 # design policy network
-# DeepSets net in the spirit of the DAD paper: encoder [3 -> 256 -> 256 -> 16]
-# + sum pooling, emitter [16 -> 256 -> 256 -> 2], softplus throughout. Not an
-# exact match to the paper's HTD net (Appendix D.2): that encoder takes the
-# design only, with two 16-dim heads gated by the binary outcome, and a
-# fixed-zero null encoding.
+# The paper's HTD net (Appendix D.2): encoder [2 -> 256 -> 256 -> 2 x 16] over
+# the design alone, its two heads mixed by the binary outcome, + sum pooling;
+# emitter [16 -> 256 -> 256 -> 2], softplus throughout. The one remaining
+# difference is the null encoding, which is learnable here but fixed to zero in
+# the paper.
 
 
 design_net:
-  _target_: testbed.design_nets.DeepSetPolicyNet
+  _target_: testbed.design_nets.GatedDeepSetPolicyNet
   encoder_dim_h: [256, 256]
   dim_emb: 16
   encoder_activation:

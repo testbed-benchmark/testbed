@@ -6,7 +6,12 @@ import torch
 from torch import Tensor, nn
 
 from testbed.design_nets.base import DesignNet, DesignProposal
-from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
+from testbed.design_nets.encoder import (
+    AttentiveEncoder,
+    DeepSetEncoder,
+    GatedDeepSetEncoder,
+    HistoryEncoder,
+)
 from testbed.design_nets.modules import MLP
 
 
@@ -171,6 +176,54 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
             decoder_activation: Decoder activation class.
         """
         encoder = DeepSetEncoder(
+            event_shape_y,
+            event_shape_design,
+            dim_h=encoder_dim_h,
+            dim_emb=dim_emb,
+            activation=encoder_activation,
+        )
+        super().__init__(
+            encoder,
+            event_shape_out,
+            dim_h=decoder_dim_h,
+            activation=decoder_activation,
+        )
+
+
+class GatedDeepSetPolicyNet(DeterministicPolicyNet):
+    """Preset: GatedDeepSetEncoder (outcome-gated DeepSets) + MLP readout.
+
+    This reproduces the design network of the DAD (Foster et al., 2021)
+    hyperbolic temporal discounting experiment (Appendix D.2), whose per-step
+    encoder takes the design alone and mixes two heads with the binary outcome.
+    The one remaining difference is that the null encoding is learnable here,
+    but was fixed to zero in the original paper.
+    """
+
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        event_shape_out,
+        encoder_dim_h=(256, 256),
+        dim_emb=16,
+        encoder_activation=nn.Softplus,
+        decoder_dim_h=None,
+        decoder_activation=nn.Softplus,
+    ):
+        """Initializes the outcome-gated DeepSets policy preset.
+
+        Args:
+            event_shape_y: Shape of one outcome event; must be scalar.
+            event_shape_design: Shape of one design-history event.
+            event_shape_out: Shape of one proposed design.
+            encoder_dim_h: Hidden widths in the per-token encoder.
+            dim_emb: History embedding width.
+            encoder_activation: Encoder activation class.
+            decoder_dim_h: Optional decoder hidden widths.
+            decoder_activation: Decoder activation class.
+        """
+        encoder = GatedDeepSetEncoder(
             event_shape_y,
             event_shape_design,
             dim_h=encoder_dim_h,
