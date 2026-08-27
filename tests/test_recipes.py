@@ -28,6 +28,7 @@ ENTRY_POINT_RECIPES = [
     "experiments/location_finding_2src/dad",
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
+    "experiments/constant_elasticity_of_substitution/dad",
 ]
 
 
@@ -51,6 +52,7 @@ def test_recipe_composes(recipe):
     assert cfg.task._target_ in {
         "testbed.tasks.LocationFinding",
         "testbed.tasks.PreyPopulation",
+        "testbed.tasks.CES",
     }
     assert cfg.wandb.enabled is False
 
