@@ -253,7 +253,7 @@ class HyperbolicTemporalDiscounting(Task):
         temperature: float = 0.0,
         prior=None,
         design_space: DesignSpace | None = None,
-        reparameterize_outcomes: bool = True,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the HTD task."""
         if prior is None:
@@ -262,6 +262,11 @@ class HyperbolicTemporalDiscounting(Task):
         if design_space is None:
             log_k_mean = float(prior.k_loc + 0.5 * prior.k_scale**2)
             design_space = HTDDesignSpace(log_k_mean=log_k_mean)
+
+        # If temperature=0, we do not have reparametrised sampling
+        # Otherwise, uses a relaxed categorical at sampling time.
+        # Set before super().__init__, which reads reparameterizable_outcomes.
+        self.temperature = temperature
 
         super().__init__(
             event_shape_y=[1],
@@ -283,10 +288,6 @@ class HyperbolicTemporalDiscounting(Task):
         # Aka "b" - b=1 corresponds to the HTD model
         # Other values correspond to the Green-Myerson model
         self.outer_exponent = outer_exponent
-
-        # If temperature=0, we do not have reparametrised sampling
-        # Otherwise, uses a relaex categorical at sampling time
-        self.temperature = temperature
 
         # Numerical clamping
         self.clamp_val = 1e-6

@@ -148,6 +148,7 @@ class LocationFinding(Task):
         exponent: float = 2.0,
         prior=None,
         design_space: DesignSpace | None = None,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the location-finding task."""
         # Default prior
@@ -160,6 +161,7 @@ class LocationFinding(Task):
             event_shape_design=[dim_theta],
             prior=prior,
             design_space=design_space,
+            reparameterize_outcomes=reparameterize_outcomes,
         )
 
         self.base_signal = base_signal

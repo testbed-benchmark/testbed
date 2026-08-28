@@ -154,7 +154,7 @@ class CES(Task):
         epsilon: float = 2**-22,
         prior=None,
         design_space: DesignSpace | None = None,
-        reparameterize_outcomes: bool = True,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the CES task."""
         if prior is None:

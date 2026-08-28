@@ -14,3 +14,4 @@ task:
   noise_scale: 0.5
   exponent: 2.0
   prior: null  # use the standard isotropic Gaussian source prior
+  reparameterize_outcomes: true  # set false to train with REINFORCE

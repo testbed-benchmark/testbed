@@ -126,6 +126,7 @@ class MichaelisMenten(Task):
         exponent: float = 1.0,
         prior=None,
         design_space: DesignSpace | None = None,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the Michaelis-Menten task."""
         # Default prior
@@ -141,6 +142,7 @@ class MichaelisMenten(Task):
             event_shape_design=[1],
             prior=prior,
             design_space=design_space,
+            reparameterize_outcomes=reparameterize_outcomes,
         )
 
         # Standard deviation of observation noise (assumed Gaussian)

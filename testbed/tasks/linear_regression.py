@@ -140,6 +140,7 @@ class LinearRegression(Task):
         quad: float = 0.0,
         prior=None,
         design_space: DesignSpace | None = None,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the LinearRegression task."""
         # Default prior
@@ -155,6 +156,7 @@ class LinearRegression(Task):
             event_shape_design=[dim],
             prior=prior,
             design_space=design_space,
+            reparameterize_outcomes=reparameterize_outcomes,
         )
 
         self.noise_scale = noise_scale
