@@ -115,12 +115,18 @@ class MichaelisMenten(Task):
             default prior admits, where the response has saturated.
     """
 
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """Gaussian noise added to a differentiable mean."""
+        return True
+
     def __init__(
         self,
         noise_scale: float = 2.5,
         exponent: float = 1.0,
         prior=None,
         design_space: DesignSpace | None = None,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the Michaelis-Menten task."""
         # Default prior
@@ -136,6 +142,7 @@ class MichaelisMenten(Task):
             event_shape_design=[1],
             prior=prior,
             design_space=design_space,
+            reparameterize_outcomes=reparameterize_outcomes,
         )
 
         # Standard deviation of observation noise (assumed Gaussian)

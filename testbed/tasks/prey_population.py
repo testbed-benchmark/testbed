@@ -87,6 +87,7 @@ class PreyPopulation(Task):
     Args:
         duration: Length of each experiment in hours (default: 24).
         prior: Prior over ``(a, T_h)``. Defaults to :class:`PreyPopulationPrior`.
+        reparameterize_outcomes: Accepted only as False or None; True raises.
 
     Attributes:
         duration: Length of each experiment in hours.
@@ -99,10 +100,16 @@ class PreyPopulation(Task):
             300 prey.
     """
 
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """False: Binomial counts have no reparameterized sampler."""
+        return False
+
     def __init__(
         self,
         duration: float = 24.0,
         prior: Distribution | None = None,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the prey-population task.
 
@@ -110,9 +117,12 @@ class PreyPopulation(Task):
             duration: Length of each experiment in hours.
             prior: Prior over ``(a, T_h)``. If omitted, uses
                 :class:`PreyPopulationPrior`.
+            reparameterize_outcomes: Accepted only as False or None; Binomial
+                counts admit no pathwise sampler, so True is rejected.
 
         Raises:
-            ValueError: If the duration is non-positive.
+            ValueError: If the duration is non-positive, or if
+                ``reparameterize_outcomes`` is True.
         """
         if duration <= 0:
             raise ValueError("duration must be positive.")
@@ -128,6 +138,7 @@ class PreyPopulation(Task):
             design_space=FiniteDesignSpace(
                 torch.arange(1, 301, dtype=torch.get_default_dtype()).unsqueeze(-1)
             ),
+            reparameterize_outcomes=reparameterize_outcomes,
         )
         self.duration = duration
 

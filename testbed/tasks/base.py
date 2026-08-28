@@ -50,6 +50,12 @@ class Task(ABC, nn.Module):
             incoming designs against design_space.contains(...) and raise if a
             design lies outside it. Disable for tight loops where the caller
             already guarantees valid designs (default: True).
+        reparameterize_outcomes (bool, optional):
+            Whether sampled outcomes carry a pathwise gradient to the design.
+            None follows the subclass's :attr:`reparameterizable_outcomes`;
+            True raises if the subclass cannot honour it. Set False for
+            score-function estimators, which are derived with the history held
+            fixed (default: None).
 
     Shape:
         Every tensor consists of
@@ -65,6 +71,26 @@ class Task(ABC, nn.Module):
         - ``event_shape_y = [1]``
     """
 
+    @property
+    @abstractmethod
+    def reparameterizable_outcomes(self) -> bool:
+        """Whether :meth:`_sample_outcome` can sample with a pathwise gradient.
+
+        A fact about the model, not a preference: False for genuinely discrete
+        outcomes. Pathwise estimators require it; score-function estimators
+        require its absence, so every task must state it explicitly.
+        """
+        ...
+
+    @property
+    def reparameterize_outcomes(self) -> bool:
+        """Whether :meth:`sample_outcome` currently returns attached outcomes.
+
+        Resolved against :attr:`reparameterizable_outcomes` in ``__init__``,
+        which rejects a pathwise request the task cannot honour.
+        """
+        return self._reparameterize_outcomes
+
     def __init__(
         self,
         event_shape_y: Iterable[int],
@@ -77,6 +103,7 @@ class Task(ABC, nn.Module):
         implicit_likelihood: bool = False,
         design_space: DesignSpace | None = None,
         validate_designs: bool = True,
+        reparameterize_outcomes: bool | None = None,
     ):
         """Initializes the task."""
         nn.Module.__init__(self)
@@ -114,6 +141,23 @@ class Task(ABC, nn.Module):
             )
         self.design_space = resolved_design_space
         self.validate_designs = validate_designs
+
+        # None follows the task's own capability. An explicit True the task
+        # cannot honour is an error: a
+        # pathwise estimator would otherwise run on a task that never
+        # supplies the gradient.
+        if reparameterize_outcomes and not self.reparameterizable_outcomes:
+            raise ValueError(
+                f"{type(self).__name__} was constructed with "
+                "reparameterize_outcomes=True, but its outcomes are not "
+                "reparameterizable (see its reparameterizable_outcomes "
+                "docstring for why). Pass False, or None to follow the task's "
+                "own capability, and train with a score-function estimator "
+                "such as REINFORCE."
+            )
+        if reparameterize_outcomes is None:
+            reparameterize_outcomes = self.reparameterizable_outcomes
+        self._reparameterize_outcomes = bool(reparameterize_outcomes)
 
     @property
     def device(self) -> torch.device:
@@ -159,6 +203,12 @@ class Task(ABC, nn.Module):
         The inputs (theta, design) are assumed to be paired,
         so that no broadcasting has to happen in this function.
 
+        Always returns the reparameterized draw where the model admits one, so
+        implementations need not consult ``reparameterize_outcomes``. Gating
+        whether those gradients are kept is :meth:`_gate_outcome_gradients`'s
+        job. Sample through :meth:`sample_outcome` or :meth:`sample_joint`
+        rather than calling this internal method directly, or the gate is skipped.
+
         Args:
             theta (Tensor):
                 Parameters of shape ``[b, *event_shape_theta]``.
@@ -170,6 +220,40 @@ class Task(ABC, nn.Module):
                 One sampled observation y for each (theta, design) pair, shape ``[b, *event_shape_y]``.
         """
         ...
+
+    def _gate_outcome_gradients(self, y_flat, design_flat):
+        """Detaches or validates a raw ``_sample_outcome`` draw.
+
+        Every public sampler routes its draw through here so the
+        reparameterization contract holds wherever outcomes are produced.
+
+        Args:
+            y_flat (Tensor):
+                Outcomes of shape ``[b, *event_shape_y]``.
+            design_flat (Tensor):
+                The designs they were sampled from, shape ``[b, *event_shape_design]``.
+
+        Returns:
+            Tensor:
+                The outcomes, detached when ``reparameterize_outcomes`` is False.
+        """
+        if not self.reparameterize_outcomes:
+            return y_flat.detach()
+        if (
+            torch.is_grad_enabled()
+            and design_flat.requires_grad
+            and not y_flat.requires_grad
+        ):
+            # The design carried a graph but the outcome did not, so
+            # _sample_outcome sampled without reparameterizing. Pathwise
+            # estimators would silently lose the distributional term.
+            raise ValueError(
+                f"{type(self).__name__}.reparameterize_outcomes is True but "
+                "_sample_outcome returned an outcome with no gradient to the "
+                "design. Sample reparameterized (e.g. loc + scale * randn_like, "
+                "or rsample), or declare reparameterizable_outcomes = False."
+            )
+        return y_flat
 
     def _check_design(self, design):
         """Raises if design lies outside self.design_space (when validate_designs)."""
@@ -249,6 +333,12 @@ class Task(ABC, nn.Module):
     def sample_outcome(self, theta, design, n_samples=1):
         """Samples outcomes from the likelihood.
 
+        Detaches the sample when ``reparameterize_outcomes`` is False, so the
+        outcome is graph-free before it reaches a designer. Detaching here
+        rather than downstream also stops later designs acquiring a gradient
+        path through it via the policy's history. Always sample through this
+        wrapper, never via ``_sample_outcome`` directly.
+
         Args:
             theta (Tensor):
                 Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
@@ -279,7 +369,9 @@ class Task(ABC, nn.Module):
                 .expand(n_samples, b_flat, *self.event_shape_design)
                 .reshape(n_samples * b_flat, *self.event_shape_design)
             )
-        y_flat = self._sample_outcome(theta_flat, design_flat)
+        y_flat = self._gate_outcome_gradients(
+            self._sample_outcome(theta_flat, design_flat), design_flat
+        )
         if n_samples == 1:
             return y_flat.reshape(*batch_shape, *self.event_shape_y)
         return y_flat.reshape(n_samples, *batch_shape, *self.event_shape_y)
@@ -287,7 +379,9 @@ class Task(ABC, nn.Module):
     def sample_joint(self, design, n_samples=1):
         r"""Samples from the joint over (y, theta) given designs.
 
-        Uses the current (possibly updated) prior.
+        Uses the current (possibly updated) prior. Gates the outcome's
+        gradients exactly as :meth:`sample_outcome` does, so the outcome is
+        graph-free when ``reparameterize_outcomes`` is False.
 
         Args:
             design (Tensor):
@@ -321,7 +415,9 @@ class Task(ABC, nn.Module):
                 .expand(n_samples, b_flat, *self.event_shape_design)
                 .reshape(total, *self.event_shape_design)
             )
-        y_flat = self._sample_outcome(theta_flat, design_flat)  # [total, *event_y]
+        y_flat = self._gate_outcome_gradients(
+            self._sample_outcome(theta_flat, design_flat), design_flat
+        )  # [total, *event_y]
         if n_samples == 1:
             return (
                 y_flat.reshape(*batch_shape, *self.event_shape_y),

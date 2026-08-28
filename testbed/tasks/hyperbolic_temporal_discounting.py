@@ -228,14 +228,22 @@ class HyperbolicTemporalDiscounting(Task):
             (HTD) model, other values give the Green-Myerson model
             (default: 1.0).
         temperature (float, optional):
-            Relaxation temperature for reparametrized sampling. If 0,
-            outcomes are sampled from a (non-reparametrized) Bernoulli;
-            otherwise a RelaxedBernoulli is used (default: 0.0).
+            Relaxation temperature. If 0, outcomes are sampled from a
+            (non-reparametrized) Bernoulli; otherwise a RelaxedBernoulli is
+            used. Selects both the sampler and the likelihood, so a positive
+            value changes the model being scored, not just how it is drawn
+            from: report EIG at ``temperature=0`` to stay comparable with the
+            discrete model (default: 0.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default HTDPrior is used.
         design_space (DesignSpace, optional):
             Controls the design parametrization. If None, the default HTDDesignSpace is used.
     """
+
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """Only the RelaxedBernoulli branch (``temperature > 0``) is pathwise."""
+        return self.temperature > 0
 
     def __init__(
         self,
@@ -245,6 +253,7 @@ class HyperbolicTemporalDiscounting(Task):
         temperature: float = 0.0,
         prior=None,
         design_space: DesignSpace | None = None,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the HTD task."""
         if prior is None:
@@ -254,6 +263,11 @@ class HyperbolicTemporalDiscounting(Task):
             log_k_mean = float(prior.k_loc + 0.5 * prior.k_scale**2)
             design_space = HTDDesignSpace(log_k_mean=log_k_mean)
 
+        # If temperature=0, we do not have reparametrised sampling
+        # Otherwise, uses a relaxed categorical at sampling time.
+        # Set before super().__init__, which reads reparameterizable_outcomes.
+        self.temperature = temperature
+
         super().__init__(
             event_shape_y=[1],
             event_shape_theta=[2],
@@ -261,6 +275,7 @@ class HyperbolicTemporalDiscounting(Task):
             prior=prior,
             discrete_y=True,
             design_space=design_space,
+            reparameterize_outcomes=reparameterize_outcomes,
         )
 
         # Acts as a bias towards y=1
@@ -273,10 +288,6 @@ class HyperbolicTemporalDiscounting(Task):
         # Aka "b" - b=1 corresponds to the HTD model
         # Other values correspond to the Green-Myerson model
         self.outer_exponent = outer_exponent
-
-        # If temperature=0, we do not have reparametrised sampling
-        # Otherwise, uses a relaex categorical at sampling time
-        self.temperature = temperature
 
         # Numerical clamping
         self.clamp_val = 1e-6
@@ -318,17 +329,34 @@ class HyperbolicTemporalDiscounting(Task):
         p_y1 = self.epsilon + (1.0 - 2 * self.epsilon) * normal_cdf(cdf_in)
         return p_y1.clamp(self.clamp_val, 1.0 - self.clamp_val)
 
+    def _relaxed_bernoulli(self, probs: Tensor) -> RelaxedBernoulli:
+        """Builds the relaxed likelihood, with temperature as a tensor.
+
+        ``RelaxedBernoulli.log_prob`` calls ``.log()`` on temperature, so a
+        float works for sampling but not for scoring.
+        """
+        temperature = torch.as_tensor(
+            self.temperature, dtype=probs.dtype, device=probs.device
+        )
+        return RelaxedBernoulli(temperature=temperature, probs=probs)
+
     def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
         """Computes log probability of observations under the model.
 
         Note:
-            The returned log-probability always corresponds to a hard
-            (non-relaxed) Bernoulli likelihood, regardless of ``temperature``;
-            ``temperature`` only affects sampling, via :meth:`_sample_outcome`.
+            Scores under whichever likelihood ``temperature`` selects, matching
+            :meth:`_sample_outcome`: the hard Bernoulli pmf at ``temperature=0``,
+            and the RelaxedBernoulli density above it. Scoring a relaxed draw
+            under the hard pmf would return ``-inf`` for every observation,
+            since a relaxed draw is never exactly 0 or 1. Keeping the two in
+            step is also what leaves sPCE a valid bound, on the relaxed model's
+            mutual information, which tends to the discrete one as
+            ``temperature -> 0``.
 
         Args:
             y (Tensor):
-                Observations of shape ``[b, 1]``, taking values in ``{0, 1}``.
+                Observations of shape ``[b, 1]``, taking values in ``{0, 1}``
+                (or in ``(0, 1)`` when ``temperature > 0``).
             theta (Tensor):
                 Parameter tensor of shape ``[b, 2]``.
             design (Tensor):
@@ -338,7 +366,15 @@ class HyperbolicTemporalDiscounting(Task):
             Tensor:
                 Log probability per batch element, shape ``[b]``.
         """
-        p_y1 = self.make_prob(theta, design).squeeze(-1)
+        p_y1 = self.make_prob(theta, design)
+
+        if self.temperature > 0:
+            # RelaxedBernoulli has no mass at the endpoints and rsample can
+            # round to them in float32, so keep y strictly interior.
+            y_safe = y.clamp(self.clamp_val, 1.0 - self.clamp_val)
+            return self._relaxed_bernoulli(p_y1).log_prob(y_safe).squeeze(-1)
+
+        p_y1 = p_y1.squeeze(-1)
         log_p_y1 = torch.log(p_y1)
         log_p_y0 = torch.log1p(-p_y1)
 
@@ -372,5 +408,5 @@ class HyperbolicTemporalDiscounting(Task):
         """
         p_y1 = self.make_prob(theta, design)  # [b, 1]
         if self.temperature > 0:
-            return RelaxedBernoulli(temperature=self.temperature, probs=p_y1).rsample()
+            return self._relaxed_bernoulli(p_y1).rsample()
         return Bernoulli(p_y1).sample()

@@ -100,6 +100,18 @@ class Reinforce(RolloutObjective, ABC):
         if baseline not in (None, "leave_one_out"):
             raise ValueError(f"Unknown baseline: {baseline}")
 
+        # Both estimator forms are derived with the realized history held
+        # fixed, so the outcomes must not carry a gradient to the design. If
+        # they do, `value` already holds a complete pathwise gradient and the
+        # score term adds a spurious Jacobian term on top of it.
+        if task.reparameterize_outcomes:
+            raise ValueError(
+                f"{type(self).__name__} needs outcomes held fixed, but "
+                f"{type(task).__name__} samples them pathwise. Either use a "
+                "pathwise objective (e.g. SPCE), or construct the task with "
+                "reparameterize_outcomes=False."
+            )
+
         self.stochastic_design_policy = stochastic_design_policy
         self.baseline = baseline
 

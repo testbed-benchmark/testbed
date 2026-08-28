@@ -6,13 +6,20 @@ defaults:
   - override /net@design_net: null
   - _self_
 
-# DAD on the CES model. The likelihood is reparameterizable (the outcome is a
-# censored sigmoid of a Gaussian), so this trains with the pathwise sPCE
-# gradient (DAD paper Eq. 14) rather than REINFORCE.
+# DAD on the CES model, trained with REINFORCE.
 #
+# The outcome is a censored sigmoid of a Gaussian, so it is formally
+# reparameterizable, but the pathwise gradient is not usable here: a large portion
+# of the mass sits on the two censoring atoms, and _outcome_logp switches branches
+# there, so the sPCE value jumps at the boundary. Reparameterizing through a
+# discontinuity drops the d(censoring probability)/d(design) term, which is
+# precisely the signal telling the policy to leave the saturated region.
+
 
 
 seed: 0
+task:
+  reparameterize_outcomes: false
 # designer
 # Condition on the unconstrained designs the policy emits rather than on the
 # baskets in [0, 100]^6. The tanh squash makes the two bijective, and the raw
@@ -20,10 +27,10 @@ seed: 0
 use_raw_history: true
 # objective
 objective:
-  name: spce
+  name: reinforce
   n_inner: 1_024  # "number of negative samples"
   reparameterize_policy: false
-  baseline: null
+  baseline: leave_one_out  # the score term carries the gradient; keep its variance down
   requires_policy_log_probs: false
 # training
 n_train_iter: 50_000  # gradient steps 

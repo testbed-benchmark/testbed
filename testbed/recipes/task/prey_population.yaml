@@ -7,6 +7,7 @@ task:
   _target_: testbed.tasks.PreyPopulation
   duration: 24.0
   prior: null  # use the standard Blau et al. prior
+  reparameterize_outcomes: null  # Binomial counts are never pathwise; true is rejected
 
 # Bounds used by methods that normalize the task outcomes.
 reward:
