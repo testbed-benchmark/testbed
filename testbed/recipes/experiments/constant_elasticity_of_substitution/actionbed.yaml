@@ -13,8 +13,8 @@ defaults:
 seed: 42  # single-run default; seed sweeps override this
 
 wandb:
-  project: ces      # project = task
-  group: actionbed  # group = method
+  project: constant_elasticity_of_substitution # project = task
+  group: actionbed                             # group = method
 
 # loss
 loss:
