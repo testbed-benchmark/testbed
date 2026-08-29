@@ -179,7 +179,9 @@ class MichaelisMenten(Task):
         denom = vhalf.pow(self.exponent) + design.pow(self.exponent)
         return num / denom
 
-    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
+    def _outcome_logp(  # noqa: D417
+        self, y: Tensor, theta: Tensor, design: Tensor, **kwargs
+    ) -> Tensor:
         """Computes log probability of observations under the model.
 
         Args:
@@ -198,7 +200,7 @@ class MichaelisMenten(Task):
         logp = normal_log_prob(y, loc, self.noise_scale)
         return logp.sum(dim=-1)
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
+    def _sample_outcome(self, theta: Tensor, design: Tensor, **kwargs) -> Tensor:  # noqa: D417
         """Samples from the likelihood p(y | theta, design) using reparametrization.
 
         Args:

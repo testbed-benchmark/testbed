@@ -181,7 +181,12 @@ class Designer(ABC, nn.Module):
                 hook.after_propose(state)
 
             # Sample observation; always using the (possibly transformed) design.
-            y = state.task.sample_outcome(state.theta, state.design)
+            y = state.task.sample_outcome(
+                state.theta,
+                state.design,
+                y_history=state.y_history,
+                design_history=state.design_history,
+            )
             state.y = y  # [b, *event_shape_y]
 
             # Update state history using data that actually produced the observation.

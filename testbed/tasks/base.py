@@ -37,9 +37,10 @@ class Task(ABC, nn.Module):
             Whether observations are discrete (default: False).
         discrete_theta (bool):
             Whether parameters are discrete (default: False).
-        separable (bool):
-            Whether the likelihood factorizes over observations.
-            Non-separable tasks must override :meth:`history_logp` (default: True).
+        memoryless (bool):
+            Whether outcomes don't depend on history, i.e. ``_outcome_logp``/
+            ``_sample_outcome`` ignore their ``y_history``/``design_history``
+            kwargs (default: True).
         implicit_likelihood (bool):
             Whether the likelihood is implicit (default: False).
         design_space (optional):
@@ -99,7 +100,7 @@ class Task(ABC, nn.Module):
         prior: Distribution,
         discrete_y: bool = False,
         discrete_theta: bool = False,
-        separable: bool = True,
+        memoryless: bool = True,
         implicit_likelihood: bool = False,
         design_space: DesignSpace | None = None,
         validate_designs: bool = True,
@@ -115,12 +116,7 @@ class Task(ABC, nn.Module):
         self.prior = prior
         self._current_prior = prior
 
-        # Non-separable likelihoods must overwrite history_logp
-        self.separable = separable
-        if not self.separable and type(self).history_logp is Task.history_logp:
-            raise TypeError(
-                f"{type(self).__name__} has separable=False but does not override history_logp."
-            )
+        self.memoryless = memoryless
 
         self.implicit_likelihood = implicit_likelihood
 
@@ -176,7 +172,7 @@ class Task(ABC, nn.Module):
         return self._current_prior
 
     @abstractmethod
-    def _outcome_logp(self, y, theta, design):
+    def _outcome_logp(self, y, theta, design, **kwargs):
         """Evaluates outcome log probabilities.
 
         The inputs (y, theta, design) are assumed to be paired,
@@ -189,6 +185,9 @@ class Task(ABC, nn.Module):
                 Parameters of shape ``[b, *event_shape_theta]``.
             design (Tensor):
                 Designs of shape ``[b, *event_shape_design]``.
+            **kwargs:
+                Task-specific context (e.g. ``y_history``/``design_history``
+                from :meth:`history_logp`). Ignore what you don't need.
 
         Returns:
             Tensor:
@@ -197,7 +196,7 @@ class Task(ABC, nn.Module):
         ...
 
     @abstractmethod
-    def _sample_outcome(self, theta, design):
+    def _sample_outcome(self, theta, design, **kwargs):
         """Samples a single outcome given parameters and designs.
 
         The inputs (theta, design) are assumed to be paired,
@@ -214,6 +213,8 @@ class Task(ABC, nn.Module):
                 Parameters of shape ``[b, *event_shape_theta]``.
             design (Tensor):
                 Designs of shape ``[b, *event_shape_design]``.
+            **kwargs:
+                Task-specific context; see :meth:`_outcome_logp`.
 
         Returns:
             Tensor:
@@ -269,7 +270,7 @@ class Task(ABC, nn.Module):
                 f"Got design of shape {tuple(design.shape)}: {design}"
             )
 
-    def outcome_logp(self, y, theta, design):
+    def outcome_logp(self, y, theta, design, **kwargs):
         """Evaluates outcome log probabilities with broadcasting.
 
         Broadcasting conventions follow ``torch.distributions``.
@@ -281,6 +282,8 @@ class Task(ABC, nn.Module):
                 Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
             design (Tensor):
                 Designs of shape ``[*batch_shape_design, *event_shape_design]``.
+            **kwargs:
+                Forwarded to ``_outcome_logp``.
 
         Returns:
             Tensor:
@@ -292,18 +295,21 @@ class Task(ABC, nn.Module):
             (theta, self.event_shape_theta),
             (design, self.event_shape_design),
         )
-        logp_flat = self._outcome_logp(y_flat, theta_flat, design_flat)
+        logp_flat = self._outcome_logp(y_flat, theta_flat, design_flat, **kwargs)
         return logp_flat.reshape(batch_shape)
 
-    def history_logp(self, y_history, design_history, theta):
+    def history_logp(self, y_history, design_history, theta, **kwargs):
         r"""Computes log probabilities for a sequence of observations and designs.
 
-        Assumes a separable likelihood, so that the log-probs are summed over the sequence dimension:
+        Sums the per-step log-prob, each conditioned on the history strictly before it:
 
         .. math::
-            p(y_{1:T}, x_{1:T} \mid \theta) = \sum_{t=1}^T p(y_t \mid \theta, x_t)
+            p(y_{1:T}, x_{1:T} \mid \theta) = \prod_{t=1}^T p(y_t \mid \theta, x_t, y_{<t}, x_{<t})
 
-        Tasks with non-separable likelihoods should overwrite this.
+        Correct for memoryless and history-dependent likelihoods alike, since
+        ``_outcome_logp`` receives ``y_history``/``design_history`` at every
+        step and a memoryless task simply ignores them. Override only if the
+        likelihood isn't expressible as such a per-step product at all.
 
         Args:
             y_history (Tensor):
@@ -312,6 +318,8 @@ class Task(ABC, nn.Module):
                 Designs of shape ``[*batch_shape_design, T, *event_shape_design]``.
             theta (Tensor):
                 Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
+            **kwargs:
+                Forwarded to ``_outcome_logp`` at every step.
 
         Returns:
             Tensor:
@@ -327,10 +335,17 @@ class Task(ABC, nn.Module):
         b_flat = theta_flat.shape[0]
         logp = torch.zeros(b_flat, device=theta_flat.device)
         for t in range(T):
-            logp += self._outcome_logp(y_flat[:, t], theta_flat, design_flat[:, t])
+            logp += self._outcome_logp(
+                y_flat[:, t],
+                theta_flat,
+                design_flat[:, t],
+                y_history=y_flat[:, :t],
+                design_history=design_flat[:, :t],
+                **kwargs,
+            )
         return logp.reshape(batch_shape)
 
-    def sample_outcome(self, theta, design, n_samples=1):
+    def sample_outcome(self, theta, design, n_samples=1, **kwargs):
         """Samples outcomes from the likelihood.
 
         Detaches the sample when ``reparameterize_outcomes`` is False, so the
@@ -346,6 +361,8 @@ class Task(ABC, nn.Module):
                 Designs of shape ``[*batch_shape_design, *event_shape_design]``.
             n_samples (int):
                 How many observation samples to draw for each (theta, design) pair (default: 1).
+            **kwargs:
+                Forwarded to ``_sample_outcome`` as-is (not batch-expanded for ``n_samples > 1``).
 
         Returns:
             Tensor:
@@ -370,13 +387,13 @@ class Task(ABC, nn.Module):
                 .reshape(n_samples * b_flat, *self.event_shape_design)
             )
         y_flat = self._gate_outcome_gradients(
-            self._sample_outcome(theta_flat, design_flat), design_flat
+            self._sample_outcome(theta_flat, design_flat, **kwargs), design_flat
         )
         if n_samples == 1:
             return y_flat.reshape(*batch_shape, *self.event_shape_y)
         return y_flat.reshape(n_samples, *batch_shape, *self.event_shape_y)
 
-    def sample_joint(self, design, n_samples=1):
+    def sample_joint(self, design, n_samples=1, **kwargs):
         r"""Samples from the joint over (y, theta) given designs.
 
         Uses the current (possibly updated) prior. Gates the outcome's
@@ -388,6 +405,8 @@ class Task(ABC, nn.Module):
                 Designs of shape ``[*batch_shape, *event_shape_design]``.
             n_samples (int):
                 Number of samples to draw for each design (default: 1).
+            **kwargs:
+                Forwarded to ``_sample_outcome``.
 
         Returns:
             Tensor:
@@ -416,7 +435,7 @@ class Task(ABC, nn.Module):
                 .reshape(total, *self.event_shape_design)
             )
         y_flat = self._gate_outcome_gradients(
-            self._sample_outcome(theta_flat, design_flat), design_flat
+            self._sample_outcome(theta_flat, design_flat, **kwargs), design_flat
         )  # [total, *event_y]
         if n_samples == 1:
             return (

@@ -340,7 +340,9 @@ class HyperbolicTemporalDiscounting(Task):
         )
         return RelaxedBernoulli(temperature=temperature, probs=probs)
 
-    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
+    def _outcome_logp(  # noqa: D417
+        self, y: Tensor, theta: Tensor, design: Tensor, **kwargs
+    ) -> Tensor:
         """Computes log probability of observations under the model.
 
         Note:
@@ -389,7 +391,7 @@ class HyperbolicTemporalDiscounting(Task):
 
         return logp
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
+    def _sample_outcome(self, theta: Tensor, design: Tensor, **kwargs) -> Tensor:  # noqa: D417
         """Samples an outcome from the Bernoulli likelihood.
 
         Uses a reparametrized RelaxedBernoulli when ``temperature > 0``, and a

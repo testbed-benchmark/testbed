@@ -180,7 +180,9 @@ class PreyPopulation(Task):
         final_population = self.population_after(theta, design)
         return ((design - final_population) / design).clamp(0.0, 1.0)
 
-    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
+    def _outcome_logp(  # noqa: D417
+        self, y: Tensor, theta: Tensor, design: Tensor, **kwargs
+    ) -> Tensor:
         """Evaluates the binomial observation log probability.
 
         Args:
@@ -196,7 +198,7 @@ class PreyPopulation(Task):
             y.squeeze(-1)
         )
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
+    def _sample_outcome(self, theta: Tensor, design: Tensor, **kwargs) -> Tensor:  # noqa: D417
         """Samples the number of prey consumed after the experiment.
 
         Args:

@@ -200,7 +200,9 @@ class LinearRegression(Task):
 
         return mean_y.unsqueeze(-1)
 
-    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
+    def _outcome_logp(  # noqa: D417
+        self, y: Tensor, theta: Tensor, design: Tensor, **kwargs
+    ) -> Tensor:
         """Computes log probability of observations under the model.
 
         If dim_y > 1, observations are assumed to be conditionally independent given (theta, design).
@@ -221,7 +223,7 @@ class LinearRegression(Task):
         logp = normal_log_prob(y, loc, self.noise_scale)
         return logp.sum(dim=-1)
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
+    def _sample_outcome(self, theta: Tensor, design: Tensor, **kwargs) -> Tensor:  # noqa: D417
         """Samples from the likelihood using reparametrization.
 
         If dim_y > 1, observations are assumed to be conditionally independent given (theta, design).
