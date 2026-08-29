@@ -22,6 +22,66 @@ BASKET_LOW = 0.0
 BASKET_HIGH = 100.0
 
 
+def _split_theta(theta: Tensor):
+    """Convenience function that splits theta = (rho, alpha, u) into its components.
+
+    Args:
+        theta (Tensor):
+            Parameters of shape [..., 5].
+    """
+    rho = theta[..., 0:1]
+    alpha = theta[..., 1:4]
+    u = theta[..., 4:5]
+    return rho, alpha, u
+
+
+class CESThetaSpace(DesignSpace):
+    r"""Constraints and reparametrization for the parameters (theta) in the CES model."""
+
+    def __init__(self):
+        """Initializes the theta space."""
+        super().__init__(event_shape=(5,), is_discrete=False)
+
+    def __repr__(self) -> str:
+        """Returns a compact representation."""
+        return "CESThetaSpace()"
+
+    def _contains(self, theta: Tensor) -> bool:
+        r"""Checks that theta is valid.
+
+        The constraints are :math:`'rho, u > 0` and :math:`\alpha \in \Delta_3` is an element of the 3-simplex.
+        """
+        rho, alpha, u = _split_theta(theta)
+
+        valid_rho = torch.all(rho > 0)
+        valid_u = torch.all(u > 0)
+        valid_alpha = torch.all(alpha > 0) and torch.allclose(
+            alpha.sum(dim=-1), torch.ones_like(alpha[..., 0])
+        )
+
+        return valid_rho and valid_u and valid_alpha
+
+    def _to_design(self, raw_theta: Tensor) -> Tensor:
+        r"""Pointwise raw -> theta map.
+
+        Maps :math:`\rho \mapsto \exp(\rho)`, :math:`\alpha \mapsto \mathrm{SoftMax}(\alpha)`, :math:`u \mapsto \exp(u)`
+
+        The input raw_theta is clamped so exp cannot overflow to inf.
+
+        Args:
+            raw_theta (Tensor):
+                Raw thetas (assumed to be in an unconstrained space); shape [..., 5]
+        """
+        rho, alpha, u = _split_theta(raw_theta)
+        max_exponent = math.log(torch.finfo(raw_theta.dtype).max) - 1.0
+
+        rho = torch.exp(rho.clamp(max=max_exponent))  # rho > 0
+        alpha = torch.softmax(alpha, dim=-1)  # alpha in the 3-simplex
+        u = torch.exp(u.clamp(max=max_exponent))  # u > 0
+
+        return torch.cat([rho, alpha, u], dim=-1)
+
+
 class CESPrior(Distribution):
     r"""Prior over the CES latent variables :math:`(\rho, \alpha, u)`.
 
@@ -110,13 +170,11 @@ class CESPrior(Distribution):
             Tensor:
                 Log probabilities, shape ``[..., ]``.
         """
-        rho = theta[..., 0]
-        alpha = theta[..., 1:4]
-        u = theta[..., 4]
+        rho, alpha, u = _split_theta(theta)
 
-        logp_rho = self.rho_beta.log_prob(rho)
+        logp_rho = self.rho_beta.log_prob(rho.squeeze(-1))
         logp_alpha = self.alpha_dirichlet.log_prob(alpha)
-        logp_u = self.u_lognormal.log_prob(u)
+        logp_u = self.u_lognormal.log_prob(u.squeeze(-1))
         return logp_rho + logp_alpha + logp_u
 
 
@@ -154,6 +212,7 @@ class CES(Task):
         epsilon: float = 2**-22,
         prior=None,
         design_space: DesignSpace | None = None,
+        action_space: DesignSpace | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the CES task."""
@@ -165,12 +224,17 @@ class CES(Task):
                 low=BASKET_LOW, high=BASKET_HIGH, event_shape=[6]
             )
 
+        # Default action for this task: predict \theta
+        if action_space is None:
+            action_space = CESThetaSpace()
+
         super().__init__(
             event_shape_y=[1],
             event_shape_theta=[5],
             event_shape_design=[6],
             prior=prior,
             design_space=design_space,
+            action_space=action_space,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 
@@ -204,9 +268,7 @@ class CES(Task):
                 Mean :math:`\mu` and standard deviation :math:`\sigma` of the
                 latent Gaussian ``eta``, each with shape ``[..., 1]``.
         """
-        rho = theta[..., 0:1]
-        alpha = theta[..., 1:4]
-        u = theta[..., 4:5]
+        rho, alpha, u = _split_theta(theta)
 
         def utility(basket):
             base = basket.clamp(min=self.clamp_val)

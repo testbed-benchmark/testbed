@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 from ..inference.is_sampler import run_importance_sampling
 from .rollout import RolloutState
@@ -108,17 +108,25 @@ class PosteriorUpdateHook(RolloutHook):
 class ActionHook(RolloutHook):
     """Runs an action net either once on the full history or after every step."""
 
-    def __init__(self, action_net, *, every_step: bool = False):
+    def __init__(self, action_net, *, every_step: bool = False, action_space=None):
         """action_net(y_history, design_history) -> action, [b, *event_shape_action]."""
         super().__init__()
         self.action_net = action_net
         self.every_step = every_step
+        self.action_space = action_space
+
+    def step_action(self, y_history: Tensor, design_history: Tensor) -> Tensor:
+        """Computes the action by calling the action_net and possibly transforming via the action space."""
+        action = self.action_net(y_history, design_history)
+        if self.action_space:
+            action = self.action_space.to_design(action)
+        return action
 
     def after_step(self, state: RolloutState) -> None:
         """Computes and stashes an action from the history so far, if requested every step."""
         if not self.every_step:
             return
-        action_t = self.action_net(state.y_history, state.design_history)
+        action_t = self.step_action(state.y_history, state.design_history)
         state.scratch.setdefault("action_history", []).append(action_t)
 
     def on_rollout_end(self, state: RolloutState) -> dict[str, Any] | None:
@@ -127,4 +135,4 @@ class ActionHook(RolloutHook):
             return {
                 "action_history": torch.stack(state.scratch["action_history"], dim=1)
             }
-        return {"action": self.action_net(state.y_history, state.design_history)}
+        return {"action": self.step_action(state.y_history, state.design_history)}

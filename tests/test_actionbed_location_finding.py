@@ -1,16 +1,16 @@
 """Tests for the ActionBED training components."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 import torch
 
+from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.manager import Manager
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import MSELoss, SortedMSELoss
 from testbed.designers import PolicyDesigner
-from testbed.methods.actionbed import Trainer, resolve_event_shape_action
+from testbed.methods.actionbed import Trainer, build_policy_nets
 from testbed.tasks import LocationFinding
 
 
@@ -110,25 +110,26 @@ def test_evaluate_does_not_update_parameters():
         torch.testing.assert_close(before, after)
 
 
-def test_resolve_event_shape_action_uses_custom_attribute():
+def _net_cfg():
+    target = {"_target_": "testbed.design_nets.DeepSetPolicyNet"}
+    return SimpleNamespace(design_net=target, action_net=target)
+
+
+def test_build_policy_nets_sizes_action_net_to_theta_by_default():
     task = _make_task()
-    task.event_shape_action = torch.Size([3])
-    manager = MagicMock()
 
-    shape = resolve_event_shape_action(task, manager)
+    _, action_net = build_policy_nets(_net_cfg(), task)
 
-    assert shape == torch.Size([3])
-    manager.event_logger.warning.assert_not_called()
+    assert action_net.event_shape_out == task.event_shape_theta
 
 
-def test_resolve_event_shape_action_falls_back_to_theta():
+def test_build_policy_nets_sizes_action_net_to_custom_action_space():
     task = _make_task()
-    manager = MagicMock()
+    task.action_space = BoxDesignSpace(low=0.0, high=1.0, event_shape=[3])
 
-    shape = resolve_event_shape_action(task, manager)
+    _, action_net = build_policy_nets(_net_cfg(), task)
 
-    assert shape == task.event_shape_theta
-    manager.event_logger.warning.assert_called_once()
+    assert action_net.event_shape_out == torch.Size([3])
 
 
 def test_maybe_save_best_saves_checkpoint_on_improvement(tmp_path):

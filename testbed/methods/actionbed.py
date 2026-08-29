@@ -57,7 +57,7 @@ class Trainer:
         # Attach an action hook directly to the designer(s), so every
         # rollout() call from them computes an action -- no need to thread
         # hooks through each individual call site.
-        action_hook = ActionHook(self.action_net)
+        action_hook = ActionHook(self.action_net, action_space=task.action_space)
         self.designer.hooks.append(action_hook)
         if self.random_designer is not None:
             self.random_designer.hooks.append(action_hook)
@@ -260,25 +260,7 @@ class Trainer:
 # ============================================================================
 
 
-def resolve_event_shape_action(task, manager):
-    """Output shape for the action net.
-
-    Until tasks model arbitrary actions, we assume the action space equals the
-    theta space. A task opts out by defining `event_shape_action`; otherwise we
-    fall back to event_shape_theta and warn.
-    """
-    if hasattr(task, "event_shape_action"):
-        return task.event_shape_action
-
-    manager.event_logger.warning(
-        f"{type(task).__name__} does not define `event_shape_action`; assuming "
-        f"action space == theta space (event_shape_theta="
-        f"{tuple(task.event_shape_theta)})."
-    )
-    return task.event_shape_theta
-
-
-def build_policy_nets(cfg, task, manager):
+def build_policy_nets(cfg, task):
     """Instantiates design and action policy networks."""
     design_net = instantiate(
         cfg.design_net,
@@ -291,7 +273,7 @@ def build_policy_nets(cfg, task, manager):
         cfg.action_net,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
-        event_shape_out=resolve_event_shape_action(task, manager),
+        event_shape_out=task.action_space.event_shape,
     )
 
     return design_net, action_net
@@ -337,7 +319,7 @@ def main(cfg):
     # Set seed
     torch.manual_seed(cfg.seed)
 
-    design_net, action_net = build_policy_nets(cfg, task, manager)
+    design_net, action_net = build_policy_nets(cfg, task)
     design_net = design_net.to(cfg.device)
     action_net = action_net.to(cfg.device)
     designer = PolicyDesigner(task, cfg.T, design_net)
