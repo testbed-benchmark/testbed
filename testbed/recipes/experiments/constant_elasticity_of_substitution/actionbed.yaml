@@ -1,0 +1,47 @@
+# @package _global_
+
+defaults:
+  - /method: actionbed
+  - override /task: constant_elasticity_of_substitution
+  - override /net@action_net: null
+  - _self_
+
+# Hyperparameter settings for ActionBED on the CES task
+# NB: the original paper did not study this task. These hyperparams
+# are taken as the defauls from 2D 2src LF; no additional tuning. 
+
+seed: 42  # single-run default; seed sweeps override this
+
+wandb:
+  project: ces      # project = task
+  group: actionbed  # group = method
+
+# loss
+loss:
+  _target_: testbed.design_objectives.MSELoss
+# training
+n_train_iter: 150_000
+n_action_warmup_iter: 50_000
+n_outer: 2_000
+
+# optimizer
+lr: 5e-4
+betas: [0.8, 0.998]
+grad_clip: null
+lr_gamma: 0.95
+lr_period: 2000
+# policy networks
+design_net:
+  _target_: testbed.design_nets.AttentivePolicyNet
+  encoder_dim_h: [64]
+  dim_emb: 64
+  num_heads: 4
+  num_blocks: 2
+action_net:
+  _target_: testbed.design_nets.MLPPolicyNet
+  # input dim: T * (dim_design + dim_y) = T * 7 
+  # output dim: dim_theta
+  dims: [70, 512, 256, 128, 5]
+  activation:
+    _target_: torch.nn.GELU
+    _partial_: true
