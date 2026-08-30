@@ -1,0 +1,40 @@
+# @package _global_
+
+defaults:
+  - /system: default
+  - /task: constant_elasticity_of_substitution
+  - /net@design_net: attentive_policy
+  - /net@action_net: attentive_policy
+  - /wandb: default
+  - /final_eval: default
+  - /hydra_run: default
+  - _self_
+# system (device/save_dir come from the system group)
+seed: 0
+# design-history normalization
+# Rescales the [0, 100]^6 basket history to [-1, 1] on the way into both the
+# design net and the action net. Equals tanh(raw design) under the task's
+# BoxDesignSpace. Set false for the ablation arm that reproduces the
+# unnormalized behaviour of methods/actionbed.py.
+normalize_designs: true
+# loss
+# Whitened MSE on (log rho, alpha, standardized log u); requires an
+# untransformed action space (see the experiment recipe).
+loss:
+  _target_: testbed.methods.actionbed_ces.CESWhitenedMSELoss
+  reduction: mean
+# training
+n_train_iter: 5_000
+n_action_warmup_iter: 0
+n_outer: 2_048
+
+# eval
+eval_every: 100
+n_outer_eval: 2_048
+
+# optimizer
+lr: 1e-4
+betas: [0.9, 0.999]
+grad_clip: 1.0
+lr_period: null
+lr_gamma: null
