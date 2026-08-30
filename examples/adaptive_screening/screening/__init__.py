@@ -1,5 +1,8 @@
-"""Non-neural, float64 adaptive-screening pilot."""
+"""Adaptive-screening experiment numerical-mode setup."""
+
+import os
 
 import jax
 
-jax.config.update("jax_enable_x64", True)
+if os.environ.get("ADAPTIVE_SCREENING_TRAINING") != "1":
+    jax.config.update("jax_enable_x64", True)

@@ -1,0 +1,73 @@
+code_commit: 3a84da59e30dc66514c489e1e1fc6daf82c01600
+environment:
+  T: 24
+  beta_grid:
+  - 0.0
+  - 0.2
+  - 0.4
+  - 0.6
+  - 0.8
+  - 1.0
+  - 1.2
+  - 1.4
+  - 1.6
+  - 1.8
+  - 2.0
+  - 2.2
+  - 2.4
+  - 2.6
+  - 2.8
+  - 3.0
+  - 3.2
+  - 3.4
+  - 3.6
+  - 3.8
+  - 4.0
+  d: 16
+  expected_positive_candidates: 2.0
+  kappa_grid:
+  - 0.0
+  - 1.0
+  - 1.5
+  - 2.0
+  - 2.5
+  - 3.0
+  mu: -1.1503493803760083
+  sigma: 0.75
+  tau: 1.0
+  tests:
+  - episodes: 50000
+    seed: 314159
+  - episodes: 50000
+    seed: 161803
+  validation:
+    episodes: 20000
+    seed: 271828
+  validation_tie_tolerance: 0.0001
+environment_hash: 27ba90adacffe551da92b6e03e2c93b9dc9747a48bd5879c2e9a744a7475f373
+kappa_train: 0.0
+parameter_count: 38913
+pilot_result_hash: 1c7106f762ee8d5de8e871c07a18e278f3012ebeb89988dad0f782797bf35b4a
+seed: 202
+teacher_beta: 2.8
+training_settings:
+  behavior_cloning:
+    learning_rate: 0.001
+    trajectory_batch_size: 512
+    updates: 1000
+  reinforce:
+    early_stopping_patience_updates: 1600
+    entropy_coefficient_final: 0.001
+    entropy_coefficient_initial: 0.01
+    entropy_decay_steps: 3000
+    global_gradient_clip: 1.0
+    learning_rate_final: 3.0e-05
+    learning_rate_initial: 0.0003
+    minimum_validation_improvement: 0.0005
+    total_updates: 6000
+    trajectory_batch_size: 1024
+    validation_episodes: 10000
+    validation_every_updates: 200
+    warmup_steps: 250
+    weight_decay: 1.0e-05
+  validation_seed: 424242

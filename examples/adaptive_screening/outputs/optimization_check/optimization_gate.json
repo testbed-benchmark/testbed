@@ -1,0 +1,35 @@
+{
+  "code_commit": "1b312192fe46ca75c6589dd3d3a0fba7073523a7",
+  "environment_hash": "27ba90adacffe551da92b6e03e2c93b9dc9747a48bd5879c2e9a744a7475f373",
+  "pass": true,
+  "pilot_result_hash": "1c7106f762ee8d5de8e871c07a18e278f3012ebeb89988dad0f782797bf35b4a",
+  "policy_checks": [
+    {
+      "kappa_train": 0.0,
+      "learned_mean_J": 0.5209096027717334,
+      "mean_gap_vs_ucb": 0.001123810135171266,
+      "pass": true,
+      "seeds_passing": 3,
+      "ucb_J": 0.5197857926365621
+    },
+    {
+      "kappa_train": 2.5,
+      "learned_mean_J": 0.39328382202528916,
+      "mean_gap_vs_ucb": 0.01366707936086553,
+      "pass": true,
+      "seeds_passing": 3,
+      "ucb_J": 0.37961674266442363
+    },
+    {
+      "kappa_train": 3.0,
+      "learned_mean_J": 0.3632296575612197,
+      "mean_gap_vs_ucb": 0.008619081204759071,
+      "pass": true,
+      "seeds_passing": 3,
+      "ucb_J": 0.35461057635646065
+    }
+  ],
+  "source_hash": "391fada2452668ba5082145e85b80a338f794a53154b877aed07ada5fac91b4a",
+  "validation_episodes": 10000,
+  "validation_seed": 424242
+}

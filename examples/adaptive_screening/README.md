@@ -1,11 +1,11 @@
-# Adaptive screening: go/no-go pilot
+# Adaptive screening: downstream-rule mismatch experiment
 
-Implements the **non-neural pilot and gate in Section 11** of
+Implements the complete primary experiment in
 [the experiment specification](../../adaptive_screening_experiment.md).
-Everything lives in this example; the parent TestBED package is unchanged.
-The pilot runs locally on CPU with JAX float64. It does not need an HPC or GPU.
-Neural architectures, imitation, reinforcement learning and final learned-policy
-evaluation are outside this go/no-go deliverable.
+Everything lives in this example; the parent TestBED package is unchanged. The
+non-neural pilot, optimization checks, final evaluation and figures run locally
+on CPU. UCB imitation and REINFORCE training run on the HPC GPU through the
+included Slurm array scripts.
 
 ## Install and test
 
@@ -97,11 +97,61 @@ uv run python scripts/train_policy.py --config configs/main.yaml \
 ```
 
 It rejects an absent, failed, altered or mismatched gate and verifies the
-underlying evidence again. Without `--verify-only` it also refuses to train:
-this example deliberately contains no neural trainer. A future trainer must
-call `screening.gate.require_passing_gate` before initializing neural code.
-GPU training, if subsequently implemented, belongs on the HPC via Slurm;
-CPU evaluation remains local.
+underlying evidence again. The guard runs before the neural module is imported
+or initialized.
+
+## Learned-policy experiment
+
+The passed pilot selected κ = 2.5 and 3.0. Training uses float32, the exact
+permutation-equivariant architecture in Section 12, 1,000 online UCB-imitation
+updates and up to 6,000 fresh-trajectory REINFORCE updates. The first three
+seeds must pass the local optimization check before the last two seeds are
+accepted.
+
+Submit the initial nine-policy-seed combinations from the repository root:
+
+```bash
+sbatch examples/adaptive_screening/scripts/slurm_train_initial.sh
+```
+
+After the array completes, copy its `runs/adaptive_screening_initial` directory
+back to `outputs/training_initial` and run the CPU optimization check:
+
+```bash
+uv run python scripts/evaluate_all.py \
+  --config configs/main.yaml \
+  --gate outputs/pilot/pilot_gate.json \
+  --checkpoints outputs/training_initial \
+  --mode validation_check \
+  --output outputs/optimization_check
+```
+
+Only after `optimization_gate.json` passes, submit the final six combinations:
+
+```bash
+sbatch examples/adaptive_screening/scripts/slurm_train_final.sh
+```
+
+Copy `runs/adaptive_screening_final` back to `outputs/training_final`, then run
+the fixed 100,000-episode test locally in float64 and generate the figures:
+
+```bash
+uv run python scripts/evaluate_all.py \
+  --config configs/main.yaml \
+  --gate outputs/pilot/pilot_gate.json \
+  --checkpoints outputs/training_initial outputs/training_final \
+  --mode final_test \
+  --output outputs/final
+
+uv run python scripts/make_figures.py \
+  --results outputs/final --output outputs/figures
+```
+
+The final evaluation reports stochastic categorical sampling as the primary
+result and greedy-logit behavior as a diagnostic. It evaluates every learned
+policy under all six deployment κ values using the same latent utilities,
+candidate-specific potential observations, policy uniforms and candidate
+permutations.
 
 ## Outputs
 
@@ -121,6 +171,12 @@ round is conditional on deployment and ever becoming the posterior-mean
 leader among candidates, after observations in rounds 1..T. A separate
 never-leader rate handles eligible candidates that were never the mean leader;
 empty conditional groups are blank, not fabricated zeros.
+
+Every κ/seed training directory contains the behavior-cloning, best-validation
+and last checkpoints, training and validation logs, resolved configuration,
+commit and summary. `outputs/final/` contains all required per-seed, aggregate,
+paired, decomposition, behavior and transfer tables plus `final_summary.md`.
+`outputs/figures/` contains the three required PDF panels and LaTeX table.
 
 Tests cover conjugacy, predictive moments, 100,000 exact zero-mismatch rule
 comparisons, eligibility and tie boundaries, quadrature/Monte Carlo agreement,

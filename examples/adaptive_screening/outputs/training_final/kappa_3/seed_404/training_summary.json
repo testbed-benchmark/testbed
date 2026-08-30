@@ -1,0 +1,47 @@
+{
+  "all_finite": true,
+  "behavior_cloning_validation": {
+    "J": 0.3608314096927643,
+    "J_se": 0.005447440315037966,
+    "entropy": 1.0682036876678467,
+    "episodes": 10000,
+    "first_action_max_fraction": 0.0666
+  },
+  "best_update": 2000,
+  "best_validation_J": 0.36642342805862427,
+  "code_commit": "3a84da59e30dc66514c489e1e1fc6daf82c01600",
+  "completed_updates": 2400,
+  "environment_hash": "27ba90adacffe551da92b6e03e2c93b9dc9747a48bd5879c2e9a744a7475f373",
+  "final_gradient_norm": 1.7090270519256592,
+  "final_training_return": 0.38065874576568604,
+  "kappa_train": 3.0,
+  "parameter_count": 38913,
+  "pilot_result_hash": "1c7106f762ee8d5de8e871c07a18e278f3012ebeb89988dad0f782797bf35b4a",
+  "seed": 404,
+  "stopped_early": true,
+  "teacher_beta": 2.0,
+  "training_settings": {
+    "behavior_cloning": {
+      "learning_rate": 0.001,
+      "trajectory_batch_size": 512,
+      "updates": 1000
+    },
+    "reinforce": {
+      "early_stopping_patience_updates": 1600,
+      "entropy_coefficient_final": 0.001,
+      "entropy_coefficient_initial": 0.01,
+      "entropy_decay_steps": 3000,
+      "global_gradient_clip": 1.0,
+      "learning_rate_final": 3e-05,
+      "learning_rate_initial": 0.0003,
+      "minimum_validation_improvement": 0.0005,
+      "total_updates": 6000,
+      "trajectory_batch_size": 1024,
+      "validation_episodes": 10000,
+      "validation_every_updates": 200,
+      "warmup_steps": 250,
+      "weight_decay": 1e-05
+    },
+    "validation_seed": 424242
+  }
+}
