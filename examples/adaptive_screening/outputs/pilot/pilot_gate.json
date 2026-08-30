@@ -1,0 +1,428 @@
+{
+  "candidate_pairs": [
+    {
+      "checks": [
+        {
+          "actual": true,
+          "kappa": null,
+          "name": "primary_protocol",
+          "pass": true,
+          "requirement": "Exact preregistered primary configuration, datasets and tuning grids",
+          "seed": null
+        },
+        {
+          "actual": 0.013188522126619561,
+          "kappa": 2.0,
+          "name": "pooled_rule_awareness_gain",
+          "pass": false,
+          "requirement": ">= 0.02",
+          "seed": null
+        },
+        {
+          "actual": 0.011446989519053463,
+          "kappa": 2.0,
+          "name": "pooled_rule_awareness_ci",
+          "pass": true,
+          "requirement": "95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": 0.015461871030610686,
+          "kappa": 2.0,
+          "name": "seed_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.015",
+          "seed": 314159
+        },
+        {
+          "actual": 0.015461871030610686,
+          "kappa": 2.0,
+          "name": "no_seed_sign_reversal",
+          "pass": true,
+          "requirement": "> 0",
+          "seed": 314159
+        },
+        {
+          "actual": 0.010915173222628437,
+          "kappa": 2.0,
+          "name": "seed_rule_awareness_gain",
+          "pass": false,
+          "requirement": ">= 0.015",
+          "seed": 161803
+        },
+        {
+          "actual": 0.010915173222628437,
+          "kappa": 2.0,
+          "name": "no_seed_sign_reversal",
+          "pass": true,
+          "requirement": "> 0",
+          "seed": 161803
+        },
+        {
+          "actual": {
+            "ci_low": 0.2726393337957737,
+            "mean": 0.27558803640881807
+          },
+          "kappa": 2.0,
+          "name": "adaptive_over_static",
+          "pass": true,
+          "requirement": "Mean and 95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": 0.60357,
+          "kappa": 2.0,
+          "name": "non_saturated_ucb_bayes",
+          "pass": true,
+          "requirement": "Default rate <= 0.85",
+          "seed": null
+        },
+        {
+          "actual": 0.55452,
+          "kappa": 2.0,
+          "name": "non_saturated_ucb_rule_aware",
+          "pass": true,
+          "requirement": "Default rate <= 0.85",
+          "seed": null
+        },
+        {
+          "actual": 0.03280001803608112,
+          "kappa": 2.5,
+          "name": "pooled_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.02",
+          "seed": null
+        },
+        {
+          "actual": 0.03056878498902496,
+          "kappa": 2.5,
+          "name": "pooled_rule_awareness_ci",
+          "pass": true,
+          "requirement": "95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": 0.033884942886423554,
+          "kappa": 2.5,
+          "name": "seed_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.015",
+          "seed": 314159
+        },
+        {
+          "actual": 0.033884942886423554,
+          "kappa": 2.5,
+          "name": "no_seed_sign_reversal",
+          "pass": true,
+          "requirement": "> 0",
+          "seed": 314159
+        },
+        {
+          "actual": 0.03171509318573868,
+          "kappa": 2.5,
+          "name": "seed_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.015",
+          "seed": 161803
+        },
+        {
+          "actual": 0.03171509318573868,
+          "kappa": 2.5,
+          "name": "no_seed_sign_reversal",
+          "pass": true,
+          "requirement": "> 0",
+          "seed": 161803
+        },
+        {
+          "actual": {
+            "ci_low": 0.28166355428920165,
+            "mean": 0.2845690960205305
+          },
+          "kappa": 2.5,
+          "name": "adaptive_over_static",
+          "pass": true,
+          "requirement": "Mean and 95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": 0.67903,
+          "kappa": 2.5,
+          "name": "non_saturated_ucb_bayes",
+          "pass": true,
+          "requirement": "Default rate <= 0.85",
+          "seed": null
+        },
+        {
+          "actual": 0.58289,
+          "kappa": 2.5,
+          "name": "non_saturated_ucb_rule_aware",
+          "pass": true,
+          "requirement": "Default rate <= 0.85",
+          "seed": null
+        },
+        {
+          "actual": [
+            {
+              "ci_low": 0.05599430625129692,
+              "kappa": 2.0,
+              "mean": 0.05813456936193672,
+              "pass": true
+            },
+            {
+              "ci_low": 0.061235789133179265,
+              "kappa": 2.5,
+              "mean": 0.06365846631458923,
+              "pass": true
+            }
+          ],
+          "kappa": null,
+          "name": "adaptive_over_explore_certify",
+          "pass": true,
+          "requirement": "At either pair value, gain >= 0.02 and 95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": {
+            "ci_high": -3.9811330544891095,
+            "mean": -4.01079
+          },
+          "kappa": 2.5,
+          "name": "reduced_search_breadth",
+          "pass": true,
+          "requirement": "Aware minus Bayes <= -1 and 95% paired CI upper < 0",
+          "seed": null
+        },
+        {
+          "actual": 0.72231,
+          "kappa": 2.5,
+          "name": "eig_action_disagreement",
+          "pass": true,
+          "requirement": ">= 0.10",
+          "seed": null
+        }
+      ],
+      "pair": [
+        2.0,
+        2.5
+      ],
+      "pass": false
+    },
+    {
+      "checks": [
+        {
+          "actual": true,
+          "kappa": null,
+          "name": "primary_protocol",
+          "pass": true,
+          "requirement": "Exact preregistered primary configuration, datasets and tuning grids",
+          "seed": null
+        },
+        {
+          "actual": 0.03280001803608112,
+          "kappa": 2.5,
+          "name": "pooled_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.02",
+          "seed": null
+        },
+        {
+          "actual": 0.03056878498902496,
+          "kappa": 2.5,
+          "name": "pooled_rule_awareness_ci",
+          "pass": true,
+          "requirement": "95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": 0.033884942886423554,
+          "kappa": 2.5,
+          "name": "seed_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.015",
+          "seed": 314159
+        },
+        {
+          "actual": 0.033884942886423554,
+          "kappa": 2.5,
+          "name": "no_seed_sign_reversal",
+          "pass": true,
+          "requirement": "> 0",
+          "seed": 314159
+        },
+        {
+          "actual": 0.03171509318573868,
+          "kappa": 2.5,
+          "name": "seed_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.015",
+          "seed": 161803
+        },
+        {
+          "actual": 0.03171509318573868,
+          "kappa": 2.5,
+          "name": "no_seed_sign_reversal",
+          "pass": true,
+          "requirement": "> 0",
+          "seed": 161803
+        },
+        {
+          "actual": {
+            "ci_low": 0.28166355428920165,
+            "mean": 0.2845690960205305
+          },
+          "kappa": 2.5,
+          "name": "adaptive_over_static",
+          "pass": true,
+          "requirement": "Mean and 95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": 0.67903,
+          "kappa": 2.5,
+          "name": "non_saturated_ucb_bayes",
+          "pass": true,
+          "requirement": "Default rate <= 0.85",
+          "seed": null
+        },
+        {
+          "actual": 0.58289,
+          "kappa": 2.5,
+          "name": "non_saturated_ucb_rule_aware",
+          "pass": true,
+          "requirement": "Default rate <= 0.85",
+          "seed": null
+        },
+        {
+          "actual": 0.0496920134355377,
+          "kappa": 3.0,
+          "name": "pooled_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.02",
+          "seed": null
+        },
+        {
+          "actual": 0.04758194515889408,
+          "kappa": 3.0,
+          "name": "pooled_rule_awareness_ci",
+          "pass": true,
+          "requirement": "95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": 0.050128847743889565,
+          "kappa": 3.0,
+          "name": "seed_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.015",
+          "seed": 314159
+        },
+        {
+          "actual": 0.050128847743889565,
+          "kappa": 3.0,
+          "name": "no_seed_sign_reversal",
+          "pass": true,
+          "requirement": "> 0",
+          "seed": 314159
+        },
+        {
+          "actual": 0.04925517912718583,
+          "kappa": 3.0,
+          "name": "seed_rule_awareness_gain",
+          "pass": true,
+          "requirement": ">= 0.015",
+          "seed": 161803
+        },
+        {
+          "actual": 0.04925517912718583,
+          "kappa": 3.0,
+          "name": "no_seed_sign_reversal",
+          "pass": true,
+          "requirement": "> 0",
+          "seed": 161803
+        },
+        {
+          "actual": {
+            "ci_low": 0.27627062318685125,
+            "mean": 0.2793376186198964
+          },
+          "kappa": 3.0,
+          "name": "adaptive_over_static",
+          "pass": true,
+          "requirement": "Mean and 95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": 0.74167,
+          "kappa": 3.0,
+          "name": "non_saturated_ucb_bayes",
+          "pass": true,
+          "requirement": "Default rate <= 0.85",
+          "seed": null
+        },
+        {
+          "actual": 0.6539,
+          "kappa": 3.0,
+          "name": "non_saturated_ucb_rule_aware",
+          "pass": true,
+          "requirement": "Default rate <= 0.85",
+          "seed": null
+        },
+        {
+          "actual": [
+            {
+              "ci_low": 0.061235789133179265,
+              "kappa": 2.5,
+              "mean": 0.06365846631458923,
+              "pass": true
+            },
+            {
+              "ci_low": 0.06856919452206958,
+              "kappa": 3.0,
+              "mean": 0.07083619553539586,
+              "pass": true
+            }
+          ],
+          "kappa": null,
+          "name": "adaptive_over_explore_certify",
+          "pass": true,
+          "requirement": "At either pair value, gain >= 0.02 and 95% paired CI lower > 0",
+          "seed": null
+        },
+        {
+          "actual": {
+            "ci_high": -2.8893767098382517,
+            "mean": -2.91599
+          },
+          "kappa": 3.0,
+          "name": "reduced_search_breadth",
+          "pass": true,
+          "requirement": "Aware minus Bayes <= -1 and 95% paired CI upper < 0",
+          "seed": null
+        },
+        {
+          "actual": 0.74394,
+          "kappa": 3.0,
+          "name": "eig_action_disagreement",
+          "pass": true,
+          "requirement": ">= 0.10",
+          "seed": null
+        }
+      ],
+      "pair": [
+        2.5,
+        3.0
+      ],
+      "pass": true
+    }
+  ],
+  "code_commit": "3a84da59e30dc66514c489e1e1fc6daf82c01600",
+  "environment_hash": "27ba90adacffe551da92b6e03e2c93b9dc9747a48bd5879c2e9a744a7475f373",
+  "pass": true,
+  "passing_pair": [
+    2.5,
+    3.0
+  ],
+  "pilot_directory": ".",
+  "pilot_result_hash": "1c7106f762ee8d5de8e871c07a18e278f3012ebeb89988dad0f782797bf35b4a",
+  "source_hash": "768709c6ad10abdd5df2290e7f83968080c9f5351c2a5c0e97e81baca82ab684"
+}

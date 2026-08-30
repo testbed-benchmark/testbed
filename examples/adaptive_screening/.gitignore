@@ -1,0 +1,5 @@
+.venv/
+!uv.lock
+outputs/**/episodes_*.npz
+outputs/**/episode_metrics_*.npz
+outputs/**/.*.tmp

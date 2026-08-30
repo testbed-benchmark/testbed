@@ -1,0 +1,15 @@
+{
+  "environment_hash": "27ba90adacffe551da92b6e03e2c93b9dc9747a48bd5879c2e9a744a7475f373",
+  "files": {
+    "config_resolved.yaml": "078129ed2c978b67a31d6b471c4b75bde0194b115be43c684170ee2068469207",
+    "environment_hash.txt": "00e71ae007ebfa1d395cab093557d73bc5d3d48f6c4921634da61ea251953d36",
+    "explore_certify_validation.csv": "6b1249fd226ea6fd306f317288d690870249495515f1075f1a664e7d8330ad1f",
+    "frozen_hyperparameters.json": "9dbec02446666bb61eeb8bb99814431e09ccf0adc24d14e346ff5117a9ff3ff0",
+    "metadata.json": "d0ad8820f82301798bf9bd2997dfb00ea79cc055d1484322bf882b9180b668ed",
+    "nonadaptive_validation.csv": "c5b190fa9364b499e0870de6fa7f4373390ccad131779c049d8af8b13545e38b",
+    "paired_comparisons.csv": "16912f0c40d1955027ee7151f6ea74280cc0d5078f09fa03b84aec0d8c5aa3d0",
+    "test_metrics_by_seed.csv": "a1de2f34181c2cfec4143882047910ac291594fdb64c2f1f4083acb402e86982",
+    "ucb_validation.csv": "3edd53c39d44be2476735be1969b53ebce39160d33f0d36ac39d8528bcec138c"
+  },
+  "pilot_result_hash": "1c7106f762ee8d5de8e871c07a18e278f3012ebeb89988dad0f782797bf35b4a"
+}
