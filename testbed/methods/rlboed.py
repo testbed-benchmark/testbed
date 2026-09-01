@@ -474,7 +474,7 @@ def _propose_design(
     *,
     reparameterize_policy: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Samples a raw policy proposal and maps it into the environment space."""
+    """Samples a policy design and returns its SAC-coordinate log probability."""
     proposal = actor.propose(
         obs.outcomes,
         obs.designs,
@@ -483,7 +483,13 @@ def _propose_design(
     )
     if proposal.log_prob is None:
         raise RuntimeError("A stochastic RLBOED actor must return a log probability.")
-    return design_space.to_design(proposal.raw_design, proposal.log_prob)
+    design, log_prob = design_space.to_design(proposal.raw_design, proposal.log_prob)
+    if isinstance(design_space, BoxDesignSpace):
+        # Match the reference SAC entropy convention: regularize the normalized
+        # tanh action before its affine map into the physical design bounds.
+        scale = (design_space.high - design_space.low).to(proposal.raw_design) / 2.0
+        log_prob = log_prob + torch.log(scale).sum()
+    return design, log_prob
 
 
 def collect_episode_batch(
