@@ -1,0 +1,54 @@
+# @package _global_
+
+defaults:
+  - /method: rlboed
+  - override /task: constant_elasticity_of_substitution
+  - _self_
+
+# Reproduces the CES RL-BOED training setup described in the paper. The paper
+# specifies dense rewards for all environments, so this uses testbed's existing
+# dense RL-BOED reward despite the terminal flag in ces_experiment_id.sh.
+
+# Reference replicate id 1. The remaining seeds (ids 2-10) are:
+# 943929, 675273, 79387, 508137, 557390, 756177, 155183, 262598, 572185.
+seed: 373693
+
+# Adaptive_CES_SAC.py uses a 10-experiment budget and actions in [0.01, 100]^6.
+T: 10
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: 0.01
+    high: 100.0
+    event_shape: [6]
+
+# RL-BOED trains with the dense sPCE reward and 100,000 contrastive samples.
+# CES observations are in [epsilon, 1 - epsilon], while the reference
+# observation space normalizes them against [0, 1].
+reward:
+  outcome_low: 0.0
+  outcome_high: 1.0
+  n_contrastive: 100_000
+
+# Values passed by ces_experiment_id.sh or inherited from Adaptive_CES_SAC.py.
+sac:
+  num_training_iterations: 20_001
+  num_envs: 100
+  buffer_size: 1_000_000
+  gamma: 0.9
+  tau: 0.005
+  batch_size: 4_096
+  learning_starts: 100_000
+  gradient_steps_per_iteration: 64
+  policy_lr: 0.0003
+  q_lr: 0.0003
+  policy_frequency: 1
+  target_network_frequency: 1
+  alpha: null
+  initial_alpha: 1.0
+  target_entropy: null
+  entropy_anneal_rate: 7.142857142857143e-05  # 1 / 1.4e4
+
+wandb:
+  project: constant_elasticity_of_substitution
+  group: rlboed
