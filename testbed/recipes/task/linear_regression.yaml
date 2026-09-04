@@ -1,0 +1,14 @@
+# @package _global_
+
+# Task defaults
+T: 10
+
+task:
+  _target_: testbed.tasks.LinearRegression
+  dim: 2
+  dim_y: 1
+  noise_scale: 0.01
+  quad: 0.0
+  prior: null  # use the standard Gaussian regression prior
+  design_space: null  # use the standard box [-1, 1]^dim
+  reparameterize_outcomes: true
