@@ -23,7 +23,6 @@ sac:
   tau: 0.005
   policy_lr: 0.0003
 
-eval_n_contrastive: 10_000_000
 final_eval:
   n_contrastive: 10_000_000
 

@@ -10,12 +10,6 @@ reward:
 sac:
   num_training_iterations: 40_001
   buffer_size: 1_000_000
-  gamma: 0.95
-  tau: 0.01
-  policy_lr: 0.0001
-  q_lr: 0.001
-  target_entropy: 2.85189124
-  entropy_anneal_rate: 1.782387465313367e-05
 
 wandb:
   project: prey_population
