@@ -118,7 +118,11 @@ class GaussianHead(nn.Module):
             )
 
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
-        self.actor_net = MLP([self.dim_emb] + hidden_widths, activation=nn.ReLU)
+        self.actor_net = MLP(
+            [self.dim_emb] + hidden_widths,
+            activation=nn.ReLU,
+            activate_last=True,
+        )
         self.mean_head = nn.Linear(hidden_widths[-1], self.dim_design)
         self.log_std_head = nn.Linear(hidden_widths[-1], self.dim_design)
         _initialize_linear_layers(self)

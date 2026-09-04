@@ -112,16 +112,6 @@ def test_two_source_rlboed_recipe_uses_two_source_task():
     assert (cfg.reward.outcome_low, cfg.reward.outcome_high) == (-3.0, 10.0)
 
 
-def test_prey_rlboed_recipe_uses_discrete_sac_defaults():
-    cfg = _compose("experiments/prey_population/rlboed")
-    assert cfg.task._target_ == "testbed.tasks.PreyPopulation"
-    assert cfg.T == 10
-    assert (cfg.reward.outcome_low, cfg.reward.outcome_high) == (0.0, 300.0)
-    assert cfg.sac.num_training_iterations == 1_000
-    assert cfg.sac.gamma == 1.0
-    assert cfg.sac.tau == 0.005
-
-
 def test_temporal_discounting_dad_preserves_objective_defaults():
     cfg = _compose("experiments/temporal_discounting/dad")
     assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"

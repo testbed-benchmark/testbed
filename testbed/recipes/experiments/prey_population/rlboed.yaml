@@ -5,21 +5,12 @@ defaults:
   - override /task: prey_population
   - _self_
 
-# Discrete SAC settings for the prey-population experiment.
-seed: 0
-# Reference range used to normalize outcome histories for RL-BOED's policy and
-# critic networks. This does not constrain or clip task outcomes; observations
-# outside the range are simply mapped outside [0, 1].
 reward:
-  outcome_low: 0.0
-  outcome_high: 300.0
+  n_contrastive: 10_000
 sac:
-  num_training_iterations: 1_000
-  num_envs: 100
+  num_training_iterations: 40_001
   buffer_size: 1_000_000
-  learning_starts: 100_000
-  gradient_steps_per_iteration: 64
-  gamma: 1.0
-  tau: 0.005
-  policy_lr: 0.0003
-  q_lr: 0.0003
+
+wandb:
+  project: prey_population
+  group: rlboed

@@ -7,8 +7,9 @@ defaults:
   - /final_eval: default
   - /hydra_run: default
   - _self_
+
 # system (device/save_dir come from the system group)
-seed: 373693
+seed: 0
 torch_deterministic: true
 # complete deployable policy
 design_net:
