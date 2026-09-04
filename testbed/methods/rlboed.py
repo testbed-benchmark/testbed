@@ -474,7 +474,7 @@ def _propose_design(
     *,
     reparameterize_policy: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Samples a policy design and returns its SAC-coordinate log probability."""
+    """Samples a policy design and returns its log probability in the normalized coordinates."""
     proposal = actor.propose(
         obs.outcomes,
         obs.designs,
