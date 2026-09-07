@@ -1,0 +1,23 @@
+# Seed sweep for experiments/constant_elasticity_of_substitution/joint_var_post
+#
+# Joint variational posterior baseline, to be compared against dad on the same
+# task. Regenerate with scripts/generate_seed_sweeps.py.
+#
+# wandb sweep sweeps/constant_elasticity_of_substitution_joint_var_post.yaml
+
+name: constant_elasticity_of_substitution-joint_var_post-seeds
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: constant_elasticity_of_substitution
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/constant_elasticity_of_substitution/joint_var_post
+  - ${args_no_hyphens}
