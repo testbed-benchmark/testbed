@@ -220,7 +220,10 @@ class CES(Task):
         u_xp = utility(x_prime)
 
         mu = (u_x - u_xp) * u
-        diff_norm = (x - x_prime).norm(dim=-1, keepdim=True)
+        # Guard the sqrt: d/dv ||v|| is v/||v||, i.e. 0/0 when the baskets
+        # coincide, which they do once the tanh squash saturates both to
+        # (100, 100, 100). That NaN reaches every policy weight.
+        diff_norm = ((x - x_prime).pow(2).sum(dim=-1, keepdim=True) + 1e-12).sqrt()
         sigma = (1.0 + diff_norm) * self.tau * u
         return mu, sigma
 
