@@ -65,3 +65,7 @@ posterior_net:
   theta_loc: null
   theta_scale: null
   canonicalize_theta: false
+
+wandb:
+  project: temporal_discounting  # one project per task; methods separate by group
+  group: var_post
