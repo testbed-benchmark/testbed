@@ -1,0 +1,41 @@
+# Diagnostic sweep: CES dad under torch.autograd.set_detect_anomaly.
+#
+# Run this alongside the ordinary CES dad sweep whenever a NaN reappears, so the
+# op is named in the same batch rather than after another round trip. Anomaly
+# mode raises at the first non-finite backward value and prints "Traceback of
+# forward call that caused the error".
+#
+# It has already found one: DivBackward0 in normal_log_prob, fixed in 116f810.
+#
+# n_train_iter=3000 clears every death step seen so far (the latest was 1952);
+# runs are expected to die well before that. Anomaly mode is 2-4x slower, so
+# budget roughly 15 minutes for the slowest seed. final_eval is off since these
+# policies are not worth evaluating, and the group keeps them out of the dad
+# comparison set.
+#
+# wandb sweep sweeps/constant_elasticity_of_substitution_dad_anomaly.yaml
+
+name: constant_elasticity_of_substitution-dad-anomaly
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: constant_elasticity_of_substitution
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+  detect_anomaly:
+    value: true
+  n_train_iter:
+    value: 3000
+  final_eval.enabled:
+    value: false
+  wandb.group:
+    value: dad_anomaly
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/constant_elasticity_of_substitution/dad
+  - ${args_no_hyphens}
