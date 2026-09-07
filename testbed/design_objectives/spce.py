@@ -143,6 +143,7 @@ class PCE(DesignObjective):
             y_history=this_y_history,
             design_history=this_design_history,
         )
+
         # The incoming history is passed as context, not scored: theta here is
         # drawn from current_prior, which already conditions on it.
         return self.inner_spce.estimate_gain(

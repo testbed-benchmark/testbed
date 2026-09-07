@@ -46,8 +46,7 @@ def contrastive_logsumexps(
     - **With a context** ``(y_{1:S}, x_{1:S})`` already absorbed into
       ``current_prior``, as ``PosteriorUpdateHook`` does: the rollout's steps
       are scored conditioned on it and the context itself is not scored.
-      Scoring it again would re-apply ``p(y_{1:S} | theta)`` to draws that
-      already carry it, tilting the contrastive measure a second time.
+      Scoring it again would re-apply ``p(y_{1:S} | theta)``, tilting the contrastive measure a second time.
 
     Args:
         task: Task supplying the prior and ``history_logp``.
