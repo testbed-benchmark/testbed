@@ -14,14 +14,49 @@ chunk reduces to scoring them all at once.
 import torch
 
 
-def contrastive_logsumexps(task, rollout, n_contrastive, chunk_size=None):
-    """Scores a rollout under its own theta and under prior draws.
+def _replicate(x, b, chunk):
+    """Repeats each of the ``b`` rows ``chunk`` times, giving ``[b * chunk, ...]``."""
+    if x is None:
+        return None
+    return (
+        x.unsqueeze(1).expand(b, chunk, *x.shape[1:]).reshape(b * chunk, *x.shape[1:])
+    )
+
+
+def _match_batch(x, b):
+    """Broadcasts a shared context up to the rollout's batch size."""
+    return None if x is None else x.expand(b, *x.shape[1:])
+
+
+def contrastive_logsumexps(
+    task,
+    rollout,
+    n_contrastive,
+    chunk_size=None,
+    y_context=None,
+    design_context=None,
+):
+    """Scores a rollout under its own theta and under contrastive draws.
+
+    The contrastive draws come from ``task.current_prior``, so what has to be
+    scored depends on what that prior already knows:
+
+    - **No context** (sPCE/sNMC over a full rollout): the prior knows nothing
+      about the rollout, so every step is scored from t=0.
+    - **With a context** ``(y_{1:S}, x_{1:S})`` already absorbed into
+      ``current_prior``, as ``PosteriorUpdateHook`` does: the rollout's steps
+      are scored conditioned on it and the context itself is not scored.
+      Scoring it again would re-apply ``p(y_{1:S} | theta)`` to draws that
+      already carry it, tilting the contrastive measure a second time.
 
     Args:
         task: Task supplying the prior and ``history_logp``.
         rollout: Batched rollout to score.
-        n_contrastive: Number of prior draws per rollout (L).
+        n_contrastive: Number of contrastive draws per rollout (L).
         chunk_size: Draws to score at once. ``None`` scores all L together.
+        y_context: Outcomes already absorbed into ``current_prior``, shape
+            ``[b or 1, S, *event_shape_y]``. None means no context.
+        design_context: The designs alongside them, same leading shape.
 
     Returns:
         ``(logp_joint, chunk_logsumexps)`` of shapes ``[b]`` and
@@ -35,7 +70,18 @@ def contrastive_logsumexps(task, rollout, n_contrastive, chunk_size=None):
         rollout.theta,
     )
     b = theta_0.shape[0]
-    logp_joint = task.history_logp(y_history, design_history, theta_0)  # [b]
+    # Match the rollout's batch before chunk-replication, so a single shared
+    # context lines up with the per-draw interleaving below.
+    y_context = _match_batch(y_context, b)
+    design_context = _match_batch(design_context, b)
+
+    logp_joint = task.history_logp(
+        y_history,
+        design_history,
+        theta_0,
+        y_context=y_context,
+        design_context=design_context,
+    )  # [b]
 
     chunk_logsumexps = []
     remaining = int(n_contrastive)
@@ -47,17 +93,13 @@ def contrastive_logsumexps(task, rollout, n_contrastive, chunk_size=None):
         theta_flat = task.sample_current_prior(b * chunk).reshape(
             b * chunk, *task.event_shape_theta
         )
-        y_rep = (
-            y_history.unsqueeze(1)
-            .expand(b, chunk, *y_history.shape[1:])
-            .reshape(b * chunk, *y_history.shape[1:])
-        )
-        design_rep = (
-            design_history.unsqueeze(1)
-            .expand(b, chunk, *design_history.shape[1:])
-            .reshape(b * chunk, *design_history.shape[1:])
-        )
-        logp_chunk = task.history_logp(y_rep, design_rep, theta_flat).reshape(b, chunk)
+        logp_chunk = task.history_logp(
+            _replicate(y_history, b, chunk),
+            _replicate(design_history, b, chunk),
+            theta_flat,
+            y_context=_replicate(y_context, b, chunk),
+            design_context=_replicate(design_context, b, chunk),
+        ).reshape(b, chunk)
         chunk_logsumexps.append(torch.logsumexp(logp_chunk, dim=1))  # [b]
         remaining -= chunk
 

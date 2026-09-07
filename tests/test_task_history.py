@@ -1,9 +1,10 @@
-"""Tests for the Task API's history-dependent (memoryless=False) contract:
-_outcome_logp/_sample_outcome accept **kwargs, history_logp forwards the
-running y_history/design_history without requiring an override, and
+"""Tests for the Task API's history contract: null_history is well formed,
+_outcome_logp/_sample_outcome receive y_history/design_history, history_logp
+forwards the running history without requiring an override, and
 Designer/designer fast paths respect the memoryless flag.
 """
 
+import pytest
 import torch
 from torch.distributions import Independent, Normal
 
@@ -103,6 +104,86 @@ class _CountingTask(Task):
     def _sample_outcome(self, theta, design, **kwargs):
         self.call_count += 1
         return theta + torch.randn_like(theta)
+
+
+class _MatrixDesignTask(Task):
+    """Multi-dim y/design event shapes, which a flattened null history loses."""
+
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        return True
+
+    def __init__(self):
+        super().__init__(
+            event_shape_y=[2],
+            event_shape_theta=[1],
+            event_shape_design=[2, 3],
+            prior=_scalar_prior(),
+        )
+
+    def _outcome_logp(self, y, theta, design, y_history=None, design_history=None):
+        return Normal(theta, 1.0).log_prob(y).sum(dim=-1)
+
+    def _sample_outcome(self, theta, design, y_history=None, design_history=None):
+        return theta + torch.randn(theta.shape[0], 2)
+
+
+@pytest.mark.parametrize("b", [None, 0, 1, 5])
+def test_null_history_is_empty_and_carries_the_task_event_shapes(b):
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    batch = () if b is None else (b,)
+
+    y_history, design_history = task.null_history(b=b)
+
+    assert y_history.shape == (*batch, 0, *task.event_shape_y)
+    assert design_history.shape == (*batch, 0, *task.event_shape_design)
+    assert y_history.numel() == 0
+    assert design_history.numel() == 0
+    # T is the axis just before the event dims, which is how base.py reads it.
+    assert y_history.shape[-(len(task.event_shape_y) + 1)] == 0
+    assert design_history.shape[-(len(task.event_shape_design) + 1)] == 0
+
+
+def test_null_history_defaults_to_no_batch_dim():
+    task = LocationFinding(n_sources=1, dim_theta=2)
+
+    y_history, design_history = task.null_history()
+
+    assert y_history.shape == (0, *task.event_shape_y)
+    assert design_history.shape == (0, *task.event_shape_design)
+
+
+@pytest.mark.parametrize("b", [None, 4])
+def test_null_history_preserves_multi_dim_event_shapes(b):
+    task = _MatrixDesignTask()
+    batch = () if b is None else (b,)
+
+    y_history, design_history = task.null_history(b=b)
+
+    assert y_history.shape == (*batch, 0, 2)
+    assert design_history.shape == (*batch, 0, 2, 3)
+
+
+def test_null_history_is_on_the_task_device():
+    task = LocationFinding(n_sources=1, dim_theta=2)
+
+    assert all(h.device == task.device for h in task.null_history(b=2))
+
+
+@pytest.mark.parametrize("batch_shape", [(), (4,), (2, 3)])
+def test_default_null_history_broadcasts_against_any_batch(batch_shape):
+    # The no-batch-dim default is what lets a caller with no history take the
+    # same path as one with a real history. Any stray leading dim here -- a
+    # size-0 batch especially -- fails to broadcast against a real batch.
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    theta = task.sample_prior(1).expand(*batch_shape, *task.event_shape_theta)
+    design = task.design_space.sample(batch_shape)
+
+    y = task.sample_outcome(theta, design)
+    logp = task.outcome_logp(y, theta, design)
+
+    assert y.shape == (*batch_shape, *task.event_shape_y)
+    assert logp.shape == batch_shape
 
 
 def test_memoryless_task_accepts_and_ignores_history_kwargs():

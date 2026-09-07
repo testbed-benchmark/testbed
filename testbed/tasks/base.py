@@ -171,15 +171,24 @@ class Task(ABC, nn.Module):
         """The current prior over parameters, possibly updated in sequential experimental design."""
         return self._current_prior
 
-    @property
-    def null_history(self):
-        """Empty (y, design) histories, of shape ``[0, *event_shape]``.
+    def null_history(self, b: int | None = None):
+        """Empty (y, design) histories.
 
-        Has no batch dim, so it broadcasts against any batch.
+        With b=None there is no batch dim, so broadcasting can happen automatically.
+        Specifying the batch dim can be useful in contexts where broadcasting is not handled.
+
+        Args:
+            b (int, optional):
+                Batch size. None gives no batch dim (default: None).
+
+        Returns:
+            Tuple (Tensors):
+                Empty histories on the task's device. Shapes ``[b, 0, *event_shape]`` when b is given, ``[0, *event_shape]`` otherwise.
         """
+        batch = () if b is None else (b,)
         return (
-            torch.empty(0, *self.event_shape_y, device=self.device),
-            torch.empty(0, *self.event_shape_design, device=self.device),
+            torch.empty(*batch, 0, *self.event_shape_y, device=self.device),
+            torch.empty(*batch, 0, *self.event_shape_design, device=self.device),
         )
 
     @abstractmethod
@@ -302,7 +311,7 @@ class Task(ABC, nn.Module):
         only that side. Two supplied histories describe one trajectory, so
         their T must agree; a lone history keeps its own T.
         """
-        null_y_history, null_design_history = self.null_history
+        null_y_history, null_design_history = self.null_history()
 
         if design_history is not None:
             self._check_design(design_history)
@@ -333,7 +342,7 @@ class Task(ABC, nn.Module):
         data being scored rather than conditioning variables.
         """
         if self.memoryless:
-            return self.null_history
+            return self.null_history()
         return self._check_history(y_history, design_history)
 
     def outcome_logp(self, y, theta, design, y_history=None, design_history=None):
@@ -382,13 +391,32 @@ class Task(ABC, nn.Module):
         )
         return logp_flat.reshape(batch_shape)
 
-    def history_logp(self, y_history, design_history, theta):
+    def history_logp(
+        self,
+        y_history,
+        design_history,
+        theta,
+        y_context=None,
+        design_context=None,
+    ):
         r"""Computes log probabilities for a sequence of observations and designs.
 
         Sums the per-step log-prob, each conditioned on the history strictly before it:
 
         .. math::
             p(y_{1:T}, x_{1:T} \mid \theta) = \prod_{t=1}^T p(y_t \mid \theta, x_t, y_{<t}, x_{<t})
+
+        Given a context :math:`(y_{1:S}, x_{1:S})`, scores the trajectory that
+        *follows* it, conditioning on the context at every step but never
+        scoring it:
+
+        .. math::
+            p(y_{1:T}, x_{1:T} \mid \theta, y_{1:S}, x_{1:S})
+            = \prod_{t=1}^T p(y_t \mid \theta, x_t, y_{1:S}, x_{1:S}, y_{<t}, x_{<t})
+
+        Use a context when the information in it is already carried elsewhere --
+        e.g. by :attr:`current_prior` after a posterior update -- so that
+        scoring it again would count it twice.
 
         Correct for memoryless and history-dependent likelihoods alike, since
         ``_outcome_logp`` receives ``y_history``/``design_history`` at every
@@ -402,6 +430,12 @@ class Task(ABC, nn.Module):
                 Designs of shape ``[*batch_shape_design, T, *event_shape_design]``.
             theta (Tensor):
                 Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
+            y_context (Tensor, optional):
+                Earlier observations to condition on without scoring. Shape
+                ``[*batch_shape_context, S, *event_shape_y]`` (default: None).
+            design_context (Tensor, optional):
+                The designs alongside them, shape
+                ``[*batch_shape_context, S, *event_shape_design]`` (default: None).
 
         Returns:
             Tensor:
@@ -416,12 +450,22 @@ class Task(ABC, nn.Module):
                 f"design_history={type(design_history).__name__}."
             )
         y_history, design_history = self._check_history(y_history, design_history)
+        # An absent context becomes the S=0 null history, so the concatenations
+        # below are no-ops and this reduces exactly to the uncontextualized sum.
+        y_context, design_context = self._check_history(y_context, design_context)
 
         T = y_history.shape[-(len(self.event_shape_y) + 1)]
-        (y_flat, design_flat, theta_flat), batch_shape = broadcast_and_flatten(
+        S_y = y_context.shape[-(len(self.event_shape_y) + 1)]
+        S_design = design_context.shape[-(len(self.event_shape_design) + 1)]
+        (
+            (y_flat, design_flat, theta_flat, y_context_flat, design_context_flat),
+            batch_shape,
+        ) = broadcast_and_flatten(
             (y_history, (T, *self.event_shape_y)),
             (design_history, (T, *self.event_shape_design)),
             (theta, tuple(self.event_shape_theta)),
+            (y_context, (S_y, *self.event_shape_y)),
+            (design_context, (S_design, *self.event_shape_design)),
         )
         b_flat = theta_flat.shape[0]
         logp = torch.zeros(b_flat, device=theta_flat.device)
@@ -430,8 +474,10 @@ class Task(ABC, nn.Module):
                 y_flat[:, t],
                 theta_flat,
                 design_flat[:, t],
-                y_history=y_flat[:, :t],
-                design_history=design_flat[:, :t],
+                y_history=torch.cat([y_context_flat, y_flat[:, :t]], dim=1),
+                design_history=torch.cat(
+                    [design_context_flat, design_flat[:, :t]], dim=1
+                ),
             )
         return logp.reshape(batch_shape)
 
