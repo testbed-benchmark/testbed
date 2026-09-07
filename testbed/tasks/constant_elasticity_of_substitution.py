@@ -241,6 +241,10 @@ class CES(Task):
         """
         mu, sigma = self.make_eta_params(theta, design)  # [b, 1] each
 
+        lower_mask = y <= self.epsilon
+        upper_mask = y >= 1.0 - self.epsilon
+        censored = lower_mask | upper_mask
+
         # Continuous part: y = sigmoid(eta), eta = logit(y).
         # p(y) = N(logit(y); mu, sigma^2) / (y (1 - y)).
         # Clamp y into [eps, 1 - eps] before taking logs. Boundary observations
@@ -251,7 +255,14 @@ class CES(Task):
         log_y = torch.log(y_safe)
         log1m_y = torch.log1p(-y_safe)
         logit_y = log_y - log1m_y
-        log_cont = normal_log_prob(logit_y, mu, sigma) - log_y - log1m_y
+        # sigma needs the same guard. normal_log_prob divides by var = sigma^2,
+        # so its gradient w.r.t. var carries num / sigma^4, which overflows once
+        # sigma is around 1e-9 (u ~ LogNormal(1, 3) reaches that). where() hands
+        # the unused branch a zero upstream gradient, and 0 * inf is NaN, which
+        # then sums into sigma.grad alongside the real contribution from the
+        # censoring branches. Substituting 1 leaves selected samples untouched.
+        sigma_cont = torch.where(censored, torch.ones_like(sigma), sigma)
+        log_cont = normal_log_prob(logit_y, mu, sigma_cont) - log_y - log1m_y
 
         # A small sigma (small u) drives z = (logit - mu) / sigma to ~1e8, so we floor it.
         z_min = -1e3
@@ -266,8 +277,6 @@ class CES(Task):
             ((mu - self.logit_upper) / sigma).clamp(min=z_min)
         )
 
-        lower_mask = y <= self.epsilon
-        upper_mask = y >= 1.0 - self.epsilon
         logp = torch.where(
             lower_mask, log_lower, torch.where(upper_mask, log_upper, log_cont)
         )
