@@ -1,0 +1,41 @@
+# Diagnostic sweep: run CES dad under torch.autograd.set_detect_anomaly to find
+# what produces the NaN.
+#
+# CES dad dies with NaN policy weights at a fixed step per seed (427/437 for
+# seeds 3/0, 1225, 1356, 2387) while the forward pass stays healthy, so the NaN
+# is created in the backward. Anomaly mode raises at the first non-finite
+# backward value and prints "Traceback of forward call that caused the error",
+# naming the op.
+#
+# n_train_iter=3000 clears every observed failure step; the runs are expected to
+# die well before that. Anomaly mode is 2-4x slower, so the longest seed should
+# take roughly 15 minutes. final_eval is off since these runs are not policies
+# anyone wants to evaluate, and the group keeps them out of the dad comparison
+# set.
+#
+# wandb sweep sweeps/constant_elasticity_of_substitution_dad_anomaly.yaml
+
+name: constant_elasticity_of_substitution-dad-anomaly
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: constant_elasticity_of_substitution
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+  detect_anomaly:
+    value: true
+  n_train_iter:
+    value: 3000
+  final_eval.enabled:
+    value: false
+  wandb.group:
+    value: dad_anomaly
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/constant_elasticity_of_substitution/dad
+  - ${args_no_hyphens}
