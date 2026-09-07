@@ -200,8 +200,13 @@ class LinearRegression(Task):
 
         return mean_y.unsqueeze(-1)
 
-    def _outcome_logp(  # noqa: D417
-        self, y: Tensor, theta: Tensor, design: Tensor, **kwargs
+    def _outcome_logp(
+        self,
+        y: Tensor,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
     ) -> Tensor:
         """Computes log probability of observations under the model.
 
@@ -214,6 +219,10 @@ class LinearRegression(Task):
                 Parameter tensor of shape ``[b, dim_theta]``.
             design (Tensor):
                 Design tensor of shape ``[b, dim_design]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:
@@ -223,7 +232,13 @@ class LinearRegression(Task):
         logp = normal_log_prob(y, loc, self.noise_scale)
         return logp.sum(dim=-1)
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor, **kwargs) -> Tensor:  # noqa: D417
+    def _sample_outcome(
+        self,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Samples from the likelihood using reparametrization.
 
         If dim_y > 1, observations are assumed to be conditionally independent given (theta, design).
@@ -233,6 +248,10 @@ class LinearRegression(Task):
                 Parameter tensor of shape ``[b, dim_theta]``.
             design (Tensor):
                 Design tensor of shape ``[b, dim_design]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:

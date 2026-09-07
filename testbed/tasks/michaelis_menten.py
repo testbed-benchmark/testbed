@@ -179,8 +179,13 @@ class MichaelisMenten(Task):
         denom = vhalf.pow(self.exponent) + design.pow(self.exponent)
         return num / denom
 
-    def _outcome_logp(  # noqa: D417
-        self, y: Tensor, theta: Tensor, design: Tensor, **kwargs
+    def _outcome_logp(
+        self,
+        y: Tensor,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
     ) -> Tensor:
         """Computes log probability of observations under the model.
 
@@ -191,6 +196,10 @@ class MichaelisMenten(Task):
                 Parameter tensor of shape ``[b, 2]``.
             design (Tensor):
                 Design tensor of shape ``[b, 1]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:
@@ -200,7 +209,13 @@ class MichaelisMenten(Task):
         logp = normal_log_prob(y, loc, self.noise_scale)
         return logp.sum(dim=-1)
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor, **kwargs) -> Tensor:  # noqa: D417
+    def _sample_outcome(
+        self,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Samples from the likelihood p(y | theta, design) using reparametrization.
 
         Args:
@@ -208,6 +223,10 @@ class MichaelisMenten(Task):
                 Parameter tensor of shape ``[b, 2]``.
             design (Tensor):
                 Design tensor of shape ``[b, 1]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:

@@ -224,8 +224,13 @@ class CES(Task):
         sigma = (1.0 + diff_norm) * self.tau * u
         return mu, sigma
 
-    def _outcome_logp(  # noqa: D417
-        self, y: Tensor, theta: Tensor, design: Tensor, **kwargs
+    def _outcome_logp(
+        self,
+        y: Tensor,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
     ) -> Tensor:
         """Evaluates the log probability of an observation under the CES model.
 
@@ -236,6 +241,10 @@ class CES(Task):
                 Parameter tensor of shape ``[b, 5]``.
             design (Tensor):
                 Design tensor of shape ``[b, 6]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:
@@ -275,7 +284,13 @@ class CES(Task):
         )
         return logp.squeeze(-1)
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor, **kwargs) -> Tensor:  # noqa: D417
+    def _sample_outcome(
+        self,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Samples an outcome from the CES model.
 
         Args:
@@ -283,6 +298,10 @@ class CES(Task):
                 Parameter tensor of shape ``[b, 5]``.
             design (Tensor):
                 Design tensor of shape ``[b, 6]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:

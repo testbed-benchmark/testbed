@@ -187,13 +187,13 @@ class StochasticPendulum(Task):
         drift = self.drift_func(prev_y, theta, design)
         return prev_y + self.dt * drift
 
-    def _outcome_logp(  # noqa: D417
+    def _outcome_logp(
         self,
         y: Tensor,
         theta: Tensor,
         design: Tensor,
-        y_history: Tensor | None = None,
-        **kwargs,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
     ) -> Tensor:
         """Computes log probability of observations under the model.
 
@@ -206,6 +206,8 @@ class StochasticPendulum(Task):
                 Design tensor of shape ``[b, 1]``.
             y_history (Tensor, optional):
                 Previous observations of shape ``[b, t, 2]``.
+            design_history (Tensor, optional):
+                Ignored; the drift depends only on the previous observation.
 
         Returns:
             Tensor:
@@ -216,12 +218,12 @@ class StochasticPendulum(Task):
         logp = normal_log_prob(y, loc, std)
         return logp.sum(dim=-1)
 
-    def _sample_outcome(  # noqa: D417
+    def _sample_outcome(
         self,
         theta: Tensor,
         design: Tensor,
-        y_history: Tensor | None = None,
-        **kwargs,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
     ) -> Tensor:
         """Samples from the likelihood using reparametrization.
 
@@ -232,6 +234,8 @@ class StochasticPendulum(Task):
                 Design tensor of shape ``[b, 1]``.
             y_history (Tensor, optional):
                 Past observations of shape ``[b, t, 2]``.
+            design_history (Tensor, optional):
+                Ignored; the drift depends only on the previous observation.
 
         Returns:
             Tensor:

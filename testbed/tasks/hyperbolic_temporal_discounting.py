@@ -340,8 +340,13 @@ class HyperbolicTemporalDiscounting(Task):
         )
         return RelaxedBernoulli(temperature=temperature, probs=probs)
 
-    def _outcome_logp(  # noqa: D417
-        self, y: Tensor, theta: Tensor, design: Tensor, **kwargs
+    def _outcome_logp(
+        self,
+        y: Tensor,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
     ) -> Tensor:
         """Computes log probability of observations under the model.
 
@@ -363,6 +368,10 @@ class HyperbolicTemporalDiscounting(Task):
                 Parameter tensor of shape ``[b, 2]``.
             design (Tensor):
                 Design tensor of shape ``[b, 2]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:
@@ -391,7 +400,13 @@ class HyperbolicTemporalDiscounting(Task):
 
         return logp
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor, **kwargs) -> Tensor:  # noqa: D417
+    def _sample_outcome(
+        self,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Samples an outcome from the Bernoulli likelihood.
 
         Uses a reparametrized RelaxedBernoulli when ``temperature > 0``, and a
@@ -402,6 +417,10 @@ class HyperbolicTemporalDiscounting(Task):
                 Parameter tensor of shape ``[b, 2]``.
             design (Tensor):
                 Design tensor of shape ``[b, 2]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:

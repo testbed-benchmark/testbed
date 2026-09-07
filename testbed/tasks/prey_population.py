@@ -180,8 +180,13 @@ class PreyPopulation(Task):
         final_population = self.population_after(theta, design)
         return ((design - final_population) / design).clamp(0.0, 1.0)
 
-    def _outcome_logp(  # noqa: D417
-        self, y: Tensor, theta: Tensor, design: Tensor, **kwargs
+    def _outcome_logp(
+        self,
+        y: Tensor,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
     ) -> Tensor:
         """Evaluates the binomial observation log probability.
 
@@ -189,6 +194,8 @@ class PreyPopulation(Task):
             y: Numbers of prey consumed with shape ``[b, 1]``.
             theta: Parameters with shape ``[b, 2]`` and columns ``(a, T_h)``.
             design: Initial populations with shape ``[b, 1]``.
+            y_history: Ignored in this memoryless task.
+            design_history: Ignored in this memoryless task.
 
         Returns:
             Observation log probabilities with shape ``[b]``.
@@ -198,12 +205,20 @@ class PreyPopulation(Task):
             y.squeeze(-1)
         )
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor, **kwargs) -> Tensor:  # noqa: D417
+    def _sample_outcome(
+        self,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Samples the number of prey consumed after the experiment.
 
         Args:
             theta: Parameters with shape ``[b, 2]`` and columns ``(a, T_h)``.
             design: Initial populations with shape ``[b, 1]``.
+            y_history: Ignored in this memoryless task.
+            design_history: Ignored in this memoryless task.
 
         Returns:
             Numbers of prey consumed with shape ``[b, 1]``.
