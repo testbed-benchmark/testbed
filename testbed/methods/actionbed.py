@@ -57,7 +57,7 @@ class Trainer:
         # Attach an action hook directly to the designer(s), so every
         # rollout() call from them computes an action -- no need to thread
         # hooks through each individual call site.
-        action_hook = ActionHook(self.action_net, action_space=task.action_space)
+        action_hook = ActionHook(self.action_net, use_raw_history=cfg.use_raw_history)
         self.designer.hooks.append(action_hook)
         if self.random_designer is not None:
             self.random_designer.hooks.append(action_hook)
@@ -122,6 +122,7 @@ class Trainer:
                 "design_net": self.designer.design_net.state_dict(),
                 "action_net": self.action_net.state_dict(),
                 "step": step,
+                "use_raw_history": self.designer.use_raw_history,
             },
             save_path,
         )
@@ -248,6 +249,7 @@ class Trainer:
                     "action_net": self.action_net.state_dict(),
                     "step": step,
                     "metric": metric_val,
+                    "use_raw_history": self.designer.use_raw_history,
                 },
                 chkpt_path,
             )
@@ -322,7 +324,9 @@ def main(cfg):
     design_net, action_net = build_policy_nets(cfg, task)
     design_net = design_net.to(cfg.device)
     action_net = action_net.to(cfg.device)
-    designer = PolicyDesigner(task, cfg.T, design_net)
+    designer = PolicyDesigner(
+        task, cfg.T, design_net, use_raw_history=cfg.use_raw_history
+    )
 
     # Setup for action-warmup; designs are drawn from the task's design space.
     random_designer = None

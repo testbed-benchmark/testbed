@@ -28,7 +28,9 @@ def _make_design_net(task):
 
 def _make_trainer(task=None, cfg=None, manager=None):
     task = task or _make_task()
-    cfg = cfg or SimpleNamespace(n_outer=4, n_outer_eval=4, grad_clip=None)
+    cfg = cfg or SimpleNamespace(
+        n_outer=4, n_outer_eval=4, grad_clip=None, use_raw_history=False
+    )
     policy_net = _make_design_net(task)
     action_net = DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,
@@ -48,7 +50,9 @@ def _make_trainer(task=None, cfg=None, manager=None):
 
 def test_trainer_requires_policy_designer():
     task = _make_task()
-    cfg = SimpleNamespace(n_outer=4, n_outer_eval=4, grad_clip=None)
+    cfg = SimpleNamespace(
+        n_outer=4, n_outer_eval=4, grad_clip=None, use_raw_history=False
+    )
     action_net = DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
@@ -85,7 +89,9 @@ def test_train_step_updates_both_networks():
 
 
 def test_train_step_with_grad_clip():
-    cfg = SimpleNamespace(n_outer=4, n_outer_eval=4, grad_clip=1.0)
+    cfg = SimpleNamespace(
+        n_outer=4, n_outer_eval=4, grad_clip=1.0, use_raw_history=False
+    )
     trainer, _, _ = _make_trainer(cfg=cfg)
     metrics = trainer.train_step()
     assert "loss" in metrics
@@ -159,7 +165,9 @@ def test_maybe_save_best_saves_checkpoint_on_improvement(tmp_path):
 
 def test_sorted_mse_loss_is_compatible_with_train_step():
     task = _make_task()
-    cfg = SimpleNamespace(n_outer=4, n_outer_eval=4, grad_clip=None)
+    cfg = SimpleNamespace(
+        n_outer=4, n_outer_eval=4, grad_clip=None, use_raw_history=False
+    )
     policy_net = _make_design_net(task)
     action_net = DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,
