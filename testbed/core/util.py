@@ -1,5 +1,7 @@
 """Tensor shape and probability helpers."""
 
+import math
+
 import torch
 from torch import Tensor
 
@@ -117,10 +119,14 @@ def normal_log_prob(y, loc, scale):
 
     scale = torch.as_tensor(scale, device=y.device)
 
-    var = scale**2
-    term1 = ((y - loc) ** 2) / var
-    term2 = torch.log(2 * torch.pi * var)
-    return -0.5 * (term1 + term2)
+    # Parametrised by z = (y - loc) / scale rather than by var = scale^2. Same
+    # value and same gradient, but forming (y - loc)^2 / var makes autograd
+    # materialise (y - loc)^2 / scale^4 in the backward, which overflows around
+    # scale ~1e-9 before dvar/dscale multiplies it back down to the cubic term
+    # it analytically is. The z form's largest intermediate is already cubic.
+    # log(scale) as the normaliser also keeps var from underflowing to 0.
+    z = (y - loc) / scale
+    return -0.5 * (z**2 + math.log(2 * math.pi)) - torch.log(scale)
 
 
 def normal_cdf(x):
