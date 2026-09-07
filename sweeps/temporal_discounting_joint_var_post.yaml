@@ -1,0 +1,23 @@
+# Seed sweep for experiments/temporal_discounting/joint_var_post
+#
+# Joint variational posterior baseline, to be compared against dad on the same
+# task. Regenerate with scripts/generate_seed_sweeps.py.
+#
+# wandb sweep sweeps/temporal_discounting_joint_var_post.yaml
+
+name: temporal_discounting-joint_var_post-seeds
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: temporal_discounting
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/temporal_discounting/joint_var_post
+  - ${args_no_hyphens}
