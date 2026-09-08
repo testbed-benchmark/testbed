@@ -82,9 +82,55 @@ design_net:
     _target_: torch.nn.ReLU
     _partial_: true
 
-# posterior network: the shared attentive Gaussian-mixture readout over
-# theta = (rho, alpha_1, alpha_2, alpha_3, u). No canonicalisation: unlike
-# location finding's sources, these coordinates are not exchangeable.
+# posterior network: an attentive Gaussian-mixture readout, but over 4
+# unconstrained coordinates pushed forward onto theta rather than over theta
+# itself. theta = (rho, alpha_1, alpha_2, alpha_3, u) occupies a 4-manifold in
+# R^5 (rho in (0, 1), alpha on the 2-simplex, u > 0), so a mixture in theta's own
+# coordinates is a density with respect to the wrong measure and its Barber-Agakov
+# gain is unbounded above. It also cannot span u, whose LogNormal(1, 3) prior
+# reaches ~1e6 while a mixture component's scale is capped at exp(3) ~ 20.
+#
+# No canonicalisation: unlike location finding's sources, these coordinates are
+# not exchangeable (and the constrained net rejects the combination anyway).
+posterior_net:
+  _target_: testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet
+  n_components: 10
+  encoder_dim_h: 256
+  dim_emb: 128
+  num_heads: 4
+  num_blocks: 3
+  trunk_dim_h: null  # use dim_emb
+  trunk_activation:
+    _target_: torch.nn.GELU
+    _partial_: true
+  log_scale_min: -7.0
+  log_scale_max: 3.0
+  init_scale: 1.0
+  theta_loc: null
+  theta_scale: null
+  canonicalize_theta: false
+  # 4 unconstrained coordinates -> 5 constrained ones:
+  #   z_rho          -> rho    in (0.01, 1)
+  #   (z_a1, z_a2)   -> alpha  on the 2-simplex
+  #   z_u            -> u      in (0, inf)
+  # The rho affine matches CESPrior.sample's `rho = 0.01 + 0.99 * rho` squash, so
+  # the map covers exactly the support the prior draws from. That 0.01 now lives
+  # in two places and will drift silently if either changes;
+  # test_ces_posterior_pushforward_normalises catches it by integrating this
+  # transform against the real CESPrior.
+  transform:
+    _target_: testbed.design_nets.BlockTransform
+    raw_sizes: [1, 2, 1]
+    theta_sizes: [1, 3, 1]
+    transforms:
+      - _target_: torch.distributions.transforms.ComposeTransform
+        parts:
+          - _target_: torch.distributions.transforms.SigmoidTransform
+          - _target_: torch.distributions.transforms.AffineTransform
+            loc: 0.01
+            scale: 0.99
+      - _target_: torch.distributions.transforms.StickBreakingTransform
+      - _target_: torch.distributions.transforms.ExpTransform
 
 wandb:
   project: constant_elasticity_of_substitution  # one project per task; methods separate by group

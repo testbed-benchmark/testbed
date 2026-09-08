@@ -30,6 +30,9 @@ from .stochastic import (
 )
 from .variational_posterior import (
     AttentiveVariationalPosteriorNet,
+    BlockTransform,
+    ConstrainedAttentiveVariationalPosteriorNet,
+    ConstrainedGaussianMixtureVariationalPosteriorNet,
     DeepSetVariationalPosteriorNet,
     GaussianMixtureVariationalPosteriorNet,
     VariationalPosteriorNet,
