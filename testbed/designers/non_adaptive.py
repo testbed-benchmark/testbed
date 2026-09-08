@@ -93,10 +93,11 @@ class StaticDesigner(Designer):
     def rollout(self, theta) -> Rollout:
         """Rolls out the experiment with a static design.
 
-        Vectorized fast path when no hooks are attached (the common case);
-        falls back to the shared per-step template whenever hooks need per-step access.
+        Vectorized fast path when no hooks are attached and the task is
+        memoryless (the common case); falls back to the shared per-step
+        template otherwise.
         """
-        if self.hooks:
+        if self.hooks or not self.task.memoryless:
             return super().rollout(theta)
 
         b = theta.shape[0]
@@ -210,10 +211,10 @@ class RandomDesigner(Designer):
     def rollout(self, theta) -> Rollout:
         """Runs a random design rollout.
 
-        Vectorized fast path when no hooks are attached; falls back to the
-        shared per-step template when hooks need per-step access.
+        Vectorized fast path when no hooks are attached and the task is
+        memoryless; falls back to the shared per-step template otherwise.
         """
-        if self.hooks:
+        if self.hooks or not self.task.memoryless:
             return super().rollout(theta)
 
         b = theta.shape[0]

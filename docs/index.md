@@ -42,6 +42,7 @@ TestBED was designed to allow you to implement your own task easily. For some po
 | `LocationFinding` | Source location finding | [API](autoapi/testbed/tasks/location_finding/index) |
 | `MichaelisMenten` | Michaelis-Menten| [API](autoapi/testbed/tasks/michaelis_menten/index) |
 | `PreyPopulation` | Predator-prey population (note: discrete designs and outcomes) | [API](autoapi/testbed/tasks/prey_population/index) |
+| `StochasticPendulum` | Stochastic pendulum with unknown mass/length (note: non-memoryless likelihood) | [API](autoapi/testbed/tasks/stochastic_pendulum/index) |
 
 ## Designers
 

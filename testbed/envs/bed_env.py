@@ -156,7 +156,15 @@ class BEDEnv:
         grad_context = torch.enable_grad() if self.track_grad else torch.no_grad()
         with grad_context:
             design = self._prepare_design(raw_design)
-            outcome = self.task.sample_outcome(self.theta_0, design)
+            # Slots [0, t) are the steps already taken; a memoryless task drops
+            # them, one with memory conditions on them.
+            past = self.history.prefix(self.t)
+            outcome = self.task.sample_outcome(
+                self.theta_0,
+                design,
+                y_history=past.outcomes,
+                design_history=past.designs,
+            )
             self.history.write(self.t, design, outcome)
             reward = self.reward_fn.step(self, design, outcome)
         self.t += 1

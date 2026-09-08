@@ -59,7 +59,7 @@ def test_task_design_space_transforms_and_corrects_log_prob(monkeypatch):
     )
     monkeypatch.setattr(policy_net, "propose", lambda *args, **kwargs: proposal)
     designer = PolicyDesigner(task, T=2, design_net=policy_net)
-    y_history, design_history = designer.make_empty_history(1)
+    y_history, design_history = task.null_history(b=1)
 
     assert not hasattr(designer, "design_space")
     design, raw_design, log_prob = designer.design_from_history(
@@ -117,7 +117,7 @@ def test_categorical_policy_physical_proposals_bypass_task_transform():
     policy_space = FiniteDesignSpace(torch.tensor([[5.0, 20.0], [40.0, 80.0]]))
     policy_net = CategoricalPolicyNet(policy_space, event_shape_y=task.event_shape_y)
     designer = PolicyDesigner(task, T=2, design_net=policy_net)
-    y_history, design_history = designer.make_empty_history(8)
+    y_history, design_history = task.null_history(b=8)
 
     design, raw_design, log_prob = designer.design_from_history(
         y_history, design_history

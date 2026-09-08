@@ -16,7 +16,7 @@ class SNMC(RolloutObjective):
     See Equation 10 of the DAD paper (https://arxiv.org/pdf/2103.02438).
     """
 
-    def __init__(self, task: Task, n_contrastive: int, chunk_size: int = None):
+    def __init__(self, task: Task, n_contrastive: int, chunk_size: int | None = None):
         """Initializes the SNMC estimator.
 
         chunk_size caps how many contrastive samples are scored at once; the
@@ -31,20 +31,30 @@ class SNMC(RolloutObjective):
         """Estimates gain for a simulated rollout."""
         return self.estimate_gain(rollout)
 
-    def estimate_gain(self, rollout: Rollout):
+    def estimate_gain(self, rollout: Rollout, y_context=None, design_context=None):
         """Estimates gain from a batched rollout.
 
         returns: scalar EIG estimate.
         """
-        return self.per_sample_gain(rollout).mean()
+        return self.per_sample_gain(
+            rollout, y_context=y_context, design_context=design_context
+        ).mean()
 
-    def per_sample_gain(self, rollout: Rollout):
+    def per_sample_gain(self, rollout: Rollout, y_context=None, design_context=None):
         """Estimates per-sample gains from a batched rollout.
+
+        A context is history already absorbed into ``task.current_prior``; it is
+        conditioned on but not scored. See :func:`contrastive_logsumexps`.
 
         returns: [b] per-sample SNMC estimates.
         """
         logp_joint, chunk_logsumexps = contrastive_logsumexps(
-            self.task, rollout, self.n_contrastive, self.chunk_size
+            self.task,
+            rollout,
+            self.n_contrastive,
+            self.chunk_size,
+            y_context=y_context,
+            design_context=design_context,
         )
         return self.gain_from_logsumexps(
             logp_joint, chunk_logsumexps, self.n_contrastive
@@ -78,11 +88,17 @@ class NMC(DesignObjective):
         self.n_inner = int(n_inner)
         self.inner_snmc = SNMC(task, n_contrastive=n_inner)
 
-    def __call__(self, design: Tensor):
+    def __call__(
+        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
+    ):
         """Estimates gain for one design."""
-        return self.estimate_gain(design)
+        return self.estimate_gain(
+            design, y_history=y_history, design_history=design_history
+        )
 
-    def estimate_gain(self, design: Tensor):
+    def estimate_gain(
+        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
+    ):
         """Estimates gain for one fixed design.
 
         design: ``[*event_shape_design]``. Leading size-1 batch dims are tolerated and stripped.
@@ -99,16 +115,31 @@ class NMC(DesignObjective):
 
         b = self.n_outer
 
-        # y_outer: [b, *event_shape_y], theta_outer: [b, *event_shape_theta]
-        y_outer, theta_outer = self.task.sample_joint(design, n_samples=b)
+        # sample_joint drops the leading batch dim when n_samples==1, and a
+        # context history contributes a batch dim of its own, so reshape
+        # explicitly rather than trusting the returned shape.
+        y_outer, theta_outer = self.task.sample_joint(
+            design,
+            y_history=y_history,
+            design_history=design_history,
+            n_samples=b,
+        )
+        y_outer = y_outer.reshape(b, *self.task.event_shape_y)
+        theta_outer = theta_outer.reshape(b, *self.task.event_shape_theta)
 
-        # Build T=1 histories: [b, 1, *event_shape]
-        y_history = y_outer.unsqueeze(1)
-        design_history = (
+        # Build one-step-ahead rollout: [b, 1, *event_shape]
+        this_y_history = y_outer.unsqueeze(1)
+        this_design_history = (
             design.unsqueeze(0).expand(b, *self.task.event_shape_design).unsqueeze(1)
         )
-
         rollout = Rollout(
-            theta=theta_outer, y_history=y_history, design_history=design_history
+            theta=theta_outer,
+            y_history=this_y_history,
+            design_history=this_design_history,
         )
-        return self.inner_snmc(rollout)
+
+        # The incoming history is passed as context, not scored: theta here is
+        # drawn from current_prior, which already conditions on it.
+        return self.inner_snmc.estimate_gain(
+            rollout, y_context=y_history, design_context=design_history
+        )

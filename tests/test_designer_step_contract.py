@@ -150,7 +150,7 @@ def test_step_design_can_read_hook_scratch():
 
 def _step_state(designer, task, b=4):
     """Builds a t=0 RolloutState for a one-off _step_design call."""
-    y_history, design_history = designer.make_empty_history(b)
+    y_history, design_history = task.null_history(b=b)
     return RolloutState(
         task=task,
         theta=None,
@@ -189,7 +189,7 @@ def test_step_design_is_a_thin_adapter_over_a_semantic_method():
     assert torch.equal(via_state[1], via_semantic[1])
 
     policy = _policy_designer(task)
-    y_history, design_history = policy.make_empty_history(4)
+    y_history, design_history = task.null_history(b=4)
     via_state = policy._step_design(_step_state(policy, task))
     via_semantic = policy.design_from_history(y_history, design_history)
     assert torch.equal(via_state[0], via_semantic[0])

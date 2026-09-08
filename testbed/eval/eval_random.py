@@ -141,7 +141,7 @@ if __name__ == "__main__":
     task_names = ALL_TASKS if args.task == "all" else [args.task]
     results = eval_tasks(task_names, args)
 
-    print("")
+    print()
     print(f"saved {save_results(results, args.out_dir, args.seed)}")
-    print("")
+    print()
     print(latex_rows(results, args.decimals))
