@@ -141,6 +141,60 @@ def test_outcome_logp_backward_finite_prior_batch():
     assert torch.isfinite(design.grad).all()
 
 
+# A tiny u drives sigma = (1 + ||x - x'||) * tau * u down with it, which is the
+# regime both numerical guards in _outcome_logp exist for. The two baskets differ
+# by 0.001 rather than being identical, since ||x - x'|| is not differentiable at
+# zero and that is a separate problem.
+TINY_SIGMA_THETA = [0.9, 1 / 3, 1 / 3, 1 / 3, 2e-8]
+NEAR_IDENTICAL_BASKETS = [10.0, 10.0, 10.0, 10.0, 10.0, 10.001]
+
+
+@pytest.mark.parametrize("u", [2e-8, 1e-10, 1e-12])
+def test_censored_rows_ignore_the_discarded_continuous_branch(u):
+    # Regression test: torch.where evaluates the continuous branch even for a
+    # censored y and hands it a zero upstream gradient. When that branch's own
+    # gradient was non-finite, 0 * inf = NaN summed into theta.grad and
+    # design.grad alongside the real contribution from the censoring branch.
+    task = make_task()
+    theta_values = TINY_SIGMA_THETA[:4] + [u]
+    y = torch.tensor([[task.epsilon]])
+
+    theta = torch.tensor([theta_values], requires_grad=True)
+    design = torch.tensor([NEAR_IDENTICAL_BASKETS], requires_grad=True)
+    task.outcome_logp(y, theta, design).sum().backward()
+
+    # The censoring branch alone, which is what a censored row should see.
+    theta_ref = torch.tensor([theta_values], requires_grad=True)
+    design_ref = torch.tensor([NEAR_IDENTICAL_BASKETS], requires_grad=True)
+    mu, sigma = task.make_eta_params(theta_ref, design_ref)
+    log_lower = torch.special.log_ndtr(
+        ((task.logit_lower - mu) / sigma).clamp(min=-1e3)
+    )
+    log_lower.sum().backward()
+
+    assert torch.equal(theta.grad, theta_ref.grad)
+    assert torch.equal(design.grad, design_ref.grad)
+
+
+@pytest.mark.parametrize("y_value", [1e-6, 1e-5, 1.0 - 1e-6])
+def test_outcome_logp_backward_finite_near_boundary_with_tiny_sigma(y_value):
+    # The continuous branch is selected here, since y sits inside the censoring
+    # bounds, but logit(y) is ~14 away from mu while sigma is ~1e-10. That is
+    # what made normal_log_prob's gradient overflow: the value is large but
+    # representable, so the gradient has to be too.
+    task = make_task()
+    theta = torch.tensor([TINY_SIGMA_THETA], requires_grad=True)
+    design = torch.tensor([NEAR_IDENTICAL_BASKETS], requires_grad=True)
+
+    logp = task.outcome_logp(torch.tensor([[y_value]]), theta, design)
+    assert torch.isfinite(logp).all()
+
+    logp.sum().backward()
+    assert torch.isfinite(theta.grad).all()
+    assert torch.isfinite(design.grad).all()
+    assert (theta.grad.abs() > 0).any()
+
+
 def test_sample_outcome_is_reparametrized():
     task = make_task()
     design = (make_design((8,))).requires_grad_(True)
