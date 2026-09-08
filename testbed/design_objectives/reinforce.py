@@ -169,10 +169,29 @@ class Reinforce(RolloutObjective, ABC):
 
 
 class LossReinforce(Reinforce):
-    """REINFORCE over a per-rollout loss computed from an action (e.g. ActionBED).
+    r"""REINFORCE over a per-rollout loss computed from an action (e.g. ActionBED).
 
     Requires an `ActionHook` in the rollout's hook list, so that
     `rollout.extra["action"]` is populated.
+
+    For a deterministic design policy pi_X^phi and an action policy pi_A^phi,
+
+        d/dphi E[l(pi_A(h_T), theta)]
+          = E[ l(pi_A(h_T), theta) d/dphi log p(h_T | theta, pi_X)
+               + d/dphi l(pi_A(h_T), theta) ],
+
+    which is what the inherited pathwise branch builds: the second (total)
+    derivative is the action net's own gradient, and the first is the score
+    term. When the two policies share no parameters this splits into the usual
+    pathwise gradient for pi_A and a score-corrected one for pi_X.
+
+    The value here is a loss, not a gain: `estimate_gain` returns a surrogate
+    whose value is the mean loss and whose gradient estimates the expression
+    above, so callers minimize it directly. No sign flip is involved, and the
+    leave-one-out baseline is sign-agnostic.
+
+    loss_fn(action, theta) -> [b], reduced over event dimensions but not over
+    the batch.
     """
 
     def __init__(
@@ -184,6 +203,15 @@ class LossReinforce(Reinforce):
     ):
         """Initializes."""
         super().__init__(task, stochastic_design_policy, baseline)
+
+        # The score-function branch detaches the value, which here is the only
+        # thing the action net appears in; would silently train nothing.
+        if stochastic_design_policy:
+            raise ValueError(
+                "LossReinforce is derived for a deterministic design policy. With a "
+                "stochastic one the estimator detaches the value, dropping the "
+                "d/dphi l(pi_A(h_T), theta) term that trains the action net."
+            )
 
         self.loss_fn = loss_fn
 
