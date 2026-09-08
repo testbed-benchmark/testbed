@@ -198,10 +198,6 @@ def main(cfg):
     # Set seed
     torch.manual_seed(cfg.seed)
 
-    # Names the forward op whose backward first produced a non-finite value.
-    # Slow (2-4x); for debugging only.
-    torch.autograd.set_detect_anomaly(cfg.detect_anomaly)
-
     policy_net = build_design_net(cfg, task)
     policy_net = policy_net.to(cfg.device)
     designer = PolicyDesigner(
