@@ -450,10 +450,11 @@ class Task(ABC, nn.Module):
                 f"design_history={type(design_history).__name__}."
             )
         y_history, design_history = self._check_history(y_history, design_history)
-        # An absent context becomes the S=0 null history, so the concatenations
-        # below are no-ops and this reduces exactly to the uncontextualized sum.
-        y_context, design_context = self._check_history(y_context, design_context)
+        # Context becomes null for memoryless tasks
+        y_context, design_context = self._context_history(y_context, design_context)
 
+        # T must agree for y_history and design_history as they are paired
+        # S can vary across the context (e.g. only one could be supplied)
         T = y_history.shape[-(len(self.event_shape_y) + 1)]
         S_y = y_context.shape[-(len(self.event_shape_y) + 1)]
         S_design = design_context.shape[-(len(self.event_shape_design) + 1)]
@@ -467,6 +468,11 @@ class Task(ABC, nn.Module):
             (y_context, (S_y, *self.event_shape_y)),
             (design_context, (S_design, *self.event_shape_design)),
         )
+        
+        # skips a copy op when context is null
+        y_full = y_flat if S_y == 0 else torch.cat([y_context_flat, y_flat], dim=1)
+        design_full = design_flat if S_design == 0 else torch.cat([design_context_flat, design_flat], dim=1)
+
         b_flat = theta_flat.shape[0]
         logp = torch.zeros(b_flat, device=theta_flat.device)
         for t in range(T):
@@ -474,10 +480,8 @@ class Task(ABC, nn.Module):
                 y_flat[:, t],
                 theta_flat,
                 design_flat[:, t],
-                y_history=torch.cat([y_context_flat, y_flat[:, :t]], dim=1),
-                design_history=torch.cat(
-                    [design_context_flat, design_flat[:, :t]], dim=1
-                ),
+                y_history=y_full[:, : S_y + t],
+                design_history=design_full[:, : S_design + t],
             )
         return logp.reshape(batch_shape)
 
