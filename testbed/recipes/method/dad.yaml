@@ -36,6 +36,3 @@ lr_gamma: null
 eval_every: 0  # eval is expensive here; off for this recipe
 n_outer_eval: 2_048
 n_inner_eval: 100_000
-
-# debugging
-detect_anomaly: false  # torch.autograd.set_detect_anomaly; 2-4x slower
