@@ -129,6 +129,86 @@ class PosteriorUpdateHook(RolloutHook):
         return extra
 
 
+class RefinementHook(RolloutHook):
+    """Infers the posterior at scheduled steps and refines the designer on what remains.
+
+    Step-DAD: at each scheduled step it runs inference on the
+    history so far, installs the result as ``task.current_prior``, and hands it to
+    ``refine_fn``. What refinement means is left to ``refine_fn`` (see
+    :func:`testbed.designers.semi_amortized.make_refine_fn`), so the same hook
+    serves an amortized policy or a static design.
+
+    Installs the posterior itself, so it subsumes :class:`PosteriorUpdateHook` at
+    the steps it fires on; do not compose both.
+    """
+
+    def __init__(
+        self,
+        refine_at,
+        refine_fn,
+        inference_fn=run_importance_sampling,
+        *,
+        store_history: bool = False,
+        **inference_kwargs,
+    ):
+        """Initializes the hook.
+
+        Args:
+            refine_at: Step counts to refine after, 1-indexed, so ``[6]`` means
+                after six steps have been observed. A list rather than a period:
+                the single-intervention case is the common one, and the paper's
+                schedule is an explicit set of points.
+            refine_fn: ``(state, posterior) -> dict | None`` of metrics.
+            inference_fn: ``(task, y_history, design_history, **kwargs) -> Distribution``.
+            store_history: Keep every posterior, not just the last.
+            **inference_kwargs: Forwarded to ``inference_fn``.
+        """
+        super().__init__()
+        refine_at = sorted({int(step) for step in refine_at})
+        if refine_at and refine_at[0] < 1:
+            raise ValueError(
+                f"refine_at holds step counts (1-indexed); got {refine_at}. "
+                "There is no history to infer from before the first step."
+            )
+        self.refine_at = refine_at
+        self.refine_fn = refine_fn
+        self.inference_fn = inference_fn
+        self.store_history = store_history
+        self.inference_kwargs = inference_kwargs
+
+    def after_step(self, state: RolloutState) -> None:
+        """Refines if this step is scheduled, skipping the last step."""
+        n_observed = state.t + 1
+        # Nothing to refine for at the end: the horizon it would optimize is empty.
+        if n_observed not in self.refine_at or n_observed >= state.T:
+            return
+
+        posterior = self.inference_fn(
+            state.task, state.y_history, state.design_history, **self.inference_kwargs
+        )
+        state.task.update_prior(posterior)
+
+        record = ess_record(posterior, state.t)
+        if record is not None:
+            state.scratch.setdefault("refinement_ess", []).append(record)
+        if self.store_history:
+            state.scratch.setdefault("posterior_history", []).append(posterior)
+
+        metrics = self.refine_fn(state, posterior)
+        if metrics is not None:
+            state.scratch.setdefault("refinement_metrics", []).append(
+                {"step": state.t, **metrics}
+            )
+
+    def on_rollout_end(self, state: RolloutState) -> dict[str, Any] | None:
+        """Attaches the final posterior and whatever the refinements recorded."""
+        extra = {"posterior": state.task.current_prior}
+        for key in ("refinement_ess", "refinement_metrics", "posterior_history"):
+            if key in state.scratch:
+                extra[key] = state.scratch[key]
+        return extra
+
+
 class ActionHook(RolloutHook):
     """Runs an action net either once on the full history or after every step."""
 

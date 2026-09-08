@@ -1,8 +1,16 @@
 """Semi-amortized designers: an amortized policy that can be refined mid-rollout.
 
-The extra capability over :class:`PolicyDesigner` is continuing a rollout from a
-history that has already been observed, which is what Step-DAD's deployment-time
-refinement optimizes over (Hedman et al., ICML 2025, https://arxiv.org/abs/2507.14057).
+Step-DAD (Hedman et al., ICML 2025, https://arxiv.org/abs/2507.14057) rolls a
+pretrained policy out for tau steps, infers the posterior from what it observed,
+and fine-tunes the policy on the remaining horizon under that posterior before
+finishing the experiment.
+
+:class:`SemiAmortizedDesigner` adds the two capabilities that needs on top of
+:class:`PolicyDesigner`: continuing a rollout from an already-observed history,
+and scoring the remaining horizon given one. :func:`refine_designer` is the
+fine-tune itself, and :func:`make_refine_fn` adapts it to the ``refine_fn``
+contract of :class:`testbed.core.hooks.RefinementHook`, which triggers it
+mid-rollout. Both are module-level so a static-design variant can reuse them.
 """
 
 import torch
@@ -198,3 +206,110 @@ class SemiAmortizedDesigner(PolicyDesigner):
                 f"History batch dim must be 1 or {b}; got {history.shape[0]}."
             )
         return history.unbind(dim=1)
+
+
+def refine_designer(
+    designer,
+    y_history,
+    design_history,
+    n_steps,
+    *,
+    objective,
+    n_steps_opt,
+    lr,
+    batch_size,
+    grad_clip=1.0,
+    raw_design_history=None,
+    log_every=None,
+    logger=None,
+):
+    """Fine-tunes a designer in place on its remaining-horizon gain.
+
+    Warm-starts from the designer's current weights rather than reinitializing,
+    so the refinement specializes the pretrained policy to this experiment. The
+    optimizer is fresh each call, as in the reference implementation.
+
+    Args:
+        designer: A designer exposing ``remaining_horizon_gain``, e.g.
+            :class:`SemiAmortizedDesigner`. Refined in place.
+        y_history: Outcomes observed so far, ``[1, S, *event_shape_y]``.
+        design_history: The designs alongside them.
+        n_steps: Remaining horizon the gain is computed over.
+        objective: A ``RolloutObjective`` accepting ``y_context``/``design_context``,
+            e.g. ``SPCE`` for pathwise tasks or ``SPCEReinforce`` otherwise.
+        n_steps_opt: Number of Adam steps.
+        lr: Adam learning rate.
+        batch_size: Continuations per Adam step.
+        grad_clip: Gradient-norm clip, or None to skip.
+        raw_design_history: Pre-transform designs, required when the designer
+            conditions on a raw history.
+        log_every: Log progress every this many steps, or None to skip.
+        logger: Optional logger with ``.info``.
+
+    Returns:
+        dict: ``gain_before``/``gain_after`` on its own objective, so a working
+        refinement should not send them down, plus ``n_steps_opt``.
+    """
+    optimizer = torch.optim.Adam(designer.parameters(), lr=lr)
+
+    gain_before = None
+    gain_after = None
+    for step in range(n_steps_opt):
+        optimizer.zero_grad()
+        gain = designer.remaining_horizon_gain(
+            objective,
+            y_history,
+            design_history,
+            n_steps,
+            batch_size,
+            raw_design_history=raw_design_history,
+        )
+        (-gain).backward()
+        if grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(designer.parameters(), grad_clip)
+        optimizer.step()
+
+        gain_after = gain.item()
+        if gain_before is None:
+            gain_before = gain_after
+        if logger is not None and log_every and step % log_every == 0:
+            logger.info(f"refine step {step}: gain={gain_after:.4f}")
+
+    return {
+        "gain_before": gain_before,
+        "gain_after": gain_after,
+        "n_steps_opt": n_steps_opt,
+    }
+
+
+def make_refine_fn(designer, objective, **refine_kwargs):
+    """Adapts :func:`refine_designer` to ``RefinementHook``'s ``refine_fn`` contract.
+
+    The hook knows the rollout state and nothing about designers; this closure
+    supplies the designer and reads the observed history and remaining horizon
+    off the state. Build it after the designer exists, then append the hook to
+    ``designer.hooks``, which registers it like any other submodule.
+
+    Args:
+        designer: The designer to refine in place.
+        objective: Objective passed through to :func:`refine_designer`.
+        **refine_kwargs: The rest of :func:`refine_designer`'s keyword arguments.
+
+    Returns:
+        Callable ``(state, posterior) -> dict`` of refinement metrics.
+    """
+
+    def refine_fn(state, posterior):
+        # Called from after_step, so state.t + 1 steps are done and what is left
+        # of the horizon is what the refinement optimizes.
+        return refine_designer(
+            designer,
+            state.y_history,
+            state.design_history,
+            n_steps=state.T - state.t - 1,
+            raw_design_history=state.raw_design_history,
+            objective=objective,
+            **refine_kwargs,
+        )
+
+    return refine_fn
