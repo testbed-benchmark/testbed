@@ -22,8 +22,6 @@ project: location_finding_2src
 parameters:
   seed:
     values: [0, 1, 2, 3, 4]
-  net@design_net:
-    value: deepset_policy
   objective.name:
     value: spce
   task.reparameterize_outcomes:
@@ -33,9 +31,14 @@ parameters:
   wandb.group:
     value: dad_deepset_reparam
 
+# The architecture is fixed rather than swept, so it goes here as a literal
+# override. It has to: wandb validates parameter names against
+# ^[A-Za-z_][A-Za-z0-9_.-]*$, which rejects the `@` in Hydra's group-override
+# syntax. Dotted parameter names above are fine.
 command:
   - ${interpreter}
   - ${program}
   - --recipe
   - experiments/location_finding_2src/dad
+  - net@design_net=deepset_policy
   - ${args_no_hyphens}
