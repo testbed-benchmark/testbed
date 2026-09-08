@@ -468,10 +468,14 @@ class Task(ABC, nn.Module):
             (y_context, (S_y, *self.event_shape_y)),
             (design_context, (S_design, *self.event_shape_design)),
         )
-        
+
         # skips a copy op when context is null
         y_full = y_flat if S_y == 0 else torch.cat([y_context_flat, y_flat], dim=1)
-        design_full = design_flat if S_design == 0 else torch.cat([design_context_flat, design_flat], dim=1)
+        design_full = (
+            design_flat
+            if S_design == 0
+            else torch.cat([design_context_flat, design_flat], dim=1)
+        )
 
         b_flat = theta_flat.shape[0]
         logp = torch.zeros(b_flat, device=theta_flat.device)
