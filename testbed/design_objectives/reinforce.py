@@ -115,21 +115,31 @@ class Reinforce(RolloutObjective, ABC):
         self.stochastic_design_policy = stochastic_design_policy
         self.baseline = baseline
 
-    def __call__(self, rollout: Rollout):
+    def __call__(self, rollout: Rollout, y_context=None, design_context=None):
         """Estimates gain for a simulated rollout."""
-        return self.estimate_gain(rollout)
+        return self.estimate_gain(
+            rollout, y_context=y_context, design_context=design_context
+        )
 
     @abstractmethod
-    def calculate_value(self, rollout: Rollout) -> Tensor:
+    def calculate_value(
+        self, rollout: Rollout, y_context=None, design_context=None
+    ) -> Tensor:
         """Computes the [b] per-sample value the REINFORCE surrogate is built from."""
         ...
 
-    def estimate_gain(self, rollout: Rollout):
+    def estimate_gain(self, rollout: Rollout, y_context=None, design_context=None):
         """Builds the REINFORCE surrogate from a batched rollout.
+
+        A context is history already absorbed into ``task.current_prior``; both the
+        value and the score term condition on it without scoring it. See
+        :func:`contrastive_logsumexps`.
 
         returns: scalar whose value is mean(V) and whose gradient is the estimate.
         """
-        value = self.calculate_value(rollout)  # [b]
+        value = self.calculate_value(
+            rollout, y_context=y_context, design_context=design_context
+        )  # [b]
 
         # Stochastic policy: standard REINFORCE.
         # Does not require differentiable value functions.
@@ -156,7 +166,11 @@ class Reinforce(RolloutObjective, ABC):
                 )
 
             score = self.task.history_logp(
-                rollout.y_history, rollout.design_history, rollout.theta
+                rollout.y_history,
+                rollout.design_history,
+                rollout.theta,
+                y_context=y_context,
+                design_context=design_context,
             )  # [b]
 
         return _add_score_gradient(value, score, self._apply_baseline(value)).mean()
@@ -187,8 +201,14 @@ class LossReinforce(Reinforce):
 
         self.loss_fn = loss_fn
 
-    def calculate_value(self, rollout: Rollout) -> Tensor:
-        """Computes the value from the rollout's terminal action."""
+    def calculate_value(
+        self, rollout: Rollout, y_context=None, design_context=None
+    ) -> Tensor:
+        """Computes the value from the rollout's terminal action.
+
+        The action net already sees the full history it was given, so a context
+        carries no extra information here and is ignored.
+        """
         return self.loss_fn(rollout.extra["action"], rollout.theta)
 
 
@@ -206,9 +226,13 @@ class SPCEReinforce(Reinforce):
         super().__init__(task, stochastic_design_policy, baseline)
         self.spce = SPCE(task, n_contrastive)
 
-    def calculate_value(self, rollout: Rollout) -> Tensor:
+    def calculate_value(
+        self, rollout: Rollout, y_context=None, design_context=None
+    ) -> Tensor:
         """Computes the per-sample SPCE gain."""
-        return self.spce.per_sample_gain(rollout)
+        return self.spce.per_sample_gain(
+            rollout, y_context=y_context, design_context=design_context
+        )
 
 
 class BarberAgakovReinforce(Reinforce):
@@ -230,8 +254,29 @@ class BarberAgakovReinforce(Reinforce):
             use_current_prior=use_current_prior,
         )
 
-    def calculate_value(self, rollout: Rollout) -> Tensor:
-        """Computes the per-sample Barber-Agakov gain."""
+    def calculate_value(
+        self, rollout: Rollout, y_context=None, design_context=None
+    ) -> Tensor:
+        """Computes the per-sample Barber-Agakov gain for the whole rollout.
+
+        This estimator does not support pre-existing observation/design history.
+        If context were supplied, the posterior would be conditioned on both the
+        context and the rollout, while the gain would still be measured against
+        the rollout's prior. That would incorrectly attribute information from
+        the context to the rollout.
+
+        Use MyopicBarberAgakov when scoring additional information conditional
+        on an existing history.
+        """
+        # TODO This may actually work with context because posterior update hook should
+        # update the task.current_prior...
+        # although the default for this seems to be set to False
+        # so it could just be a flag check here instead?
+        if y_context is not None or design_context is not None:
+            raise NotImplementedError(
+                "BarberAgakovReinforce does not support a context; condition "
+                "the posterior net on the history instead (see MyopicBarberAgakov)."
+            )
         return self.barber_agakov.per_sample_gain(rollout)
 
     def posterior_gain(self, rollout: Rollout) -> Tensor:
@@ -243,7 +288,13 @@ class BarberAgakovReinforce(Reinforce):
         """
         return self.barber_agakov.estimate_gain(rollout)
 
-    def estimate_gain(self, rollout: Rollout, train_posterior: bool = False) -> Tensor:
+    def estimate_gain(
+        self,
+        rollout: Rollout,
+        train_posterior: bool = False,
+        y_context=None,
+        design_context=None,
+    ) -> Tensor:
         r"""Estimates the (policy-gradient-ready) Barber-Agakov gain.
 
         train_posterior: whether this call should also train posterior_net (default
@@ -253,7 +304,9 @@ class BarberAgakovReinforce(Reinforce):
         so restoring requires_grad right after can't reconnect it.
         """
         with _requires_grad(self.barber_agakov.posterior_net, train_posterior):
-            gain = super().estimate_gain(rollout)
+            gain = super().estimate_gain(
+                rollout, y_context=y_context, design_context=design_context
+            )
         if train_posterior and self.stochastic_design_policy:
             posterior_gain = self.posterior_gain(rollout)
             gain = gain + (posterior_gain - posterior_gain.detach())

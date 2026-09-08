@@ -6,8 +6,27 @@ from typing import Any
 import torch
 from torch import nn
 
-from ..inference.is_sampler import run_importance_sampling
+from ..inference.is_sampler import effective_sample_size, run_importance_sampling
 from .rollout import RolloutState
+
+
+def ess_record(posterior, step: int) -> dict[str, Any] | None:
+    """ESS diagnostic for one inference call, or None if the posterior has no weights.
+
+    A degenerate posterior is the quiet failure mode of importance sampling: the
+    rollout finishes and the bounds look plausible off a handful of distinct
+    particles. So every hook that runs inference records this.
+    """
+    ess = effective_sample_size(posterior)
+    if ess is None:
+        return None
+    n_particles = posterior.locs.shape[0]
+    return {
+        "step": step,
+        "ess": ess,
+        "ess_fraction": ess / n_particles,
+        "n_particles": n_particles,
+    }
 
 
 def check_hooks(hooks: Sequence["RolloutHook"]) -> list["RolloutHook"]:
@@ -94,12 +113,17 @@ class PosteriorUpdateHook(RolloutHook):
             state.task, state.y_history, state.design_history, **self.inference_kwargs
         )
         state.task.update_prior(posterior)
+        record = ess_record(posterior, state.t)
+        if record is not None:
+            state.scratch.setdefault("ess_history", []).append(record)
         if self.store_history:
             state.scratch.setdefault("posterior_history", []).append(posterior)
 
     def on_rollout_end(self, state: RolloutState) -> dict[str, Any] | None:
         """Attaches the final (and optionally per-step) posterior to the rollout."""
         extra = {"posterior": state.task.current_prior}
+        if "ess_history" in state.scratch:
+            extra["ess_history"] = state.scratch["ess_history"]
         if self.store_history:
             extra["posterior_history"] = state.scratch["posterior_history"]
         return extra

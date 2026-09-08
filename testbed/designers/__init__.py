@@ -6,6 +6,7 @@ from testbed.core.rollout import Rollout, RolloutState
 from .amortized import PolicyDesigner
 from .base import Designer
 from .non_adaptive import RandomDesigner, StaticDesigner
+from .semi_amortized import SemiAmortizedDesigner
 from .sequential import SequentialDesigner
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "Rollout",
     "RolloutHook",
     "RolloutState",
+    "SemiAmortizedDesigner",
     "SequentialDesigner",
     "StaticDesigner",
 ]

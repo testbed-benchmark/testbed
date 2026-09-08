@@ -1,9 +1,34 @@
 """Tensor shape and probability helpers."""
 
 import math
+from contextlib import contextmanager
 
 import torch
 from torch import Tensor
+
+
+@contextmanager
+def reset_prior(task):
+    """Runs the block with ``task.current_prior`` back at the original prior.
+
+    Hooks that do posterior inference leave the task pointing at a posterior,
+    and the contrastive estimators draw their theta from ``current_prior``. So
+    scoring a finished adaptive rollout without this computes the bound against
+    the last trajectory's posterior instead of the prior. Restores whatever was
+    installed on exit, so the caller's task is unchanged.
+    """
+    previous = task.current_prior
+    task.update_prior(task.prior)
+    if task.current_prior is not task.prior:
+        raise RuntimeError(
+            f"Could not reset {type(task).__name__}.current_prior to task.prior: "
+            f"update_prior left a {type(task.current_prior).__name__} installed. "
+            "Refusing to score against an unknown prior."
+        )
+    try:
+        yield task
+    finally:
+        task.update_prior(previous)
 
 
 def matches_event_shape(tensor: Tensor, event_shape) -> bool:

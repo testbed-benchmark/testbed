@@ -62,3 +62,16 @@ def run_importance_sampling(
 
     weights = torch.softmax(log_weights, dim=0)
     return EmpiricalDistribution(locs=theta, weights=weights)
+
+
+def effective_sample_size(posterior) -> float | None:
+    """Kish ESS of a weighted-particle posterior, or None if it carries no weights.
+
+    Assumes normalized weights, as :func:`run_importance_sampling` produces. None
+    rather than an error keeps this safe for the posteriors that have no weights
+    at all (a variational or analytic one installed via ``task.update_prior``).
+    """
+    weights = getattr(posterior, "weights", None)
+    if weights is None:
+        return None
+    return (1.0 / weights.pow(2).sum()).item()
