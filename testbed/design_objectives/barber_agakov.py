@@ -1,5 +1,6 @@
 """Barber-Agakov variational-posterior objectives."""
 
+import torch
 from torch import Tensor
 
 from ..core.rollout import Rollout
@@ -8,6 +9,16 @@ from .base_objective import DesignObjective, RolloutObjective
 from .loss import _check_reduction
 
 __all__ = ["BarberAgakov", "MyopicBarberAgakov", "posterior_nll"]
+
+
+def _prepend_history(context, step):
+    """Prepends the history so far to this step's ``[b, 1, *event_shape]`` entry.
+
+    An absent context is a ``T=0`` history, so the step passes through unchanged.
+    """
+    if context is None:
+        return step
+    return torch.cat([context.expand(step.shape[0], *context.shape[1:]), step], dim=1)
 
 
 def posterior_nll(
@@ -48,13 +59,19 @@ class MyopicBarberAgakov(DesignObjective):
     r"""Barber-Agakov lower bound on the EIG of one design.
 
     .. math::
-        \mathrm{EIG}(d) \ge \mathbb{E}[\log q(\theta \mid y, d) - \log p(\theta)]
+        \mathrm{EIG}(d \mid h) \ge
+        \mathbb{E}[\log q(\theta \mid h, d, y) - \log p(\theta \mid h)]
 
     The ``T=1`` case of :class:`BarberAgakov`, for myopic optimization with
     ``SequentialDesigner``: draws ``n_outer`` pairs ``(theta, y)`` for ``design``
-    and evaluates the bound with ``posterior_net`` conditioned on that one-step
-    history.
+    and evaluates the bound with ``posterior_net`` conditioned on the history
+    so far plus that step.
 
+    The subtracted term is :attr:`Task.current_prior`, i.e. ``p(theta | h)``
+    once ``PosteriorUpdateHook`` has conditioned it on the history. ``q`` must
+    therefore see the whole history and not just the new step, or the two sides
+    of the bound condition on different things -- and the net is trained on
+    full histories anyway (see :func:`posterior_nll`).
 
     Args:
         task: Task whose EIG is bounded.
@@ -69,11 +86,17 @@ class MyopicBarberAgakov(DesignObjective):
         self.posterior_net = posterior_net
         self.n_outer = int(n_outer)
 
-    def __call__(self, design: Tensor):
+    def __call__(
+        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
+    ):
         """Estimates gain for one design."""
-        return self.estimate_gain(design)
+        return self.estimate_gain(
+            design, y_history=y_history, design_history=design_history
+        )
 
-    def estimate_gain(self, design: Tensor) -> Tensor:
+    def estimate_gain(
+        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
+    ) -> Tensor:
         """Estimates gain for one fixed design.
 
         design: ``[*event_shape_design]``. Leading size-1 batch dims are
@@ -90,13 +113,19 @@ class MyopicBarberAgakov(DesignObjective):
         design = design.reshape(self.task.event_shape_design)
 
         b = self.n_outer
-        y, theta = self.task.sample_joint(design, n_samples=b)
+        y, theta = self.task.sample_joint(
+            design, y_history=y_history, design_history=design_history, n_samples=b
+        )
+        # A context history contributes a batch dim of its own, so reshape
+        # explicitly rather than trusting the returned shape.
+        y = y.reshape(b, 1, *self.task.event_shape_y)
         theta = theta.reshape(b, *self.task.event_shape_theta)
+        design_step = design.expand(b, 1, *self.task.event_shape_design)
 
         log_q = self.posterior_net.log_prob(
             theta,
-            y.reshape(b, 1, *self.task.event_shape_y),
-            design.expand(b, 1, *self.task.event_shape_design),
+            _prepend_history(y_history, y),
+            _prepend_history(design_history, design_step),
         )
         return (log_q - self.task.current_prior.log_prob(theta)).mean()
 

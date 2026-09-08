@@ -33,6 +33,7 @@ TASKS = [
     "LocationFinding",
     "MichaelisMenten",
     "PreyPopulation",
+    "StochasticPendulum",
     "Task",
 ]
 
