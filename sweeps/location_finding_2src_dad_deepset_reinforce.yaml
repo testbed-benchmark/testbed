@@ -1,0 +1,46 @@
+# Seed sweep for experiments/location_finding_2src/dad with the DAD paper's
+# DeepSets policy and the REINFORCE gradient estimator (DAD Eq. 16).
+#
+# The reinforce arm of the pair with
+# sweeps/location_finding_2src_dad_deepset_reparam.yaml: same architecture
+# (net/deepset_policy, Appendix D.1), same recipe optimiser settings, only the
+# gradient estimator differs.
+#
+# DeepSetPolicyNet is deterministic, so this is the pathwise-plus-outcome-score
+# form of Eq. 16 (`not design_net.produces_policy_log_probs`), not a
+# stochastic-policy REINFORCE; objective.reparameterize_policy is inert here.
+# SPCEReinforce rejects a task that samples outcomes pathwise, since the value
+# would then already carry a complete pathwise gradient and the score term would
+# add a spurious Jacobian on top, hence task.reparameterize_outcomes=false.
+#
+# objective.baseline stays on the recipe default of null. Set it to
+# leave_one_out if the score term's variance dominates.
+#
+# wandb sweep sweeps/location_finding_2src_dad_deepset_reinforce.yaml
+
+name: location_finding_2src-dad-deepset-reinforce-seeds
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: location_finding_2src
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+  net@design_net:
+    value: deepset_policy
+  objective.name:
+    value: reinforce
+  task.reparameterize_outcomes:
+    value: false
+  # Separate group so these runs are distinguishable from the attentive-policy
+  # `dad` set and from the reparam arm.
+  wandb.group:
+    value: dad_deepset_reinforce
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/location_finding_2src/dad
+  - ${args_no_hyphens}

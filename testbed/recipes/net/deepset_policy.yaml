@@ -1,0 +1,19 @@
+# Design network of the DAD location finding experiment (Foster et al. 2021,
+# Appendix D.1). The per-step encoder takes the concatenated (design, outcome)
+# and sum-pools; the emitter is linear.
+#
+# Encoder [dim_design + dim_y -> 256 -> 16] + sum pooling, ReLU on the hidden
+# layer only. Emitter [16 -> 2 -> 2] with no activation anywhere
+#, and since both layers are linear it is a linear
+# map 16 -> dim_design, reparametrised through a rank-2 bottleneck. 
+#
+# The one remaining difference is that the null encoding is learnable here, but
+# was fixed to zero in the original paper.
+_target_: testbed.design_nets.DeepSetPolicyNet
+encoder_dim_h: [256]
+dim_emb: 16
+encoder_activation:
+  _target_: torch.nn.ReLU
+  _partial_: true
+decoder_dim_h: [2]
+decoder_activation: null
