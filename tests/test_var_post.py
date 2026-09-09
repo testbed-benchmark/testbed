@@ -1216,3 +1216,98 @@ def test_log_det_correction_does_not_change_the_posterior_gradient():
     )
 
     torch.testing.assert_close(corrected, raw_only)
+
+
+def _htd_transform():
+    """The HTD map: 2 unconstrained coordinates -> (k, alpha), both positive.
+
+    Mirrors the transform in experiments/temporal_discounting/joint_var_post.yaml.
+    """
+    return BlockTransform(
+        transforms=[ExpTransform()],
+        raw_sizes=[2],
+        theta_sizes=[2],
+    )
+
+
+def _make_htd_posterior(task, n_components=3):
+    return ConstrainedAttentiveVariationalPosteriorNet(
+        event_shape_y=task.event_shape_y,
+        event_shape_design=task.event_shape_design,
+        event_shape_theta=task.event_shape_theta,
+        transform=_htd_transform(),
+        n_components=n_components,
+        encoder_dim_h=[16],
+        dim_emb=16,
+        num_heads=2,
+        num_blocks=1,
+        trunk_dim_h=16,
+    )
+
+
+def _htd_history(task, b=16, T=3):
+    return torch.randint(0, 2, (b, T, 1)).float(), torch.rand(b, T, 2) * 100
+
+
+def test_htd_transform_round_trips_on_real_prior_draws():
+    torch.manual_seed(0)
+    transform = _htd_transform()
+
+    raw = torch.randn(64, 2)
+    assert torch.allclose(transform.inv(transform(raw)), raw, atol=1e-5)
+
+    theta = HyperbolicTemporalDiscounting().sample_prior(2_000)
+    assert torch.allclose(transform(transform.inv(theta)), theta, atol=1e-5)
+    assert torch.isfinite(transform.inv(theta)).all()
+
+
+def test_htd_posterior_pushforward_normalises():
+    """The measure claim, for HTD.
+
+    Unlike CES this integrates to exactly 1: theta's support is the full
+    positive quadrant rather than a lower-dimensional manifold, and HTDPrior
+    accounts for its own density everywhere, with no squash left out.
+    """
+    torch.manual_seed(0)
+    task = HyperbolicTemporalDiscounting()
+    transform = _htd_transform()
+
+    raw = transform.inv(task.sample_prior(20_000))
+    proposal = Independent(Normal(raw.mean(0), 2.0 * raw.std(0)), 1)
+    z = proposal.sample((200_000,))
+    log_weights = (
+        task.prior.log_prob(transform(z))
+        + transform.log_abs_det_jacobian(z, transform(z))
+        - proposal.log_prob(z)
+    )
+
+    assert log_weights.exp().mean().item() == pytest.approx(1.0, rel=0.05)
+
+
+def test_htd_constrained_posterior_samples_stay_positive():
+    torch.manual_seed(0)
+    task = HyperbolicTemporalDiscounting()
+    net = _make_htd_posterior(task)
+    y_history, design_history = _htd_history(task, b=8)
+
+    theta = net.sample(y_history, design_history, n_samples=64)
+
+    assert theta.shape == (64, 8, 2)
+    assert (theta > 0).all()
+
+
+def test_htd_barber_agakov_gain_is_finite_for_an_untrained_posterior():
+    torch.manual_seed(0)
+    task = HyperbolicTemporalDiscounting()
+    objective = BarberAgakov(task, _make_htd_posterior(task))
+    y_history, design_history = _htd_history(task, b=512)
+    rollout = Rollout(
+        theta=task.sample_prior(512),
+        y_history=y_history,
+        design_history=design_history,
+    )
+
+    gain = objective.per_sample_gain(rollout)
+
+    assert torch.isfinite(gain).all()
+    assert gain.abs().max() < 1e3

@@ -179,6 +179,32 @@ def test_ces_joint_var_post_recipe_uses_a_constrained_posterior():
     assert cfg.posterior_net.canonicalize_theta is False
 
 
+def test_htd_joint_var_post_recipe_uses_a_constrained_posterior():
+    cfg = _compose("experiments/temporal_discounting/joint_var_post")
+
+    assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
+    assert (
+        cfg.posterior_net._target_
+        == "testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet"
+    )
+    # One elementwise exp block: 2 unconstrained coordinates -> (k, alpha).
+    assert cfg.posterior_net.transform.raw_sizes == [2]
+    assert cfg.posterior_net.transform.theta_sizes == [2]
+    assert cfg.posterior_net.canonicalize_theta is False
+
+
+def test_htd_posterior_transform_matches_the_task_theta_width():
+    from testbed.methods.var_post import build_posterior_net
+
+    cfg = _compose("experiments/temporal_discounting/joint_var_post")
+    task = instantiate(cfg.task)
+    net = build_posterior_net(cfg, task)
+
+    assert net.transform.dim_theta == task.event_shape_theta.numel() == 2
+    assert net.transform.dim_raw == net.dim_latent == 2
+    assert net.loc_head.out_features == cfg.posterior_net.n_components * 2
+
+
 def test_var_post_recipes_actually_instantiate_their_posterior_net():
     """Builds the nets, rather than only asserting on `_target_` strings.
 
