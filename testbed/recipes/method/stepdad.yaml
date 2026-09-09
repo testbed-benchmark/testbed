@@ -52,7 +52,14 @@ refine:
   grad_clip: 1.0
   log_every: 500
 
-# Scoring. The pretrained policy's own full-horizon EIG is always reported: it
+# Scoring is done by the method itself, so the post-hoc pass sweep_run.py runs
+# is switched off: it would score the pretrained checkpoint, which is the
+# dad_unrefined row again, and overwrite this run's eval.json with it. The sizes
+# in the final_eval block are still what everything below is measured at.
+final_eval:
+  enabled: false
+
+# The pretrained policy's own full-horizon EIG is always reported: it
 # is the baseline the rest is read against. The two totals for the refined
 # policy answer different questions, so both are on by default.
 #
