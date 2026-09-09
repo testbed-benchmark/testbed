@@ -166,7 +166,7 @@ def build_refining_designer(
                 if cfg.per_segment_eig
                 else None
             ),
-            store_posterior_history=cfg.plot_posteriors,
+            store_posterior_history=cfg.store_posterior_history,
             n_proposal=cfg.n_posterior_samples,
         )
     )
@@ -284,7 +284,9 @@ def plot_posteriors(task, rollouts, manager):
             directory / f"posterior_trajectory{index:02d}.png",
             title=f"trajectory {index}",
         )
-    manager.event_logger.info(f"wrote {len(figures)} posterior figures to {directory}")
+    manager.event_logger.info(
+        f"wrote posterior figures for {len(figures)} trajectories to {directory}"
+    )
 
     # Logged before the metrics, since logging them closes the wandb run.
     if manager.metric_logger is not None:
@@ -326,6 +328,16 @@ def summarize_ess(rollouts):
 @hydra.main(version_base="1.3", config_path="../recipes", config_name="method/stepdad")
 def main(cfg):
     """Pretrains or loads a policy, deploys it with refinement, and scores it."""
+    # Checked before the pretraining rather than at the plot, which is the last
+    # thing a run does: the posteriors have to have been kept as they were
+    # inferred, and there is no recovering them afterwards.
+    if cfg.plot_posteriors and not cfg.store_posterior_history:
+        raise ValueError(
+            "plot_posteriors=true needs store_posterior_history=true; the plot "
+            "draws the posterior particles, which are otherwise discarded as "
+            "each refinement finishes."
+        )
+
     manager, task = setup(cfg)
     torch.manual_seed(cfg.seed)
 
