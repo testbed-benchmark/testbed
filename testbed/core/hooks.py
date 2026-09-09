@@ -242,7 +242,29 @@ class RefinementHook(RolloutHook):
         self.inference_kwargs = inference_kwargs
 
     def after_step(self, state: RolloutState) -> None:
-        """Refines if this step is scheduled, skipping the last step."""
+        """Refines if this step is scheduled, skipping the last step.
+
+        ``eval_fn`` runs here, not in ``after_propose`` where
+        :class:`PosteriorUpdateHook` runs its own. 
+
+        It has to run after ``refine_fn``, since it measures the refined policy.
+
+        And it does not need a design to have been proposed. The policy designs
+        the whole stretch itself when the eval simulates it forward.
+
+        This leaves the stretch before the first refinement uncovered, since the
+        hook only fires at scheduled steps. The caller measures that one itself,
+        under the original prior. Doing it there rather than here is better on
+        two counts:
+
+        - Cost. It is the same for every trajectory, because nothing has been
+          observed and the policy has not been refined, so it is measured once
+          instead of ``n_trajectories`` times.
+        - Error bars. Adding the same number to every trajectory's total leaves
+          the spread across trajectories measuring only real variation between
+          trajectories. Re-estimating it each time would mix its own noise into
+          that spread. Its error is added to the total separately.
+        """
         n_observed = state.t + 1
         # Nothing to refine for at the end: the horizon it would optimize is empty.
         if n_observed not in self.refine_at or n_observed >= state.T:
