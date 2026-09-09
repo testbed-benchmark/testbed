@@ -1,6 +1,8 @@
 """Tests for the Step-DAD scoring functions."""
 
 import copy
+import math
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -12,6 +14,7 @@ from testbed.design_objectives import SPCE
 from testbed.designers import SemiAmortizedDesigner, make_refine_fn
 from testbed.eval import eval_end_to_end, eval_segment, eval_spce_snmc, sum_segments
 from testbed.inference import run_importance_sampling
+from testbed.methods.stepdad import combine_per_segment
 from testbed.tasks import LocationFinding
 
 T = 4
@@ -227,3 +230,64 @@ def test_the_decomposition_tiles_for_one_and_for_many_boundaries(horizon, bounda
     assert total["lower_bound"] == pytest.approx(
         sum(segment["lower_bound"] for segment in segments)
     )
+
+
+def _segment(start, end, lower, upper, se=0.0):
+    return {
+        "start": start,
+        "end": end,
+        "lower_bound": lower,
+        "upper_bound": upper,
+        "lower_bound_se": se,
+        "upper_bound_se": se,
+    }
+
+
+def _rollout_with_segments(second_lower):
+    return SimpleNamespace(
+        extra={
+            "refinement_evals": [
+                {
+                    "step": 2,
+                    "stepdad": _segment(2, 4, second_lower, second_lower),
+                    "no_finetune": _segment(2, 4, 0.0, 0.0),
+                }
+            ]
+        }
+    )
+
+
+def test_combine_per_segment_adds_the_opening_segment_to_every_arm():
+    first = _segment(0, 2, 1.0, 1.0)
+    rollouts = [_rollout_with_segments(3.0), _rollout_with_segments(5.0)]
+
+    combined = combine_per_segment(rollouts, first, T=4)
+
+    # 1 + 3 and 1 + 5, averaged.
+    assert combined["stepdad"]["lower_bound"] == pytest.approx(5.0)
+    assert combined["no_finetune"]["lower_bound"] == pytest.approx(1.0)
+    assert combined["stepdad"]["n_thetas"] == 2
+
+
+def test_combine_per_segment_carries_the_opening_segments_own_error():
+    # The opening segment is identical in every total, so the spread across
+    # trajectories cannot see how well it was estimated.
+    first = _segment(0, 2, 1.0, 1.0, se=0.5)
+    rollouts = [_rollout_with_segments(3.0), _rollout_with_segments(5.0)]
+
+    combined = combine_per_segment(rollouts, first, T=4)
+
+    across = (torch.tensor([4.0, 6.0]).std(unbiased=True) / 2**0.5).item()
+    assert combined["stepdad"]["lower_bound_se"] == pytest.approx(
+        math.hypot(across, 0.5)
+    )
+
+
+def test_a_perfectly_estimated_opening_segment_changes_nothing():
+    first = _segment(0, 2, 1.0, 1.0, se=0.0)
+    rollouts = [_rollout_with_segments(3.0), _rollout_with_segments(5.0)]
+
+    combined = combine_per_segment(rollouts, first, T=4)
+
+    across = (torch.tensor([4.0, 6.0]).std(unbiased=True) / 2**0.5).item()
+    assert combined["stepdad"]["lower_bound_se"] == pytest.approx(across)

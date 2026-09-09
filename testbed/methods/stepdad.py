@@ -15,6 +15,7 @@ Run with ``python testbed/methods/stepdad.py [overrides...]``.
 
 import copy
 import json
+import math
 from pathlib import Path
 
 import hydra
@@ -202,6 +203,12 @@ def combine_per_segment(rollouts, first, T):
     that produced them, and arrive on ``extra["refinement_evals"]``. All that is
     left is the chain-rule sum with the shared prior-measured opening segment,
     and the average across trajectories.
+
+    The opening segment is the same number in every total: it is measured under
+    the prior, with a policy no trajectory has refined yet, so it does not
+    depend on which trajectory it is added to. That makes the spread across
+    trajectories blind to how well it was estimated, so its own standard error
+    is added back in quadrature rather than being dropped.
     """
     per_trajectory = []
     for rollout in rollouts:
@@ -225,9 +232,14 @@ def combine_per_segment(rollouts, first, T):
         for bound in ("lower_bound", "upper_bound"):
             values = torch.tensor([total[bound] for total in totals])
             n = values.shape[0]
-            results.setdefault(arm, {})[bound] = values.mean().item()
-            results[arm][f"{bound}_se"] = (
+            across_trajectories = (
                 (values.std(unbiased=True) / n**0.5).item() if n > 1 else 0.0
+            )
+            results.setdefault(arm, {})[bound] = values.mean().item()
+            # Independent: the opening segment was estimated under the prior,
+            # before any of these trajectories existed.
+            results[arm][f"{bound}_se"] = math.hypot(
+                across_trajectories, first[f"{bound}_se"]
             )
         results[arm]["n_thetas"] = len(per_trajectory)
     return results
@@ -301,6 +313,11 @@ def main(cfg):
     # 2. Plain DAD up to the first refinement. Nothing has
     #    been observed at t=0, so this is the same eval as above over a shorter
     #    horizon, measured under the prior.
+    #    Kept here instead of moving to after propose block like greedy because
+    #    it reduces compute as each rollout can share the eval from up [0, tau[0]).
+    #    Also it reduces se as across-trajectory variance reflects only genuine 
+    #    trajectory-to-trajectory variation as opposed to double counting this initial
+    #    segement
     first = None
     if cfg.per_segment_eig:
         opening = segment_boundaries(cfg)[0]
