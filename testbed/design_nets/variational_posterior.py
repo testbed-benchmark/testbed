@@ -517,9 +517,7 @@ class ConstrainedGaussianMixtureVariationalPosteriorNet(
         # constant w.r.t. both the posterior parameters and the design. The
         # correction makes the reported bound well defined without changing any
         # gradient.
-        return log_q_raw - self.transform.log_abs_det_jacobian(
-            raw, self.transform(raw)
-        )
+        return log_q_raw - self.transform.log_abs_det_jacobian(raw, self.transform(raw))
 
     def sample(
         self, y_history, design_history, n_samples: int = 1, mask=None
@@ -533,9 +531,7 @@ class ConstrainedGaussianMixtureVariationalPosteriorNet(
             n_samples
         )  # [n_samples, b, dim_raw]
         theta = self.transform(raw)
-        return theta.reshape(
-            n_samples, y_history.shape[0], *self.event_shape_theta
-        )
+        return theta.reshape(n_samples, y_history.shape[0], *self.event_shape_theta)
 
 
 class AttentiveVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):

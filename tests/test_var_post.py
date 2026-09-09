@@ -942,7 +942,9 @@ def _ces_transform():
     """
     return BlockTransform(
         transforms=[
-            ComposeTransform([SigmoidTransform(), AffineTransform(loc=0.01, scale=0.99)]),
+            ComposeTransform(
+                [SigmoidTransform(), AffineTransform(loc=0.01, scale=0.99)]
+            ),
             StickBreakingTransform(),
             ExpTransform(),
         ],
@@ -1110,9 +1112,7 @@ def test_constrained_posterior_rejects_canonicalize_theta():
             event_shape_y=task.event_shape_y,
             event_shape_design=task.event_shape_design,
             event_shape_theta=(4,),
-            transform=BlockTransform(
-                [ExpTransform()], raw_sizes=[4], theta_sizes=[4]
-            ),
+            transform=BlockTransform([ExpTransform()], raw_sizes=[4], theta_sizes=[4]),
             canonicalize_theta=True,
         )
 
@@ -1124,9 +1124,7 @@ def test_constrained_posterior_rejects_a_transform_of_the_wrong_width():
             event_shape_y=task.event_shape_y,
             event_shape_design=task.event_shape_design,
             event_shape_theta=task.event_shape_theta,
-            transform=BlockTransform(
-                [ExpTransform()], raw_sizes=[4], theta_sizes=[4]
-            ),
+            transform=BlockTransform([ExpTransform()], raw_sizes=[4], theta_sizes=[4]),
         )
 
 
@@ -1207,11 +1205,7 @@ def test_log_det_correction_does_not_change_the_posterior_gradient():
         net.zero_grad()
         loss.backward()
         return torch.cat(
-            [
-                p.grad.flatten()
-                for p in net.parameters()
-                if p.grad is not None
-            ]
+            [p.grad.flatten() for p in net.parameters() if p.grad is not None]
         )
 
     corrected = grads(net.log_prob(theta, y_history, design_history).sum())
