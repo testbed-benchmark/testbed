@@ -39,6 +39,7 @@ class SequentialDesigner(Designer):
         *,
         update_posterior: bool = True,
         inference_fn=run_importance_sampling,
+        step_eval_fn=None,
         store_posterior_history: bool = False,
         extra_hooks: Sequence[RolloutHook] = (),
         transform_designs: bool = True,
@@ -61,6 +62,10 @@ class SequentialDesigner(Designer):
             every step using inference_fn/inference_kwargs, updating
             task.current_prior. Set False to manage posterior updates
             yourself (e.g. via extra_hooks).
+        step_eval_fn: optional (state, prior) -> dict, scoring each design as
+            it is proposed, under the measure it was chosen against. Collected
+            on the rollout as extra["step_evals"]. Only meaningful when
+            update_posterior is True, since the hook carries it.
         store_posterior_history: if True, the PosteriorUpdateHook also keeps
             the posterior computed after each step, exposed on the rollout
             as extra["posterior_history"] (a dict of Distribution keyed by how
@@ -95,6 +100,7 @@ class SequentialDesigner(Designer):
             hooks = [
                 PosteriorUpdateHook(
                     inference_fn,
+                    eval_fn=step_eval_fn,
                     store_posterior_history=store_posterior_history,
                     **inference_kwargs,
                 ),

@@ -19,12 +19,67 @@ from pathlib import Path
 import hydra
 import torch
 
+from testbed.core.logging import flatten_metrics
 from testbed.core.setup import setup
 from testbed.core.util import reset_prior
 from testbed.design_objectives import PCE
 from testbed.designers import SequentialDesigner
-from testbed.eval import eval_end_to_end
+from testbed.eval import eval_end_to_end, eval_fixed_design, sum_segments
 from testbed.plotting import report_posterior_figures
+
+
+def make_step_eval_fn(cfg, task):
+    """Builds the ``PosteriorUpdateHook`` eval_fn: the EIG of the design just chosen.
+
+    Runs at ``cfg.final_eval`` sizes, the same as every other number in the run,
+    so the per-step total is comparable with the end-to-end row rather than
+    being a cheaper estimate of it. Note this is a different quantity from the
+    PCE value the Adam loop maximizes, which is an optimization objective at
+    ``cfg.pce`` sizes and is not recorded.
+    """
+
+    def eval_fn(state, prior):
+        return eval_fixed_design(
+            task,
+            state.design,
+            state.y_history,
+            state.design_history,
+            n_outer=cfg.final_eval.n_outer,
+            n_contrastive=cfg.final_eval.n_contrastive,
+            outer_batch_size=cfg.final_eval.outer_batch_size,
+            contrastive_chunk_size=cfg.final_eval.contrastive_chunk_size,
+        )
+
+    return eval_fn
+
+
+def combine_per_step(rollouts, T):
+    """Totals each trajectory's per-step EIGs, then averages over trajectories.
+
+    The steps tile ``[0, T)`` by construction, one segment each, so the sum is
+    the whole chain rule with no separate opening term: the first step's eval
+    was taken under the original prior.
+    """
+    totals = [
+        sum_segments(
+            [
+                {key: value for key, value in record.items() if key != "step"}
+                for record in rollout.extra["step_evals"]
+            ],
+            T,
+        )
+        for rollout in rollouts
+    ]
+    combined = {}
+    for bound in ("lower_bound", "upper_bound"):
+        values = torch.tensor([total[bound] for total in totals])
+        n = values.shape[0]
+        combined[bound] = values.mean().item()
+        combined[f"{bound}_se"] = (
+            (values.std(unbiased=True) / n**0.5).item() if n > 1 else 0.0
+        )
+    combined["n_thetas"] = len(totals)
+    return combined
 
 
 def build_designer(cfg, task):
@@ -36,6 +91,7 @@ def build_designer(cfg, task):
         cfg.pce.lr,
         cfg.pce.n_step_opt,
         init_design_dist=cfg.pce.init_design_dist,
+        step_eval_fn=make_step_eval_fn(cfg, task) if cfg.per_step_eig else None,
         store_posterior_history=cfg.store_posterior_history,
         n_proposal=cfg.n_posterior_samples,
     )
@@ -107,7 +163,11 @@ def main(cfg):
             posteriors_for=lambda rollout: posteriors_to_plot(cfg, rollout),
         )
 
-    results = {
+    results = {}
+    if cfg.per_step_eig:
+        results["per_step"] = combine_per_step(rollouts, cfg.T)
+
+    results |= {
         "end_to_end": eval_end_to_end(
             task,
             rollouts,
@@ -119,19 +179,7 @@ def main(cfg):
 
     Path(manager.path("eval.json")).write_text(json.dumps(results, indent=2))
     if manager.metric_logger is not None:
-        manager.metric_logger.log(
-            {
-                f"eval/{key}": value
-                for key, value in {
-                    **{f"end_to_end/{k}": v for k, v in results["end_to_end"].items()},
-                    **{
-                        key: value
-                        for key, value in results.items()
-                        if isinstance(value, (int, float))
-                    },
-                }.items()
-            }
-        )
+        manager.metric_logger.log(flatten_metrics(results))
         manager.metric_logger.close()
 
     print(json.dumps(results, indent=2))

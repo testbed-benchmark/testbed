@@ -10,9 +10,8 @@ from testbed.core.util import reset_prior
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import SPCE
 from testbed.designers import SemiAmortizedDesigner, make_refine_fn
-from testbed.eval import eval_end_to_end, eval_segment, eval_spce_snmc
+from testbed.eval import eval_end_to_end, eval_segment, eval_spce_snmc, sum_segments
 from testbed.inference import run_importance_sampling
-from testbed.methods.stepdad import sum_segments
 from testbed.tasks import LocationFinding
 
 T = 4

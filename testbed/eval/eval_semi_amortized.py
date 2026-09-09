@@ -24,19 +24,7 @@ import torch
 
 from testbed.core.rollout import Rollout
 from testbed.core.util import reset_prior
-from testbed.eval.base import chunked_spce_snmc
-
-
-def _summarize(lower, upper, **extra):
-    """Mean and standard error of both bounds."""
-    n = lower.shape[0]
-    return {
-        "lower_bound": lower.mean().item(),
-        "lower_bound_se": (lower.std(unbiased=True) / n**0.5).item(),
-        "upper_bound": upper.mean().item(),
-        "upper_bound_se": (upper.std(unbiased=True) / n**0.5).item(),
-        **extra,
-    }
+from testbed.eval.base import chunked_spce_snmc, summarize_bounds
 
 
 def stack_rollouts(rollouts):
@@ -71,7 +59,7 @@ def eval_end_to_end(
         lower, upper = chunked_spce_snmc(
             task, rollout, n_contrastive, contrastive_chunk_size
         )
-    return _summarize(
+    return summarize_bounds(
         lower,
         upper,
         n_thetas=rollout.b,
@@ -148,7 +136,7 @@ def eval_segment(
             upper_gains.append(upper)
             remaining -= b
 
-    return _summarize(
+    return summarize_bounds(
         torch.cat(lower_gains),
         torch.cat(upper_gains),
         start=start,

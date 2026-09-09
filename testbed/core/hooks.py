@@ -101,14 +101,60 @@ class PosteriorUpdateHook(RolloutHook):
         self,
         inference_fn=run_importance_sampling,
         *,
+        eval_fn=None,
         store_posterior_history: bool = False,
         **inference_kwargs,
     ):
-        """inference_fn(task, y_history, design_history, **inference_kwargs) -> Distribution."""
+        """Initializes the hook.
+
+        Args:
+            inference_fn: ``(task, y_history, design_history, **kwargs) -> Distribution``.
+            eval_fn: Optional ``(state, prior) -> dict | None``, run once per
+                step on the design just proposed, under the measure it was
+                chosen against. Collected as ``extra["step_evals"]``. See
+                :meth:`after_propose` for why it runs there.
+            store_posterior_history: Keep each posterior on the rollout as
+                ``extra["posterior_history"]``. Off by default: a particle set
+                is the largest thing a rollout can carry, and this hook infers
+                one every step.
+            **inference_kwargs: Forwarded to ``inference_fn``.
+        """
         super().__init__()
         self.inference_fn = inference_fn
+        self.eval_fn = eval_fn
         self.store_posterior_history = store_posterior_history
         self.inference_kwargs = inference_kwargs
+
+    def after_propose(self, state: RolloutState) -> None:
+        """Measures/ evalautes the design just proposed, before its outcome is drawn.
+
+        Each call covers the one-step segment ``[t, t+1)``, measured under
+        everything strictly before it: the posterior this hook installed last
+        step, or the original prior at ``t = 0``. The segments therefore tile
+        ``[0, T)`` on their own, and their sum is the whole chain rule with no
+        separate opening term.
+
+        Here rather than in ``after_step`` because this is the first moment the
+        design exists alongside the measure it was chosen under. That matters
+        for a designer that optimizes each design in turn, such as
+        :class:`~testbed.designers.sequential.SequentialDesigner`: by
+        ``after_step`` the next design has not been chosen, and re-deriving it
+        would run the optimization again and land on a different design from the
+        one the trajectory actually used. A designer whose designs come from a
+        policy has no such problem, which is why
+        :class:`RefinementHook` can evaluate whole segments from ``after_step``.
+
+        The histories are also exactly right here: they hold the steps strictly
+        before this one, which is the context the estimator conditions on. By
+        ``after_step`` they include step ``t``, the very step being measured.
+        """
+        if self.eval_fn is None:
+            return
+        evaluation = self.eval_fn(state, state.task.current_prior)
+        if evaluation is not None:
+            state.scratch.setdefault("step_evals", []).append(
+                {"step": state.t + 1, **evaluation}
+            )
 
     def after_step(self, state: RolloutState) -> None:
         """Infers the posterior from the history so far and updates the task."""
@@ -130,6 +176,8 @@ class PosteriorUpdateHook(RolloutHook):
         extra = {"posterior": state.task.current_prior}
         if "ess_history" in state.scratch:
             extra["ess_history"] = state.scratch["ess_history"]
+        if "step_evals" in state.scratch:
+            extra["step_evals"] = state.scratch["step_evals"]
         if self.store_posterior_history:
             extra["posterior_history"] = state.scratch["posterior_history"]
         return extra

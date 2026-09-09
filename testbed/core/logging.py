@@ -231,6 +231,17 @@ def _to_python(metrics: dict) -> dict:
     return out
 
 
+def flatten_metrics(results, prefix="eval"):
+    """Flattens the nested results into the scalar keys a metric logger takes."""
+    flat = {}
+    for key, value in results.items():
+        if isinstance(value, dict):
+            flat.update(flatten_metrics(value, prefix=f"{prefix}/{key}"))
+        elif isinstance(value, (int, float)):
+            flat[f"{prefix}/{key}"] = value
+    return flat
+
+
 def config_to_dict(cfg):
     """Best-effort conversion of a config object to a plain dict.
 

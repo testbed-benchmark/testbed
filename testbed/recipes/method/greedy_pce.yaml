@@ -22,6 +22,14 @@ pce:
 
 n_posterior_samples: 20_000
 
+# The chain-rule sum of per-step conditional EIGs: each design is scored as it
+# is chosen, under the posterior it was chosen against, at the final_eval sizes
+# below. The steps tile the horizon one apiece, so unlike stepdad's per-segment
+# total there is no separate opening term; the first step's eval is taken under
+# the original prior.
+#
+per_step_eig: true
+
 # Keep every step's posterior on the rollout rather than only the last. Off by
 # default because greedy infers one after every step: this is T particle sets
 # per trajectory, all held until the run ends. The final posterior is on the
