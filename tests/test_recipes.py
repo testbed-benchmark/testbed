@@ -29,6 +29,7 @@ ENTRY_POINT_RECIPES = [
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
     "experiments/constant_elasticity_of_substitution/dad",
+    "experiments/constant_elasticity_of_substitution/actionbed",
 ]
 
 

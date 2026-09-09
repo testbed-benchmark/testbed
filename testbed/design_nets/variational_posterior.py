@@ -4,8 +4,7 @@ from abc import ABC, abstractmethod
 from math import atanh, log, prod
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 from torch.distributions import Categorical, Independent, MixtureSameFamily, Normal
 
 from testbed.core.distributions import Distribution, TorchDistribution

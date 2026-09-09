@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 from ..inference.is_sampler import run_importance_sampling
 from .rollout import RolloutState
@@ -108,17 +108,47 @@ class PosteriorUpdateHook(RolloutHook):
 class ActionHook(RolloutHook):
     """Runs an action net either once on the full history or after every step."""
 
-    def __init__(self, action_net, *, every_step: bool = False):
-        """action_net(y_history, design_history) -> action, [b, *event_shape_action]."""
+    def __init__(
+        self, action_net, *, every_step: bool = False, use_raw_history: bool = False
+    ):
+        """action_net(y_history, design_history) -> action, [b, *event_shape_action].
+
+        ``use_raw_history`` conditions on raw rather than physical designs, and
+        should match the designer's own setting so that both nets see the same
+        coordinates.
+        """
         super().__init__()
         self.action_net = action_net
         self.every_step = every_step
+        self.use_raw_history = bool(use_raw_history)
+
+    def design_history(self, state: RolloutState) -> Tensor:
+        """Returns the design history the action net conditions on.
+
+        Raises rather than falling back to physical designs: a silent fallback
+        would feed the action net two different coordinate systems within one
+        run (a designer supplying no raw designs during warmup, raw ones after),
+        which trains badly and reports nothing.
+        """
+        if not self.use_raw_history:
+            return state.design_history
+        if state.raw_design_history is None:
+            raise ValueError(
+                "ActionHook(use_raw_history=True) needs a raw design history, but "
+                f"{type(state.task).__name__}'s designer produced none. Its design "
+                "space likely implements no raw <-> design map."
+            )
+        return state.raw_design_history
+
+    def step_action(self, y_history: Tensor, design_history: Tensor) -> Tensor:
+        """Computes the action by calling the action_net."""
+        return self.action_net(y_history, design_history)
 
     def after_step(self, state: RolloutState) -> None:
         """Computes and stashes an action from the history so far, if requested every step."""
         if not self.every_step:
             return
-        action_t = self.action_net(state.y_history, state.design_history)
+        action_t = self.step_action(state.y_history, self.design_history(state))
         state.scratch.setdefault("action_history", []).append(action_t)
 
     def on_rollout_end(self, state: RolloutState) -> dict[str, Any] | None:
@@ -127,4 +157,4 @@ class ActionHook(RolloutHook):
             return {
                 "action_history": torch.stack(state.scratch["action_history"], dim=1)
             }
-        return {"action": self.action_net(state.y_history, state.design_history)}
+        return {"action": self.step_action(state.y_history, self.design_history(state))}
