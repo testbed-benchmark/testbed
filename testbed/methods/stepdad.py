@@ -85,18 +85,11 @@ def make_segment_eval_fn(cfg, task, designer, pretrained_designer):
     """Builds the ``RefinementHook`` eval_fn: the EIG of the segment just enabled.
 
     Runs at the same sample sizes as every other number in the run, from
-    ``cfg.final_eval``, so the segments and the full-horizon rows are comparable
-    rather than one being a cheap estimate of the other.
-
-    Both arms are measured at this moment because it is the only correct one for
-    the refined designer: refinements accumulate, so after the rollout the policy
-    carries every later refinement too, and segment ``[tau_i, tau_i+1)`` would be
-    measured using a policy that had already been refined on data from inside it.
-    Here it is exactly the policy that goes on to design those steps.
+    ``cfg.final_eval``, so the segments and the full-horizon rows are comparable.
 
     The posterior is whatever the hook installed before refining, so
-    ``eval_segment`` picks it up from ``task.current_prior`` with no juggling, and
-    it is the same particle set the refinement itself optimized against.
+    ``eval_segment`` picks it up from ``task.current_prior``.
+    It is the same particle set the refinement itself optimized against.
     """
     arms = {"stepdad": designer, "no_finetune": pretrained_designer}
 
@@ -122,7 +115,7 @@ def make_segment_eval_fn(cfg, task, designer, pretrained_designer):
 
 
 def build_refining_designer(
-    cfg, task, design_net, use_raw_history, pretrained_designer=None, logger=None
+    cfg, task, design_net, use_raw_history, pretrained_designer, logger=None
 ):
     """Builds a deployment designer: its own copy of the weights, plus a refinement hook.
 
@@ -133,19 +126,15 @@ def build_refining_designer(
     The designer is constructed first and the hook appended to its ``ModuleList``,
     since the refinement closure needs the designer it is attached to.
 
-    The objective is built here rather than passed in, after the designer has
-    reported its proposal capability: a REINFORCE arm needs to know whether the
-    policy's proposals carry log probs.
-
     Args:
         cfg: The composed config.
         task: The task.
         design_net: Pretrained net, deep-copied so this designer owns its weights.
         use_raw_history: Whether the policy conditions on raw designs.
-        pretrained_designer: When given, each refinement also scores the segment
-            it enables, against this un-refined comparator. Note that scoring
-            consumes randomness inside the rollout, so a scored trajectory is not
-            step-for-step identical to an unscored one at the same seed.
+        pretrained_designer: The un-refined comparator each segment is measured
+            against, under ``cfg.per_segment_eig``. Note that measuring consumes
+            randomness inside the rollout, so a trajectory with per-segment EIG
+            on is not step-for-step identical to one without at the same seed.
         logger: Optional logger for refinement progress.
     """
     designer = SemiAmortizedDesigner(
@@ -172,9 +161,9 @@ def build_refining_designer(
                 logger=logger,
             ),
             eval_fn=(
-                None
-                if pretrained_designer is None
-                else make_segment_eval_fn(cfg, task, designer, pretrained_designer)
+                make_segment_eval_fn(cfg, task, designer, pretrained_designer)
+                if cfg.per_segment_eig
+                else None
             ),
             n_proposal=cfg.n_posterior_samples,
         )
@@ -236,15 +225,22 @@ def combine_per_segment(rollouts, first, T):
     """
     per_trajectory = []
     for rollout in rollouts:
+        # Filled below into {"stepdad": [segment, ...], "no_finetune": [segment, ...]}
         arms = {}
+        # record: {"step": 6, "stepdad": {...}, "no_finetune": {...}}
         for record in rollout.extra.get("refinement_evals", []):
-            for arm, evaluation in record.items():
-                if arm != "step":
-                    arms.setdefault(arm, [dict(first)]).append(evaluation)
+            # key: "step" | "stepdad" | ...; value: 6 | {"lower_bound": ..., "start": 6, "end": 10}
+            for key, value in record.items():
+                # The step count sits alongside the arms; only the arms are segments.
+                if key != "step":
+                    # Seeded with the shared opening segment, copied so the arms do not alias.
+                    arms.setdefault(key, [dict(first)]).append(value)
         per_trajectory.append(arms)
 
     results = {}
+    # arm: "stepdad" | "no_finetune", assumed the same across trajectories
     for arm in per_trajectory[0]:
+        # One chain-rule total per trajectory: [{"lower_bound": ..., "segments": [...]}, ...]
         totals = [sum_segments(trajectory[arm], T) for trajectory in per_trajectory]
         for bound in ("lower_bound", "upper_bound"):
             values = torch.tensor([total[bound] for total in totals])
@@ -311,13 +307,8 @@ def main(cfg):
 
     pretrained_designer = pretrained_designer_over(cfg.T)
 
-    # Both prior-measured, so neither needs a realized trajectory and both are
-    # amortized: one policy covers the whole batch.
-    #
-    # 1. Plain DAD over the full horizon, on the same footing as a method/dad
-    #    run's own final eval. Always reported: it is the baseline every other
-    #    number here is read against, and a Step-DAD run is not interpretable
-    #    without knowing what the policy it started from was worth.
+
+    # 1. Plain DAD over the full horizon
     with reset_prior(task):
         results["dad_unrefined"] = eval_spce_snmc(
             task,
@@ -328,8 +319,7 @@ def main(cfg):
             contrastive_chunk_size=cfg.final_eval.contrastive_chunk_size,
         )
 
-    # 2. Plain DAD up to the first refinement: the opening segment of the
-    #    decomposition, shared by every arm and every trajectory. Nothing has
+    # 2. Plain DAD up to the first refinement. Nothing has
     #    been observed at t=0, so this is the same eval as above over a shorter
     #    horizon, measured under the prior.
     first = None
@@ -357,7 +347,7 @@ def main(cfg):
             task,
             design_net,
             use_raw_history,
-            pretrained_designer=pretrained_designer if cfg.per_segment_eig else None,
+            pretrained_designer=pretrained_designer,
             logger=manager.event_logger,
         )
         rollouts.append(run_trajectory(task, designer))

@@ -16,6 +16,9 @@ def ess_record(posterior, step: int) -> dict[str, Any] | None:
     A degenerate posterior is the quiet failure mode of importance sampling: the
     rollout finishes and the bounds look plausible off a handful of distinct
     particles. So every hook that runs inference records this.
+
+    ``step`` is the number of steps the posterior conditions on, 1-indexed, so it
+    joins against the other per-refinement records and ``posterior_history``.
     """
     ess = effective_sample_size(posterior)
     if ess is None:
@@ -113,7 +116,7 @@ class PosteriorUpdateHook(RolloutHook):
             state.task, state.y_history, state.design_history, **self.inference_kwargs
         )
         state.task.update_prior(posterior)
-        record = ess_record(posterior, state.t)
+        record = ess_record(posterior, state.t + 1)
         if record is not None:
             state.scratch.setdefault("ess_history", []).append(record)
         if self.store_history:
@@ -158,14 +161,12 @@ class RefinementHook(RolloutHook):
         Args:
             refine_at: Step counts to refine after, 1-indexed, so ``[6]`` means
                 after six steps have been observed. A list rather than a period:
-                the single-intervention case is the common one, and the paper's
-                schedule is an explicit set of points.
+                the single-intervention case is the common one.
             refine_fn: ``(state, posterior) -> dict | None`` of metrics.
             eval_fn: Optional ``(state, posterior) -> dict | None``, run right
                 after the refinement. Evaluating the refined designer has to
                 happen here rather than once the rollout is over: refinements
-                accumulate, so afterwards the designer carries every later one
-                too, and the stretch this refinement enabled would be measured
+                accumulate and the stretch this refinement enabled would be measured
                 using a designer that had already seen data from inside it.
             inference_fn: ``(task, y_history, design_history, **kwargs) -> Distribution``.
             **inference_kwargs: Forwarded to ``inference_fn``.
@@ -195,7 +196,7 @@ class RefinementHook(RolloutHook):
         )
         state.task.update_prior(posterior)
 
-        record = ess_record(posterior, state.t)
+        record = ess_record(posterior, n_observed)
         if record is not None:
             state.scratch.setdefault("refinement_ess", []).append(record)
         # Always kept, keyed by the step count it conditions on. There is one per
@@ -205,6 +206,7 @@ class RefinementHook(RolloutHook):
         # independent each time it is sampled anyway.
         state.scratch.setdefault("posterior_history", {})[n_observed] = posterior
 
+        #refine the designnet conditoned on what has been observed thus far
         metrics = self.refine_fn(state, posterior)
         if metrics is not None:
             state.scratch.setdefault("refinement_metrics", []).append(

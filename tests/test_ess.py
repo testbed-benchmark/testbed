@@ -59,7 +59,7 @@ def test_posterior_update_hook_records_one_ess_per_step():
     rollout = designer.rollout(task.sample_prior(1))
 
     ess_history = rollout.extra["ess_history"]
-    assert [record["step"] for record in ess_history] == [0, 1, 2]
+    assert [record["step"] for record in ess_history] == [1, 2, 3]
     for record in ess_history:
         assert record["n_particles"] == 200
         assert 1.0 <= record["ess"] <= 200
@@ -80,4 +80,5 @@ def test_refinement_hook_records_ess_under_its_own_key():
     rollout = designer.rollout(task.sample_prior(1))
 
     assert "ess_history" not in rollout.extra
-    assert [record["step"] for record in rollout.extra["refinement_ess"]] == [1]
+    # refine_at is 1-indexed, and so is the record's step.
+    assert [record["step"] for record in rollout.extra["refinement_ess"]] == [2]

@@ -97,13 +97,10 @@ def eval_segment(
     The conditional counterpart of :func:`eval_spce_snmc`, batched over outer
     samples and chunked over contrastive samples the same way, so a segment's
     bounds rest on the same sample sizes as the full-horizon row they get
-    compared to. There is no separate first-segment function: a segment starting
-    at ``t = 0`` has no history to condition on, so it is exactly
-    ``eval_spce_snmc`` on a designer whose ``T`` is that segment's length.
+    compared to.
 
-    Measured **under ``task.current_prior``**, so the caller installs the
-    posterior for this history first. That posterior then supplies both the outer
-    theta and the contrastive draws, which have to be under the same measure.
+    Measured **under ``task.current_prior``**. That posterior then supplies both 
+    the outer theta and the contrastive draws, which have to be under the same measure.
 
     The history is conditioned on but never scored: it is passed to the estimator
     as context, and the continuation being scored holds only the new steps.
@@ -132,7 +129,7 @@ def eval_segment(
     with torch.no_grad():
         while remaining > 0:
             b = min(outer_batch_size, remaining)
-            continuation = designer.continue_from(
+            continuation_rollout = designer.continue_from(
                 task.current_prior.sample(n_samples=b),
                 y_history,
                 design_history,
@@ -141,7 +138,7 @@ def eval_segment(
             )
             lower, upper = chunked_spce_snmc(
                 task,
-                continuation,
+                continuation_rollout,
                 n_contrastive,
                 contrastive_chunk_size,
                 y_context=y_history,
