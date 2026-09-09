@@ -3,7 +3,9 @@
 import pytest
 import torch
 
+from testbed.core.design_spaces import DefaultDesignSpace
 from testbed.core.distributions import TorchDistribution
+from testbed.core.hooks import RolloutHook
 from testbed.designers import RandomDesigner
 from testbed.tasks import CES, LocationFinding, PreyPopulation
 
@@ -66,15 +68,40 @@ def test_design_space_default_reports_no_policy_log_probs():
     assert log_prob is None
 
 
-def test_random_designer_reports_no_raw_design_history():
-    # raw_design_history is always reported by designers that compute one;
-    # a random design has no pre-transform value, so the key stays absent.
+def test_random_designer_reports_raw_design_history():
+    # Designs are drawn physically, so the raw values a policy would have
+    # proposed are recovered by inverting the design space. Anything
+    # conditioning on raw history then sees the same coordinates during a random
+    # warmup as during a policy phase.
+    torch.manual_seed(0)
+    task = CES()
+
+    # Both the vectorized fast path and the per-step path a hook forces.
+    for hooks in ((), (RolloutHook(),)):
+        rollout = RandomDesigner(task, T=3, hooks=hooks).rollout(task.sample_prior(4))
+
+        raw = rollout.extra["raw_design_history"]
+        assert raw.shape == rollout.design_history.shape
+        torch.testing.assert_close(
+            task.design_space.to_design(raw), rollout.design_history
+        )
+
+
+def test_random_designer_reports_no_raw_design_history_without_an_inverse():
+    # Every built-in design space is invertible, so this is the contract for a
+    # custom one that is not: the key stays absent and callers fall back to
+    # physical designs, rather than the rollout failing.
+    class _NoInverseSpace(DefaultDesignSpace):
+        def _to_raw(self, design):
+            raise NotImplementedError
+
     torch.manual_seed(0)
     task = make_task()
+    task.design_space = _NoInverseSpace(task.event_shape_design)
 
-    for dist in (None, make_dist()):
-        rollout = RandomDesigner(task, T=3, dist=dist).rollout(task.sample_prior(4))
-        assert "raw_design_history" not in rollout.extra
+    rollout = RandomDesigner(task, T=3).rollout(task.sample_prior(4))
+
+    assert "raw_design_history" not in rollout.extra
 
 
 def test_device_falls_back_to_the_task_without_a_dist():

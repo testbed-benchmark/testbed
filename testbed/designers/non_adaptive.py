@@ -201,12 +201,27 @@ class RandomDesigner(Designer):
         """
         return self._sample_designs(y_history.shape[0])
 
+    def _maybe_to_raw(self, design: Tensor) -> Tensor | None:
+        """Returns the raw counterpart of ``design``, or None if there is none.
+
+        Designs are drawn physically here, so the raw values a policy would have
+        proposed are recovered by inverting the design space. Anything
+        conditioning on raw history (a policy net, an ``ActionHook``) then sees
+        the same coordinates during random warmup as during the policy phase.
+        Spaces with no inverse (e.g. ``FiniteDesignSpace``) report None, and
+        callers fall back to physical designs as before.
+        """
+        try:
+            return self._to_raw(design)
+        except NotImplementedError:
+            return None
+
     def _step_design(self, state):
         """Adapts sample_design to the rollout state."""
         design, log_prob = self.sample_design(
             state.y_history, state.design_history, mask=state.mask
         )
-        return design, None, log_prob
+        return design, self._maybe_to_raw(design), log_prob
 
     def rollout(self, theta) -> Rollout:
         """Runs a random design rollout.
@@ -228,6 +243,9 @@ class RandomDesigner(Designer):
         extra = {}
         if log_prob_flat is not None:
             extra["policy_log_probs"] = log_prob_flat.reshape(b, self.T)
+        raw_design_history = self._maybe_to_raw(design_history)
+        if raw_design_history is not None:
+            extra["raw_design_history"] = raw_design_history
 
         return Rollout(
             theta=theta,

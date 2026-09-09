@@ -373,3 +373,64 @@ class PermutationInvariantMSELoss(nn.Module):
             return pi_mse.mean()
         if self.reduction == "sum":
             return pi_mse.sum()
+
+
+class TrueLogMSELoss(nn.Module):
+    r"""MSE loss on a log-scale.
+
+    Possibly log-transforms the inputs or targets prior to computing the loss.
+
+    Args:
+        reduction (str):
+            One of ``"sum"``, ``"mean"``, or ``"none"`` (default: ``"mean"``).
+        transform_input (bool, optional):
+            Should we take a log of the input before calculating the loss? (default: True)
+        transform_target (bool, optional):
+            Should we take a log of the target before calculating the loss? (default: True)
+        epsilon (float):
+            Small constant added before taking the log, for numerical
+            stability (default: ``1e-6``).
+
+    Warning:
+        The log above is computed element-wise (rather than on an
+        already-reduced mse), to match the ActionBED paper [1].
+    """
+
+    def __init__(
+        self,
+        reduction: str = "mean",
+        transform_input: bool = True,
+        transform_target: bool = True,
+        epsilon: float = 1e-6,
+    ) -> None:
+        """Initializes the loss."""
+        super().__init__()
+        self.reduction = _check_reduction(reduction)
+        self.transform_input = transform_input
+        self.transform_target = transform_target
+        self.epsilon = epsilon
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        """Computes the loss.
+
+        Args:
+            input (Tensor):
+                Estimated values shape ``[..., dim]``.
+            target (Tensor):
+                Target values, the same shape as ``input``.
+
+        Returns:
+            Tensor:
+                If ``reduction`` is ``"none"``, the same shape as ``input``.
+                Otherwise, a scalar.
+
+        Raises:
+            ValueError: If ``input`` and ``target`` have different shapes.
+        """
+        _check_same_shape(input, target)
+        if self.transform_input:
+            input = torch.log(input + self.epsilon)
+        if self.transform_target:
+            target = torch.log(target + self.epsilon)
+
+        return F.mse_loss(input, target, reduction=self.reduction)
