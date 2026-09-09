@@ -1,0 +1,60 @@
+# @package _global_
+
+defaults:
+  - /method: var_post
+  - override /task: location_finding_2src
+  - override /net@design_net: deepset_policy
+  - _self_
+
+# joint_var_post with ScoreBED's policy network, and nothing else changed.
+#
+# experiments/location_finding_2src/joint_var_post takes the method default
+# AttentivePolicyNet (662,786 params) so the policy matches dad. ScoreBED
+# (Phillips, Kerrigan, Rainforth, UAI 2026) instead trains the DAD deepset for
+# every method: their config/policy_network/dad.yaml is DADNet(encoder_shapes=
+# [256], encoding_dim=16, enc_act=relu, emitter_shapes=[]), which is the
+# deepset_policy net group here (5,192 params). Swapping only that isolates
+# what the architecture is worth on this task.
+#
+# Two further deviations from their policy, both inherited from deepset_policy:
+# their emitter's final layer is initialised U(-0.05, 0.05) rather than the
+# torch default, and their null encoding is fixed at zero rather than learned.
+
+seed: 0
+joint: true
+
+objective:
+  name: barber_agakov
+
+# no pretraining phase
+n_posterior_pretrain_iter: 0
+n_posterior_outer: 2_048  # unused without pretraining; kept for completeness
+pretrain_design_distr: null
+
+# policy training
+n_train_iter: 200_000
+n_outer: 2_048
+
+# policy optimizer
+lr: 1e-5
+betas: [0.9, 0.999]
+grad_clip: 1.0
+policy_cosine_alpha: 5e-6
+ema_decay: 0.99
+
+# posterior optimizer
+posterior_lr: 1e-3
+posterior_betas: [0.9, 0.999]
+posterior_grad_clip: 1.0
+posterior_warmup_frac: 0.001
+posterior_lr_floor: 1e-6
+
+# eval
+eval_every: 0  # eval is expensive here; the final_eval block handles it
+
+posterior_net:
+  canonicalize_theta: true
+
+wandb:
+  project: location_finding_2src  # one project per task; methods separate by group
+  group: joint_var_post_dadnet
