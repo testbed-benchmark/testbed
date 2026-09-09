@@ -35,10 +35,11 @@ n_outer_eval: 2_048
 n_inner_eval: 100_000
 
 # Deployment
-# Step counts to refine after, 1-indexed, so [6] refines once six steps are in.
+# Step counts to refine after, 1-indexed, so [5] refines once five steps are in.
 # A list: the paper's schedule is an explicit set of points, and a single one is
-# the common case.
-refine_at: [6]
+# the common case. The default is tau = T/2, half the default task's T of 10;
+# an experiment recipe overriding T must set this to match.
+refine_at: [5]
 n_posterior_samples: 20_000
 # Independent experiments, each refining its own copy of the policy. Sets both
 # the standard error and the wall clock, since each one costs a fine-tune.

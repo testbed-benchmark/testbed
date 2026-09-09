@@ -25,5 +25,6 @@ n_posterior_samples: 20_000
 # SequentialDesigner is batch-1 only (each step runs its own Adam loop), so the
 # cost is n_thetas * T * n_step_opt objective evaluations, and this is nowhere
 # near the 2048 that eval_spce_snmc uses for an amortized policy. It sets the
-# standard error, so raise it as far as the compute allows.
-n_thetas: 64
+# standard error, so raise it as far as the compute allows. 16 matches
+# method/stepdad, which is what this baseline is read against.
+n_thetas: 16

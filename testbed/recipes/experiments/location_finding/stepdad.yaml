@@ -12,7 +12,7 @@ seed: 0
 
 objective:
   name: spce  # reparameterized outcomes, so the pathwise gradient is available
-  n_inner: 1_023
+  n_inner: 1_023  # L, so the sPCE bound caps at log(1024)
 
 n_train_iter: 50_000
 n_outer: 1_024
