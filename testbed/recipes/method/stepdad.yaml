@@ -52,6 +52,11 @@ refine:
   grad_clip: 1.0
   log_every: 500
 
+# One figure per trajectory under figures/, each panel a refinement's posterior
+# over the source locations against the true ones. Location finding only; other
+# tasks log that they were skipped. Cheap: it subsamples the particle set.
+plot_posteriors: true
+
 # Scoring is done by the method itself, so the post-hoc pass sweep_run.py runs
 # is switched off: it would score the pretrained checkpoint, which is the
 # dad_unrefined row again, and overwrite this run's eval.json with it. The sizes

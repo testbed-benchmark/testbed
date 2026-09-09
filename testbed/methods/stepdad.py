@@ -26,6 +26,7 @@ from testbed.core.util import reset_prior
 from testbed.designers import SemiAmortizedDesigner, make_refine_fn
 from testbed.eval import eval_end_to_end, eval_segment, eval_spce_snmc
 from testbed.methods.dad import Trainer, build_objective
+from testbed.tasks import LocationFinding
 
 # ============================================================================
 # Phase 1: the pretrained policy
@@ -253,6 +254,42 @@ def combine_per_segment(rollouts, first, T):
     return results
 
 
+def plot_posteriors(task, rollouts, manager):
+    """Writes one posterior figure per trajectory, for location finding only.
+
+    A missing matplotlib or a task with no such plot is reported and skipped:
+    the run's results are already computed by this point, so nothing here is
+    worth failing the run over.
+    """
+    if not isinstance(task, LocationFinding):
+        manager.event_logger.info(
+            f"plot_posteriors is on but {type(task).__name__} has no posterior "
+            "plot; skipping."
+        )
+        return
+
+    try:
+        from testbed.plotting import plot_posterior_history
+    except ImportError as error:
+        manager.event_logger.warning(f"plotting needs matplotlib ({error}); skipping.")
+        return
+
+    directory = Path(manager.path("figures"))
+    directory.mkdir(exist_ok=True)
+    figures = {}
+    for index, rollout in enumerate(rollouts):
+        figures[f"posterior/trajectory{index:02d}"] = plot_posterior_history(
+            rollout,
+            directory / f"posterior_trajectory{index:02d}.png",
+            title=f"trajectory {index}",
+        )
+    manager.event_logger.info(f"wrote {len(figures)} posterior figures to {directory}")
+
+    # Logged before the metrics, since logging them closes the wandb run.
+    if manager.metric_logger is not None:
+        manager.metric_logger.log_images(figures)
+
+
 def flatten_metrics(results, prefix="eval"):
     """Flattens the nested results into the scalar keys a metric logger takes."""
     flat = {}
@@ -354,6 +391,9 @@ def main(cfg):
         manager.event_logger.info(f"trajectory {index + 1}/{cfg.n_thetas} done")
 
     results.update(summarize_ess(rollouts))
+
+    if cfg.plot_posteriors:
+        plot_posteriors(task, rollouts, manager)
 
     # 4. Combine, as the Step-DAD paper does: the opening segment plus each
     #    trajectory's tau-to-tau segments, averaged over trajectories. Nothing is
