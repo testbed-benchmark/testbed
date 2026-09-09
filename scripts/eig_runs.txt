@@ -1,0 +1,12 @@
+# Final LF runs
+runs/location_finding_2src_actionbed_seed0_2026-08-28_17-42-29_6173247_4
+runs/location_finding_2src_actionbed_seed1_2026-08-28_17-42-29_6173247_1
+runs/location_finding_2src_actionbed_seed2_2026-08-28_17-42-29_6173247_0
+runs/location_finding_2src_actionbed_seed3_2026-08-28_17-42-30_6173247_3
+runs/location_finding_2src_actionbed_seed4_2026-08-28_17-42-30_6173247_2
+# Final CES runs
+runs/constant_elasticity_of_substitution_actionbed_seed0_2026-09-08_12-47-20_6400850_2
+runs/constant_elasticity_of_substitution_actionbed_seed1_2026-09-08_12-47-20_6400850_4
+runs/constant_elasticity_of_substitution_actionbed_seed2_2026-09-08_12-47-20_6400850_3
+runs/constant_elasticity_of_substitution_actionbed_seed3_2026-09-08_12-47-23_6400850_1
+runs/constant_elasticity_of_substitution_actionbed_seed4_2026-09-08_12-47-22_6400850_0
