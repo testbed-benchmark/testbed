@@ -103,26 +103,6 @@ class Designer(ABC, nn.Module):
         """
         ...
 
-    def make_empty_history(self, b: int):
-        r"""Returns an empty rollout (i.e., corresponding to t=0).
-
-        Args:
-            b (int):
-                Batch size.
-
-        Returns:
-            tuple[Tensor, Tensor]: Empty outcome and design histories with
-            shapes ``[b, 0, *event_shape_y]`` and
-            ``[b, 0, *event_shape_design]``, respectively.
-        """
-        y_history = torch.empty(
-            (b, 0, *self.task.event_shape_y), device=self.task.device
-        )
-        design_history = torch.empty(
-            (b, 0, *self.task.event_shape_design), device=self.task.device
-        )
-        return y_history, design_history
-
     def rollout(self, theta: Tensor) -> Rollout:
         r"""Runs a rollout for batched theta values.
 
@@ -145,7 +125,7 @@ class Designer(ABC, nn.Module):
         T = self.T
 
         # Initialize a mutable state; hooks will modify this in-place
-        y_history, design_history = self.make_empty_history(b)
+        y_history, design_history = self.task.null_history(b=b)
         state = RolloutState(
             task=self.task,
             theta=theta,
@@ -181,7 +161,12 @@ class Designer(ABC, nn.Module):
                 hook.after_propose(state)
 
             # Sample observation; always using the (possibly transformed) design.
-            y = state.task.sample_outcome(state.theta, state.design)
+            y = state.task.sample_outcome(
+                state.theta,
+                state.design,
+                y_history=state.y_history,
+                design_history=state.design_history,
+            )
             state.y = y  # [b, *event_shape_y]
 
             # Update state history using data that actually produced the observation.

@@ -37,10 +37,10 @@ class _ReparameterizableTask(Task):
     def _loc(self, theta, design):
         return theta.sum(dim=-1) + design.sum(dim=-1)
 
-    def _outcome_logp(self, y, theta, design):
+    def _outcome_logp(self, y, theta, design, y_history=None, design_history=None):
         return Normal(self._loc(theta, design), 1.0).log_prob(y.squeeze(-1))
 
-    def _sample_outcome(self, theta, design):
+    def _sample_outcome(self, theta, design, y_history=None, design_history=None):
         distr = Normal(self._loc(theta, design), 1.0)
         draw = distr.sample() if self.detached_sampler else distr.rsample()
         return draw.unsqueeze(-1)

@@ -3,8 +3,9 @@
 from abc import ABC, abstractmethod
 from math import atanh, log, prod
 
+from torch.distributions.transforms import Transform
+from torch import Tensor, nn
 import torch
-import torch.nn as nn
 from torch import Tensor
 from torch.distributions import (
     Categorical,
@@ -13,7 +14,6 @@ from torch.distributions import (
     Normal,
     constraints,
 )
-from torch.distributions.transforms import Transform
 
 from testbed.core.distributions import Distribution, TorchDistribution
 from testbed.core.util import sort_by_first_coordinate

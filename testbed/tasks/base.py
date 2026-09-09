@@ -37,14 +37,17 @@ class Task(ABC, nn.Module):
             Whether observations are discrete (default: False).
         discrete_theta (bool):
             Whether parameters are discrete (default: False).
-        separable (bool):
-            Whether the likelihood factorizes over observations.
-            Non-separable tasks must override :meth:`history_logp` (default: True).
+        memoryless (bool):
+            Whether outcomes don't depend on history, i.e. ``_outcome_logp``/
+            ``_sample_outcome`` ignore their ``y_history``/``design_history``
+            kwargs (default: True).
         implicit_likelihood (bool):
             Whether the likelihood is implicit (default: False).
         design_space (optional):
             Constraints on the space of designs. Its event shape must match
             ``event_shape_design`` (default: None).
+        action_space (optional):
+            Constraints on the space of actions (default: None).
         validate_designs (bool):
             Whether outcome_logp/sample_outcome/history_logp/sample_joint check
             incoming designs against design_space.contains(...) and raise if a
@@ -99,9 +102,10 @@ class Task(ABC, nn.Module):
         prior: Distribution,
         discrete_y: bool = False,
         discrete_theta: bool = False,
-        separable: bool = True,
+        memoryless: bool = True,
         implicit_likelihood: bool = False,
         design_space: DesignSpace | None = None,
+        action_space: DesignSpace | None = None,
         validate_designs: bool = True,
         reparameterize_outcomes: bool | None = None,
     ):
@@ -115,12 +119,7 @@ class Task(ABC, nn.Module):
         self.prior = prior
         self._current_prior = prior
 
-        # Non-separable likelihoods must overwrite history_logp
-        self.separable = separable
-        if not self.separable and type(self).history_logp is Task.history_logp:
-            raise TypeError(
-                f"{type(self).__name__} has separable=False but does not override history_logp."
-            )
+        self.memoryless = memoryless
 
         self.implicit_likelihood = implicit_likelihood
 
@@ -141,6 +140,13 @@ class Task(ABC, nn.Module):
             )
         self.design_space = resolved_design_space
         self.validate_designs = validate_designs
+
+        resolved_action_space = (
+            action_space
+            if action_space is not None
+            else DefaultDesignSpace(self.event_shape_theta)
+        )
+        self.action_space = resolved_action_space
 
         # None follows the task's own capability. An explicit True the task
         # cannot honour is an error: a
@@ -175,12 +181,37 @@ class Task(ABC, nn.Module):
         """The current prior over parameters, possibly updated in sequential experimental design."""
         return self._current_prior
 
+    def null_history(self, b: int | None = None):
+        """Empty (y, design) histories.
+
+        With b=None there is no batch dim, so broadcasting can happen automatically.
+        Specifying the batch dim can be useful in contexts where broadcasting is not handled.
+
+        Args:
+            b (int, optional):
+                Batch size. None gives no batch dim (default: None).
+
+        Returns:
+            Tuple (Tensors):
+                Empty histories on the task's device. Shapes ``[b, 0, *event_shape]`` when b is given, ``[0, *event_shape]`` otherwise.
+        """
+        batch = () if b is None else (b,)
+        return (
+            torch.empty(*batch, 0, *self.event_shape_y, device=self.device),
+            torch.empty(*batch, 0, *self.event_shape_design, device=self.device),
+        )
+
     @abstractmethod
-    def _outcome_logp(self, y, theta, design):
+    def _outcome_logp(self, y, theta, design, y_history, design_history):
         """Evaluates outcome log probabilities.
 
         The inputs (y, theta, design) are assumed to be paired,
         so that no broadcasting has to happen in this function.
+
+        The ``y_history`` and ``design_history`` tensors are possibly
+        used to condition the likelihood, in tasks which are not memoryless.
+        Memoryless tasks will ignore these arguments.
+        Pass in ``None`` or a tensor with ``t=0`` to indicate no history.
 
         Args:
             y (Tensor):
@@ -189,6 +220,10 @@ class Task(ABC, nn.Module):
                 Parameters of shape ``[b, *event_shape_theta]``.
             design (Tensor):
                 Designs of shape ``[b, *event_shape_design]``.
+            y_history (Tensor):
+                Past observations that the likelihood possibly conditions on. Shape ``[b, t, *event_shape_y]``.
+            design_history (Tensor):
+                Past designs that the likelihood possibly conditions on. Shape ``[b, t, *event_shape_design]``.
 
         Returns:
             Tensor:
@@ -197,11 +232,16 @@ class Task(ABC, nn.Module):
         ...
 
     @abstractmethod
-    def _sample_outcome(self, theta, design):
+    def _sample_outcome(self, theta, design, y_history, design_history):
         """Samples a single outcome given parameters and designs.
 
         The inputs (theta, design) are assumed to be paired,
         so that no broadcasting has to happen in this function.
+
+        The ``y_history`` and ``design_history`` tensors are possibly
+        used to condition the likelihood, in tasks which are not memoryless.
+        Memoryless tasks will ignore these arguments.
+        Pass in ``None`` or a tensor with ``t=0`` to indicate no history.
 
         Always returns the reparameterized draw where the model admits one, so
         implementations need not consult ``reparameterize_outcomes``. Gating
@@ -214,6 +254,10 @@ class Task(ABC, nn.Module):
                 Parameters of shape ``[b, *event_shape_theta]``.
             design (Tensor):
                 Designs of shape ``[b, *event_shape_design]``.
+            y_history (Tensor):
+                Past observations that the likelihood possibly conditions on. Shape ``[b, t, *event_shape_y]``.
+            design_history (Tensor):
+                Past designs that the likelihood possibly conditions on. Shape ``[b, t, *event_shape_design]``.
 
         Returns:
             Tensor:
@@ -269,7 +313,49 @@ class Task(ABC, nn.Module):
                 f"Got design of shape {tuple(design.shape)}: {design}"
             )
 
-    def outcome_logp(self, y, theta, design):
+    def _check_history(self, y_history, design_history):
+        """Normalizes histories to tensors, checking T when both are given.
+
+        ``None`` means "not supplied" and becomes the ``T=0`` entry of
+        :attr:`null_history`, so a task reading only one side can be handed
+        only that side. Two supplied histories describe one trajectory, so
+        their T must agree; a lone history keeps its own T.
+        """
+        null_y_history, null_design_history = self.null_history()
+
+        if design_history is not None:
+            self._check_design(design_history)
+
+        if y_history is not None and design_history is not None:
+            T_y = y_history.shape[-(len(self.event_shape_y) + 1)]
+            T_design = design_history.shape[-(len(self.event_shape_design) + 1)]
+            if T_y != T_design:
+                raise ValueError(
+                    f"History lengths must agree. Got y_history of shape "
+                    f"{tuple(y_history.shape)} and design_history of shape "
+                    f"{tuple(design_history.shape)}."
+                )
+
+        return (
+            null_y_history if y_history is None else y_history,
+            null_design_history if design_history is None else design_history,
+        )
+
+    def _context_history(self, y_history, design_history):
+        """Parses a history that is used as conditioning context.
+
+        If a task is memoryless, return the null history so that we can
+        avoid paying to broadcast it. Otherwise, just check the history
+        is valid.
+
+        Not for :meth:`history_logp`, where the history is the
+        data being scored rather than conditioning variables.
+        """
+        if self.memoryless:
+            return self.null_history()
+        return self._check_history(y_history, design_history)
+
+    def outcome_logp(self, y, theta, design, y_history=None, design_history=None):
         """Evaluates outcome log probabilities with broadcasting.
 
         Broadcasting conventions follow ``torch.distributions``.
@@ -281,29 +367,71 @@ class Task(ABC, nn.Module):
                 Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
             design (Tensor):
                 Designs of shape ``[*batch_shape_design, *event_shape_design]``.
+            y_history (Tensor, optional):
+                Past observations that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_y]``.
+            design_history (Tensor, optional):
+                Past designs that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_design]``.
 
         Returns:
             Tensor:
                 Log probabilities, shape ``[*broadcast_batch_shape]``.
         """
         self._check_design(design)
-        (y_flat, theta_flat, design_flat), batch_shape = broadcast_and_flatten(
+        y_history, design_history = self._context_history(y_history, design_history)
+
+        # T_y and T_design agree unless only one history was supplied.
+        T_y = y_history.shape[-(len(self.event_shape_y) + 1)]
+        T_design = design_history.shape[-(len(self.event_shape_design) + 1)]
+        (
+            (y_flat, theta_flat, design_flat, y_history_flat, design_history_flat),
+            batch_shape,
+        ) = broadcast_and_flatten(
             (y, self.event_shape_y),
             (theta, self.event_shape_theta),
             (design, self.event_shape_design),
+            (y_history, (T_y, *self.event_shape_y)),
+            (design_history, (T_design, *self.event_shape_design)),
         )
-        logp_flat = self._outcome_logp(y_flat, theta_flat, design_flat)
+        logp_flat = self._outcome_logp(
+            y_flat,
+            theta_flat,
+            design_flat,
+            y_history=y_history_flat,
+            design_history=design_history_flat,
+        )
         return logp_flat.reshape(batch_shape)
 
-    def history_logp(self, y_history, design_history, theta):
+    def history_logp(
+        self,
+        y_history,
+        design_history,
+        theta,
+        y_context=None,
+        design_context=None,
+    ):
         r"""Computes log probabilities for a sequence of observations and designs.
 
-        Assumes a separable likelihood, so that the log-probs are summed over the sequence dimension:
+        Sums the per-step log-prob, each conditioned on the history strictly before it:
 
         .. math::
-            p(y_{1:T}, x_{1:T} \mid \theta) = \sum_{t=1}^T p(y_t \mid \theta, x_t)
+            p(y_{1:T}, x_{1:T} \mid \theta) = \prod_{t=1}^T p(y_t \mid \theta, x_t, y_{<t}, x_{<t})
 
-        Tasks with non-separable likelihoods should overwrite this.
+        Given a context :math:`(y_{1:S}, x_{1:S})`, scores the trajectory that
+        *follows* it, conditioning on the context at every step but never
+        scoring it:
+
+        .. math::
+            p(y_{1:T}, x_{1:T} \mid \theta, y_{1:S}, x_{1:S})
+            = \prod_{t=1}^T p(y_t \mid \theta, x_t, y_{1:S}, x_{1:S}, y_{<t}, x_{<t})
+
+        Use a context when the information in it is already carried elsewhere --
+        e.g. by :attr:`current_prior` after a posterior update -- so that
+        scoring it again would count it twice.
+
+        Correct for memoryless and history-dependent likelihoods alike, since
+        ``_outcome_logp`` receives ``y_history``/``design_history`` at every
+        step and a memoryless task simply ignores them. Override only if the
+        likelihood isn't expressible as such a per-step product at all.
 
         Args:
             y_history (Tensor):
@@ -312,25 +440,68 @@ class Task(ABC, nn.Module):
                 Designs of shape ``[*batch_shape_design, T, *event_shape_design]``.
             theta (Tensor):
                 Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
+            y_context (Tensor, optional):
+                Earlier observations to condition on without scoring. Shape
+                ``[*batch_shape_context, S, *event_shape_y]`` (default: None).
+            design_context (Tensor, optional):
+                The designs alongside them, shape
+                ``[*batch_shape_context, S, *event_shape_design]`` (default: None).
 
         Returns:
             Tensor:
                 Log probabilities, shape ``[*broadcast_batch_shape]``.
         """
-        self._check_design(design_history)
+        # Both histories are the data being scored here, not context for it, so
+        # neither may be dropped: the per-step product needs a design per outcome.
+        if y_history is None or design_history is None:
+            raise ValueError(
+                "history_logp scores a full trajectory, so both histories are "
+                f"required. Got y_history={type(y_history).__name__}, "
+                f"design_history={type(design_history).__name__}."
+            )
+        y_history, design_history = self._check_history(y_history, design_history)
+        # Context becomes null for memoryless tasks
+        y_context, design_context = self._context_history(y_context, design_context)
+
+        # T must agree for y_history and design_history as they are paired
+        # S can vary across the context (e.g. only one could be supplied)
         T = y_history.shape[-(len(self.event_shape_y) + 1)]
-        (y_flat, design_flat, theta_flat), batch_shape = broadcast_and_flatten(
+        S_y = y_context.shape[-(len(self.event_shape_y) + 1)]
+        S_design = design_context.shape[-(len(self.event_shape_design) + 1)]
+        (
+            (y_flat, design_flat, theta_flat, y_context_flat, design_context_flat),
+            batch_shape,
+        ) = broadcast_and_flatten(
             (y_history, (T, *self.event_shape_y)),
             (design_history, (T, *self.event_shape_design)),
             (theta, tuple(self.event_shape_theta)),
+            (y_context, (S_y, *self.event_shape_y)),
+            (design_context, (S_design, *self.event_shape_design)),
         )
+
+        # skips a copy op when context is null
+        y_full = y_flat if S_y == 0 else torch.cat([y_context_flat, y_flat], dim=1)
+        design_full = (
+            design_flat
+            if S_design == 0
+            else torch.cat([design_context_flat, design_flat], dim=1)
+        )
+
         b_flat = theta_flat.shape[0]
         logp = torch.zeros(b_flat, device=theta_flat.device)
         for t in range(T):
-            logp += self._outcome_logp(y_flat[:, t], theta_flat, design_flat[:, t])
+            logp += self._outcome_logp(
+                y_flat[:, t],
+                theta_flat,
+                design_flat[:, t],
+                y_history=y_full[:, : S_y + t],
+                design_history=design_full[:, : S_design + t],
+            )
         return logp.reshape(batch_shape)
 
-    def sample_outcome(self, theta, design, n_samples=1):
+    def sample_outcome(
+        self, theta, design, y_history=None, design_history=None, n_samples=1
+    ):
         """Samples outcomes from the likelihood.
 
         Detaches the sample when ``reparameterize_outcomes`` is False, so the
@@ -346,6 +517,10 @@ class Task(ABC, nn.Module):
                 Designs of shape ``[*batch_shape_design, *event_shape_design]``.
             n_samples (int):
                 How many observation samples to draw for each (theta, design) pair (default: 1).
+            y_history (Tensor, optional):
+                Past observations that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_y]``.
+            design_history (Tensor, optional):
+                Past designs that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_design]``.
 
         Returns:
             Tensor:
@@ -353,9 +528,18 @@ class Task(ABC, nn.Module):
                 Otherwise, shape ``[n_samples, *broadcast_batch_shape, *event_shape_y]``.
         """
         self._check_design(design)
-        (theta_flat, design_flat), batch_shape = broadcast_and_flatten(
-            (theta, self.event_shape_theta),
-            (design, self.event_shape_design),
+        y_history, design_history = self._context_history(y_history, design_history)
+
+        # T_y and T_design agree unless only one history was supplied.
+        T_y = y_history.shape[-(len(self.event_shape_y) + 1)]
+        T_design = design_history.shape[-(len(self.event_shape_design) + 1)]
+        (theta_flat, design_flat, y_history_flat, design_history_flat), batch_shape = (
+            broadcast_and_flatten(
+                (theta, self.event_shape_theta),
+                (design, self.event_shape_design),
+                (y_history, (T_y, *self.event_shape_y)),
+                (design_history, (T_design, *self.event_shape_design)),
+            )
         )
         b_flat = theta_flat.shape[0]
         if n_samples > 1:
@@ -369,14 +553,30 @@ class Task(ABC, nn.Module):
                 .expand(n_samples, b_flat, *self.event_shape_design)
                 .reshape(n_samples * b_flat, *self.event_shape_design)
             )
+            y_history_flat = (
+                y_history_flat.unsqueeze(0)
+                .expand(n_samples, b_flat, T_y, *self.event_shape_y)
+                .reshape(n_samples * b_flat, T_y, *self.event_shape_y)
+            )
+            design_history_flat = (
+                design_history_flat.unsqueeze(0)
+                .expand(n_samples, b_flat, T_design, *self.event_shape_design)
+                .reshape(n_samples * b_flat, T_design, *self.event_shape_design)
+            )
         y_flat = self._gate_outcome_gradients(
-            self._sample_outcome(theta_flat, design_flat), design_flat
+            self._sample_outcome(
+                theta_flat,
+                design_flat,
+                y_history=y_history_flat,
+                design_history=design_history_flat,
+            ),
+            design_flat,
         )
         if n_samples == 1:
             return y_flat.reshape(*batch_shape, *self.event_shape_y)
         return y_flat.reshape(n_samples, *batch_shape, *self.event_shape_y)
 
-    def sample_joint(self, design, n_samples=1):
+    def sample_joint(self, design, y_history=None, design_history=None, n_samples=1):
         r"""Samples from the joint over (y, theta) given designs.
 
         Uses the current (possibly updated) prior. Gates the outcome's
@@ -385,9 +585,13 @@ class Task(ABC, nn.Module):
 
         Args:
             design (Tensor):
-                Designs of shape ``[*batch_shape, *event_shape_design]``.
+                Designs of shape ``[*batch_shape_designs, *event_shape_design]``.
             n_samples (int):
                 Number of samples to draw for each design (default: 1).
+            y_history (Tensor, optional):
+                Past observations that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_y]``.
+            design_history (Tensor, optional):
+                Past designs that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_design]``.
 
         Returns:
             Tensor:
@@ -398,25 +602,50 @@ class Task(ABC, nn.Module):
                 Otherwise, shape ``[n_samples, *broadcast_batch_shape, *event_shape_theta]``.
         """
         self._check_design(design)
-        batch_shape = design.shape[: design.ndim - len(self.event_shape_design)]
-        b_flat = 1
-        for s in batch_shape:
-            b_flat *= s
+        y_history, design_history = self._context_history(y_history, design_history)
+
+        # T_y and T_design agree unless only one history was supplied.
+        T_y = y_history.shape[-(len(self.event_shape_y) + 1)]
+        T_design = design_history.shape[-(len(self.event_shape_design) + 1)]
+        (
+            (design_flat, y_history_flat, design_history_flat),
+            batch_shape,
+        ) = broadcast_and_flatten(
+            (design, self.event_shape_design),
+            (y_history, (T_y, *self.event_shape_y)),
+            (design_history, (T_design, *self.event_shape_design)),
+        )
+        b_flat = design_flat.shape[0]
 
         total = n_samples * b_flat
         # Not sample_current_prior(total): that wrapper squeezes away the
         # leading dim when total == 1, but this code always needs a real
         # [total, *event_theta] batch dim, even when total == 1.
         theta_flat = self.current_prior.sample(n_samples=total)  # [total, *event_theta]
-        design_flat = design.reshape(b_flat, *self.event_shape_design)
         if n_samples > 1:
             design_flat = (
                 design_flat.unsqueeze(0)
                 .expand(n_samples, b_flat, *self.event_shape_design)
                 .reshape(total, *self.event_shape_design)
             )
+            y_history_flat = (
+                y_history_flat.unsqueeze(0)
+                .expand(n_samples, b_flat, T_y, *self.event_shape_y)
+                .reshape(total, T_y, *self.event_shape_y)
+            )
+            design_history_flat = (
+                design_history_flat.unsqueeze(0)
+                .expand(n_samples, b_flat, T_design, *self.event_shape_design)
+                .reshape(total, T_design, *self.event_shape_design)
+            )
         y_flat = self._gate_outcome_gradients(
-            self._sample_outcome(theta_flat, design_flat), design_flat
+            self._sample_outcome(
+                theta_flat,
+                design_flat,
+                y_history=y_history_flat,
+                design_history=design_history_flat,
+            ),
+            design_flat,
         )  # [total, *event_y]
         if n_samples == 1:
             return (
@@ -428,14 +657,18 @@ class Task(ABC, nn.Module):
             theta_flat.reshape(n_samples, *batch_shape, *self.event_shape_theta),
         )
 
-    def sample_marginal(self, design, n_samples=1):
+    def sample_marginal(self, design, y_history=None, design_history=None, n_samples=1):
         r"""Samples from the marginal over observations given designs.
 
         Uses the current (possibly updated) prior.
 
         Args:
             design (Tensor):
-                Designs of shape ``[*batch_shape, *event_shape_design]``.
+                Designs of shape ``[*batch_shape_designs, *event_shape_design]``.
+            y_history (Tensor, optional):
+                Past observations that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_y]``.
+            design_history (Tensor, optional):
+                Past designs that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_design]``.
             n_samples (int):
                 Number of samples to draw for each design (default: 1).
 
@@ -444,7 +677,9 @@ class Task(ABC, nn.Module):
                 Sampled observations. If ``n_samples==1``, shape ``[*broadcast_batch_shape, *event_shape_y]``.
                 Otherwise, shape ``[n_samples, *broadcast_batch_shape, *event_shape_y]``.
         """
-        outcome, _ = self.sample_joint(design, n_samples=n_samples)
+        outcome, _ = self.sample_joint(
+            design, y_history, design_history, n_samples=n_samples
+        )
         return outcome
 
     def sample_prior(self, n_samples=1):

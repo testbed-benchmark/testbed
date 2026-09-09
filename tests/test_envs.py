@@ -406,3 +406,55 @@ def test_reward_error_paths_and_callable_reward():
     terminal_reward = RLBOEDTerminalReward(n_contrastive=1)
     with pytest.raises(RuntimeError, match="Reward function has not been reset"):
         terminal_reward.step(env, torch.zeros(2, 2), torch.zeros(2, 1))
+
+
+def test_step_conditions_on_the_history_for_a_task_with_memory():
+    # The env writes into a padded History but used to sample each outcome with
+    # no history, silently simulating a memoryless process. Pin it against the
+    # task's own recursion: y_t = make_mean(theta, x, y_{<t}) + sqrt(dt)*sigma*eps.
+    import math
+
+    from testbed.tasks import StochasticPendulum
+
+    task = StochasticPendulum()
+    assert not task.memoryless
+    design = torch.zeros(1, 1)  # fixed, so any drift comes from the history
+
+    torch.manual_seed(0)
+    env = BEDEnv(task, horizon=6, batch_shape=(1,))
+    env.reset()
+    theta = env.theta_0
+
+    torch.manual_seed(7)
+    for _ in range(6):
+        env.step(design)
+
+    torch.manual_seed(7)
+    previous, expected = torch.zeros(1, 2), []
+    for _ in range(6):
+        mean = task.make_mean(theta, design, previous.unsqueeze(1))
+        previous = mean + math.sqrt(task.dt) * task.noise_scale * torch.randn_like(mean)
+        expected.append(previous[0])
+
+    assert torch.allclose(env.history.outcomes[0], torch.stack(expected), atol=1e-6)
+
+
+def test_step_is_unchanged_for_a_memoryless_task():
+    # A memoryless task drops the history, so threading it through must not
+    # perturb the common path.
+    task = make_task()
+    design = torch.zeros(1, 2)
+
+    torch.manual_seed(0)
+    env = BEDEnv(task, horizon=4, batch_shape=(1,))
+    env.reset()
+    theta = env.theta_0
+
+    torch.manual_seed(3)
+    for _ in range(4):
+        env.step(design)
+
+    torch.manual_seed(3)
+    direct = torch.stack([task.sample_outcome(theta, design)[0] for _ in range(4)])
+
+    assert torch.equal(env.history.outcomes[0], direct)

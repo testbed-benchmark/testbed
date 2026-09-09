@@ -145,7 +145,7 @@ class SequentialDesigner(Designer):
             )
         return design_raw.requires_grad_(True)
 
-    def _optimize_design(self, y_history):
+    def _optimize_design(self, y_history, design_history):
         """Runs the Adam loop; returns (constrained_design, raw_design), both ``[1, *event_shape_design]``."""
         if y_history.shape[0] != 1:
             raise ValueError(
@@ -158,7 +158,9 @@ class SequentialDesigner(Designer):
         for _ in range(self.n_step_opt):
             optimizer.zero_grad()
             design = self._to_design(design_raw)
-            gain = self.objective.estimate_gain(design)
+            gain = self.objective.estimate_gain(
+                design, y_history=y_history, design_history=design_history
+            )
             loss = -gain
             loss.backward()
             optimizer.step()
@@ -176,7 +178,9 @@ class SequentialDesigner(Designer):
         has already conditioned on the history, so the histories on the state
         are not read directly here.
         """
-        design, raw_design = self._optimize_design(state.y_history)
+        design, raw_design = self._optimize_design(
+            state.y_history, state.design_history
+        )
         return design, raw_design, None
 
     def rollout(self, theta) -> Rollout:

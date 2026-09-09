@@ -3,6 +3,12 @@
 References:
     1. https://arxiv.org/abs/1903.05480
     2. https://arxiv.org/abs/2202.00821
+
+
+Note: there is some disagreement in the literature about which prior to use for u.
+Using a smaller prior variance significantly simplifies the task. We thus follow SGBOED and use a prior variance of 9.
+    - SGBOED uses a prior variance of 9 (https://github.com/ae-foster/pyro/blob/sgboed-reproduce/ces.py#L156)
+    - PASOA uses a prior variance of 3 (https://github.com/jcopo/pasoa/blob/main/exptax/models/model_ces.py#L28)
 """
 
 import math
@@ -20,6 +26,19 @@ from .base import Task
 # such baskets flattened to 6 dims.
 BASKET_LOW = 0.0
 BASKET_HIGH = 100.0
+
+
+def _split_theta(theta: Tensor):
+    """Convenience function that splits theta = (rho, alpha, u) into its components.
+
+    Args:
+        theta (Tensor):
+            Parameters of shape [..., 5].
+    """
+    rho = theta[..., 0:1]
+    alpha = theta[..., 1:4]
+    u = theta[..., 4:5]
+    return rho, alpha, u
 
 
 class CESPrior(Distribution):
@@ -110,13 +129,11 @@ class CESPrior(Distribution):
             Tensor:
                 Log probabilities, shape ``[..., ]``.
         """
-        rho = theta[..., 0]
-        alpha = theta[..., 1:4]
-        u = theta[..., 4]
+        rho, alpha, u = _split_theta(theta)
 
-        logp_rho = self.rho_beta.log_prob(rho)
+        logp_rho = self.rho_beta.log_prob(rho.squeeze(-1))
         logp_alpha = self.alpha_dirichlet.log_prob(alpha)
-        logp_u = self.u_lognormal.log_prob(u)
+        logp_u = self.u_lognormal.log_prob(u.squeeze(-1))
         return logp_rho + logp_alpha + logp_u
 
 
@@ -154,6 +171,7 @@ class CES(Task):
         epsilon: float = 2**-22,
         prior=None,
         design_space: DesignSpace | None = None,
+        action_space: DesignSpace | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the CES task."""
@@ -171,6 +189,7 @@ class CES(Task):
             event_shape_design=[6],
             prior=prior,
             design_space=design_space,
+            action_space=action_space,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 
@@ -204,9 +223,7 @@ class CES(Task):
                 Mean :math:`\mu` and standard deviation :math:`\sigma` of the
                 latent Gaussian ``eta``, each with shape ``[..., 1]``.
         """
-        rho = theta[..., 0:1]
-        alpha = theta[..., 1:4]
-        u = theta[..., 4:5]
+        rho, alpha, u = _split_theta(theta)
 
         def utility(basket):
             base = basket.clamp(min=self.clamp_val)
@@ -224,7 +241,14 @@ class CES(Task):
         sigma = (1.0 + diff_norm) * self.tau * u
         return mu, sigma
 
-    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
+    def _outcome_logp(
+        self,
+        y: Tensor,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Evaluates the log probability of an observation under the CES model.
 
         Args:
@@ -234,6 +258,10 @@ class CES(Task):
                 Parameter tensor of shape ``[b, 5]``.
             design (Tensor):
                 Design tensor of shape ``[b, 6]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:
@@ -282,7 +310,13 @@ class CES(Task):
         )
         return logp.squeeze(-1)
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
+    def _sample_outcome(
+        self,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Samples an outcome from the CES model.
 
         Args:
@@ -290,6 +324,10 @@ class CES(Task):
                 Parameter tensor of shape ``[b, 5]``.
             design (Tensor):
                 Design tensor of shape ``[b, 6]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:
