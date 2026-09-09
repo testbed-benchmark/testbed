@@ -166,6 +166,7 @@ def build_refining_designer(
                 if cfg.per_segment_eig
                 else None
             ),
+            store_posterior_history=cfg.plot_posteriors,
             n_proposal=cfg.n_posterior_samples,
         )
     )

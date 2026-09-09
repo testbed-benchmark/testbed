@@ -94,7 +94,7 @@ class SequentialDesigner(Designer):
             hooks = [
                 PosteriorUpdateHook(
                     inference_fn,
-                    store_history=store_posterior_history,
+                    store_posterior_history=store_posterior_history,
                     **inference_kwargs,
                 ),
                 *hooks,

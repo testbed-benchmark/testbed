@@ -2,8 +2,9 @@
 
 One panel per inference step, showing the posterior over source locations
 against the true ones. Any method whose rollout carries ``posterior_history``
-can use this: Step-DAD's ``RefinementHook`` stores it at every refinement, and
-``SequentialDesigner`` stores it per step under ``store_posterior_history=True``.
+can use this. Both hooks that infer a posterior keep it only under
+``store_posterior_history``: ``RefinementHook`` once per refinement,
+``PosteriorUpdateHook`` once per step.
 
 Plots two components of ``dim_theta``, so a search space of higher dimension is
 shown as a 2D slice through it.
@@ -71,9 +72,9 @@ def plot_posterior_history(
     history = rollout.extra.get("posterior_history")
     if not history:
         raise ValueError(
-            "rollout.extra has no posterior_history to plot. RefinementHook "
-            "stores it automatically; SequentialDesigner needs "
-            "store_posterior_history=True."
+            "rollout.extra has no posterior_history to plot. The hook that "
+            "inferred the posteriors needs store_posterior_history=True "
+            "(SequentialDesigner takes it under the same name)."
         )
     if len(dims) != 2:
         raise ValueError(f"dims must name exactly two components; got {dims}.")

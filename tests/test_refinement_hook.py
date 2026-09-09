@@ -24,9 +24,18 @@ def _make_net(task):
     )
 
 
-def _designer(task, T, refine_at, refine_fn, n_proposal=500):
+def _designer(
+    task, T, refine_at, refine_fn, n_proposal=500, store_posterior_history=False
+):
     designer = SemiAmortizedDesigner(task, T=T, design_net=_make_net(task))
-    designer.hooks.append(RefinementHook(refine_at, refine_fn, n_proposal=n_proposal))
+    designer.hooks.append(
+        RefinementHook(
+            refine_at,
+            refine_fn,
+            n_proposal=n_proposal,
+            store_posterior_history=store_posterior_history,
+        )
+    )
     return designer
 
 
@@ -137,7 +146,36 @@ def test_refinement_records_ess_and_metrics():
     assert 1.0 <= ess["ess"] <= ess["n_particles"]
     # Recorded against the step count it conditions on, matching refine_at.
     assert rollout.extra["refinement_metrics"] == [{"step": 2, "marker": 7}]
-    assert sorted(rollout.extra["posterior_history"]) == [2]
+
+
+def test_store_posterior_history_off_by_default():
+    # A particle set is the largest thing a rollout can carry, so it is kept
+    # only for a consumer that asked for it.
+    torch.manual_seed(0)
+    task = _make_task()
+    designer = _designer(task, T=4, refine_at=[2], refine_fn=lambda state, post: None)
+
+    rollout = designer.rollout(task.sample_prior(1))
+
+    assert "posterior_history" not in rollout.extra
+
+
+def test_store_posterior_history_keys_each_posterior_by_its_step():
+    torch.manual_seed(0)
+    task = _make_task()
+    designer = _designer(
+        task,
+        T=6,
+        refine_at=[2, 4],
+        refine_fn=lambda state, post: None,
+        store_posterior_history=True,
+    )
+
+    rollout = designer.rollout(task.sample_prior(1))
+
+    history = rollout.extra["posterior_history"]
+    assert sorted(history) == [2, 4]
+    assert all(posterior.locs.shape[0] == 500 for posterior in history.values())
 
 
 def test_refinement_updates_the_policy_and_improves_its_own_objective():

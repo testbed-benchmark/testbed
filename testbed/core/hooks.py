@@ -101,13 +101,13 @@ class PosteriorUpdateHook(RolloutHook):
         self,
         inference_fn=run_importance_sampling,
         *,
-        store_history: bool = False,
+        store_posterior_history: bool = False,
         **inference_kwargs,
     ):
         """inference_fn(task, y_history, design_history, **inference_kwargs) -> Distribution."""
         super().__init__()
         self.inference_fn = inference_fn
-        self.store_history = store_history
+        self.store_posterior_history = store_posterior_history
         self.inference_kwargs = inference_kwargs
 
     def after_step(self, state: RolloutState) -> None:
@@ -119,7 +119,7 @@ class PosteriorUpdateHook(RolloutHook):
         record = ess_record(posterior, state.t + 1)
         if record is not None:
             state.scratch.setdefault("ess_history", []).append(record)
-        if self.store_history:
+        if self.store_posterior_history:
             # Keyed by how many steps it conditions on, not appended to a list:
             # a consumer scoring a subset of steps has to be able to ask for the
             # posterior at a given step rather than trust a position.
@@ -130,7 +130,7 @@ class PosteriorUpdateHook(RolloutHook):
         extra = {"posterior": state.task.current_prior}
         if "ess_history" in state.scratch:
             extra["ess_history"] = state.scratch["ess_history"]
-        if self.store_history:
+        if self.store_posterior_history:
             extra["posterior_history"] = state.scratch["posterior_history"]
         return extra
 
@@ -154,6 +154,8 @@ class RefinementHook(RolloutHook):
         refine_fn,
         eval_fn=None,
         inference_fn=run_importance_sampling,
+        *,
+        store_posterior_history: bool = False,
         **inference_kwargs,
     ):
         """Initializes the hook.
@@ -169,6 +171,12 @@ class RefinementHook(RolloutHook):
                 accumulate and the stretch this refinement enabled would be measured
                 using a designer that had already seen data from inside it.
             inference_fn: ``(task, y_history, design_history, **kwargs) -> Distribution``.
+            store_posterior_history: Keep each posterior on the rollout as
+                ``extra["posterior_history"]``, for a consumer that needs the
+                particles themselves rather than a summary of them. Off by
+                default, as on :class:`PosteriorUpdateHook`: a particle set is
+                the largest thing a rollout can carry, and the rollouts of a run
+                are typically all held at once.
             **inference_kwargs: Forwarded to ``inference_fn``.
         """
         super().__init__()
@@ -182,6 +190,7 @@ class RefinementHook(RolloutHook):
         self.refine_fn = refine_fn
         self.eval_fn = eval_fn
         self.inference_fn = inference_fn
+        self.store_posterior_history = store_posterior_history
         self.inference_kwargs = inference_kwargs
 
     def after_step(self, state: RolloutState) -> None:
@@ -199,12 +208,14 @@ class RefinementHook(RolloutHook):
         record = ess_record(posterior, n_observed)
         if record is not None:
             state.scratch.setdefault("refinement_ess", []).append(record)
-        # Always kept, keyed by the step count it conditions on. There is one per
-        # refinement, and scoring the refined policy needs exactly these: running
-        # inference again at eval time would repeat the whole proposal pass for a
-        # posterior already in hand, and draws taken from a particle set are
-        # independent each time it is sampled anyway.
-        state.scratch.setdefault("posterior_history", {})[n_observed] = posterior
+        if self.store_posterior_history:
+            # Keyed by the step count it conditions on rather than appended to a
+            # list, so a consumer can ask for the posterior at a given
+            # refinement instead of trusting a position. Nothing in the
+            # refinement itself needs this: eval_fn reads the posterior from
+            # task.current_prior at the moment it runs. It is here for what
+            # happens after the rollout, such as plotting the posteriors.
+            state.scratch.setdefault("posterior_history", {})[n_observed] = posterior
 
         #refine the designnet conditoned on what has been observed thus far
         metrics = self.refine_fn(state, posterior)
@@ -221,7 +232,10 @@ class RefinementHook(RolloutHook):
                 )
 
     def on_rollout_end(self, state: RolloutState) -> dict[str, Any] | None:
-        """Attaches the final posterior and whatever the refinements recorded."""
+        """Attaches the final posterior and whatever the refinements recorded.
+
+        ``posterior_history`` is among them only under ``store_posterior_history``.
+        """
         extra = {"posterior": state.task.current_prior}
         for key in (
             "refinement_ess",
