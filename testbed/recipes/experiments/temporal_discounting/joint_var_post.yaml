@@ -127,4 +127,12 @@ posterior_net:
 
 wandb:
   project: temporal_discounting  # one project per task; methods separate by group
-  group: joint_var_post
+  # Separate group from the runs that modelled theta in R^2 directly. Those
+  # bounds were valid, unlike CES's, just loose from the mass the mixture leaked
+  # onto k < 0 and alpha < 0, so the two cohorts are still different posterior
+  # families and averaging them in a table grouped by method would be wrong.
+  #
+  # The group belongs here rather than in the sweep's parameters:
+  # generate_seed_sweeps.py reads it from the recipe to decide which seeds are
+  # already done, and rewrites the sweep YAML from scratch.
+  group: joint_var_post_constrained
