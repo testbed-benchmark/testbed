@@ -1,0 +1,30 @@
+# @package _global_
+
+defaults:
+  - /method: stepdad
+  - override /task: location_finding
+  - _self_
+
+# Step-DAD on location finding, following the reference implementation's
+# location_finding runner: T=10, refine once after 6 steps, pathwise sPCE.
+
+seed: 0
+
+objective:
+  name: spce  # reparameterized outcomes, so the pathwise gradient is available
+  n_inner: 1_023
+
+n_train_iter: 50_000
+n_outer: 1_024
+lr: 1e-4
+
+refine_at: [6]
+n_thetas: 16
+refine:
+  n_steps_opt: 2_500
+  lr: 1e-4
+  batch_size: 1_024
+
+wandb:
+  project: location_finding  # one project per task; methods separate by group
+  group: stepdad

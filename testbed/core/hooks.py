@@ -117,7 +117,10 @@ class PosteriorUpdateHook(RolloutHook):
         if record is not None:
             state.scratch.setdefault("ess_history", []).append(record)
         if self.store_history:
-            state.scratch.setdefault("posterior_history", []).append(posterior)
+            # Keyed by how many steps it conditions on, not appended to a list:
+            # a consumer scoring a subset of steps has to be able to ask for the
+            # posterior at a given step rather than trust a position.
+            state.scratch.setdefault("posterior_history", {})[state.t + 1] = posterior
 
     def on_rollout_end(self, state: RolloutState) -> dict[str, Any] | None:
         """Attaches the final (and optionally per-step) posterior to the rollout."""
@@ -146,9 +149,8 @@ class RefinementHook(RolloutHook):
         self,
         refine_at,
         refine_fn,
+        eval_fn=None,
         inference_fn=run_importance_sampling,
-        *,
-        store_history: bool = False,
         **inference_kwargs,
     ):
         """Initializes the hook.
@@ -159,8 +161,13 @@ class RefinementHook(RolloutHook):
                 the single-intervention case is the common one, and the paper's
                 schedule is an explicit set of points.
             refine_fn: ``(state, posterior) -> dict | None`` of metrics.
+            eval_fn: Optional ``(state, posterior) -> dict | None``, run right
+                after the refinement. Evaluating the refined designer has to
+                happen here rather than once the rollout is over: refinements
+                accumulate, so afterwards the designer carries every later one
+                too, and the stretch this refinement enabled would be measured
+                using a designer that had already seen data from inside it.
             inference_fn: ``(task, y_history, design_history, **kwargs) -> Distribution``.
-            store_history: Keep every posterior, not just the last.
             **inference_kwargs: Forwarded to ``inference_fn``.
         """
         super().__init__()
@@ -172,8 +179,8 @@ class RefinementHook(RolloutHook):
             )
         self.refine_at = refine_at
         self.refine_fn = refine_fn
+        self.eval_fn = eval_fn
         self.inference_fn = inference_fn
-        self.store_history = store_history
         self.inference_kwargs = inference_kwargs
 
     def after_step(self, state: RolloutState) -> None:
@@ -191,19 +198,35 @@ class RefinementHook(RolloutHook):
         record = ess_record(posterior, state.t)
         if record is not None:
             state.scratch.setdefault("refinement_ess", []).append(record)
-        if self.store_history:
-            state.scratch.setdefault("posterior_history", []).append(posterior)
+        # Always kept, keyed by the step count it conditions on. There is one per
+        # refinement, and scoring the refined policy needs exactly these: running
+        # inference again at eval time would repeat the whole proposal pass for a
+        # posterior already in hand, and draws taken from a particle set are
+        # independent each time it is sampled anyway.
+        state.scratch.setdefault("posterior_history", {})[n_observed] = posterior
 
         metrics = self.refine_fn(state, posterior)
         if metrics is not None:
             state.scratch.setdefault("refinement_metrics", []).append(
-                {"step": state.t, **metrics}
+                {"step": n_observed, **metrics}
             )
+
+        if self.eval_fn is not None:
+            evaluation = self.eval_fn(state, posterior)
+            if evaluation is not None:
+                state.scratch.setdefault("refinement_evals", []).append(
+                    {"step": n_observed, **evaluation}
+                )
 
     def on_rollout_end(self, state: RolloutState) -> dict[str, Any] | None:
         """Attaches the final posterior and whatever the refinements recorded."""
         extra = {"posterior": state.task.current_prior}
-        for key in ("refinement_ess", "refinement_metrics", "posterior_history"):
+        for key in (
+            "refinement_ess",
+            "refinement_metrics",
+            "refinement_evals",
+            "posterior_history",
+        ):
             if key in state.scratch:
                 extra[key] = state.scratch[key]
         return extra

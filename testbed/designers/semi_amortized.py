@@ -229,6 +229,10 @@ def refine_designer(
     so the refinement specializes the pretrained policy to this experiment. The
     optimizer is fresh each call, as in the reference implementation.
 
+    Forces grad on for its own duration, so the deployment rollout that triggers
+    it can run under ``torch.no_grad()``: those steps are real data and need no
+    graph, while the hypothetical continuations scored here do.
+
     Args:
         designer: A designer exposing ``remaining_horizon_gain``, e.g.
             :class:`SemiAmortizedDesigner`. Refined in place.
@@ -254,26 +258,27 @@ def refine_designer(
 
     gain_before = None
     gain_after = None
-    for step in range(n_steps_opt):
-        optimizer.zero_grad()
-        gain = designer.remaining_horizon_gain(
-            objective,
-            y_history,
-            design_history,
-            n_steps,
-            batch_size,
-            raw_design_history=raw_design_history,
-        )
-        (-gain).backward()
-        if grad_clip is not None:
-            torch.nn.utils.clip_grad_norm_(designer.parameters(), grad_clip)
-        optimizer.step()
+    with torch.enable_grad():
+        for step in range(n_steps_opt):
+            optimizer.zero_grad()
+            gain = designer.remaining_horizon_gain(
+                objective,
+                y_history,
+                design_history,
+                n_steps,
+                batch_size,
+                raw_design_history=raw_design_history,
+            )
+            (-gain).backward()
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(designer.parameters(), grad_clip)
+            optimizer.step()
 
-        gain_after = gain.item()
-        if gain_before is None:
-            gain_before = gain_after
-        if logger is not None and log_every and step % log_every == 0:
-            logger.info(f"refine step {step}: gain={gain_after:.4f}")
+            gain_after = gain.item()
+            if gain_before is None:
+                gain_before = gain_after
+            if logger is not None and log_every and step % log_every == 0:
+                logger.info(f"refine step {step}: gain={gain_after:.4f}")
 
     return {
         "gain_before": gain_before,

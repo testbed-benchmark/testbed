@@ -9,14 +9,25 @@ from testbed.design_objectives import SNMC, SPCE
 from testbed.design_objectives.contrastive import contrastive_logsumexps
 
 
-def chunked_spce_snmc(task, rollout, n_contrastive, chunk_size):
+def chunked_spce_snmc(
+    task, rollout, n_contrastive, chunk_size, y_context=None, design_context=None
+):
     """SPCE (lower) and SNMC (upper) per-sample gains, chunked over n_contrastive.
 
     Both bounds come from one set of contrastive draws, so the expensive
     sampling is paid for once rather than per bound.
+
+    A context is history already absorbed into ``task.current_prior``, conditioned
+    on but not scored, as when scoring the tail of a rollout whose earlier steps a
+    posterior update has already accounted for.
     """
     logp_joint, chunk_logsumexps = contrastive_logsumexps(
-        task, rollout, n_contrastive, chunk_size
+        task,
+        rollout,
+        n_contrastive,
+        chunk_size,
+        y_context=y_context,
+        design_context=design_context,
     )
     lower = SPCE.gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive)
     upper = SNMC.gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive)

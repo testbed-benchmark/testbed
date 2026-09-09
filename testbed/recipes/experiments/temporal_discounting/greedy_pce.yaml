@@ -1,0 +1,16 @@
+# @package _global_
+
+defaults:
+  - /method: greedy_pce
+  - override /task: temporal_discounting
+  - _self_
+
+# HTD's design space is bounded and its designs are transformed, so the per-step
+# ascent runs in the unconstrained (x_d, x_r) coordinates that SequentialDesigner
+# optimizes and the task maps to (D_1, R_0).
+
+seed: 0
+
+wandb:
+  project: temporal_discounting
+  group: greedy_pce

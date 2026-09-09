@@ -1,0 +1,29 @@
+# @package _global_
+
+defaults:
+  - /system: default
+  - /task: location_finding
+  - /wandb: default
+  - /final_eval: default
+  - /hydra_run: default
+  - _self_
+
+# Greedy (myopic) PCE: infer the posterior after every step and maximize the
+# one-step EIG under it. No policy, so nothing to train; this method evaluates.
+
+seed: 0
+
+pce:
+  n_outer: 512      # outer (theta, y) draws per gain estimate
+  n_inner: 511      # contrastive draws per outer draw
+  lr: 0.05          # Adam lr for the per-step design ascent
+  n_step_opt: 100   # Adam steps per design
+  init_design_dist: null  # null -> N(0, I); or "current_prior"
+
+n_posterior_samples: 20_000
+
+# SequentialDesigner is batch-1 only (each step runs its own Adam loop), so the
+# cost is n_thetas * T * n_step_opt objective evaluations, and this is nowhere
+# near the 2048 that eval_spce_snmc uses for an amortized policy. It sets the
+# standard error, so raise it as far as the compute allows.
+n_thetas: 64

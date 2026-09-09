@@ -135,7 +135,9 @@ def test_refinement_records_ess_and_metrics():
     assert len(rollout.extra["refinement_ess"]) == 1
     ess = rollout.extra["refinement_ess"][0]
     assert 1.0 <= ess["ess"] <= ess["n_particles"]
-    assert rollout.extra["refinement_metrics"] == [{"step": 1, "marker": 7}]
+    # Recorded against the step count it conditions on, matching refine_at.
+    assert rollout.extra["refinement_metrics"] == [{"step": 2, "marker": 7}]
+    assert sorted(rollout.extra["posterior_history"]) == [2]
 
 
 def test_refinement_updates_the_policy_and_improves_its_own_objective():

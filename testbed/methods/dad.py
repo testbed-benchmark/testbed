@@ -66,8 +66,9 @@ class Trainer:
             save_path,
         )
 
-        if self.manager.metric_logger is not None:
-            self.manager.metric_logger.close()
+        # The logger is not closed here. It belongs to the Manager, and a caller
+        # that trains as one phase of a longer run (stepdad) still has metrics to
+        # log afterwards; closing it here would leave those silently dropped.
 
     def train_step(self):
         """Takes a single training step."""
@@ -236,6 +237,9 @@ def main(cfg):
     )
 
     trainer.train()
+
+    if manager.metric_logger is not None:
+        manager.metric_logger.close()
 
 
 if __name__ == "__main__":
