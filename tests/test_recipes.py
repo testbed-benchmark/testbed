@@ -27,6 +27,8 @@ ENTRY_POINT_RECIPES = [
     "method/greedy_pce",
     "experiments/location_finding/stepdad",
     "experiments/location_finding/greedy_pce",
+    "experiments/location_finding_2src/stepdad",
+    "experiments/location_finding_2src/greedy_pce",
     "experiments/temporal_discounting/stepdad",
     "experiments/temporal_discounting/greedy_pce",
     "experiments/location_finding/rlboed",

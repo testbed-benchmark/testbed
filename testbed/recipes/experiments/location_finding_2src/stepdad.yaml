@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - /method: stepdad
+  - override /task: location_finding_2src
+  - _self_
+
+
+
+seed: 0
+
+# tau = T/2, with T=30 from the task recipe. 
+refine_at: [15]
+n_thetas: 16
+
+wandb:
+  project: location_finding_2src  # one project per task; methods separate by group
+  group: stepdad
