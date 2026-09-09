@@ -22,6 +22,23 @@ pce:
 
 n_posterior_samples: 20_000
 
+# Keep every step's posterior on the rollout rather than only the last. Off by
+# default because greedy infers one after every step: this is T particle sets
+# per trajectory, all held until the run ends. The final posterior is on the
+# rollout regardless, so the plot has something to draw either way.
+store_posterior_history: false
+
+# One figure per trajectory under figures/. Location finding only; other tasks
+# log that they were skipped. With store_posterior_history off this is a single
+# panel, the posterior given the whole horizon.
+plot_posteriors: true
+
+# This method scores itself and writes its own eval.json, so the post-hoc pass
+# sweep_run.py runs is switched off. It would look for the trained checkpoint
+# that a method with no policy never saves. The sizes below it still apply.
+final_eval:
+  enabled: false
+
 # SequentialDesigner is batch-1 only (each step runs its own Adam loop), so the
 # cost is n_thetas * T * n_step_opt objective evaluations, and this is nowhere
 # near the 2048 that eval_spce_snmc uses for an amortized policy. It sets the

@@ -8,7 +8,10 @@ from testbed.core.rollout import Rollout
 
 pytest.importorskip("matplotlib", reason="plotting needs the full extra")
 
-from testbed.plotting import plot_posterior_history  # noqa: E402
+from testbed.plotting import (  # noqa: E402
+    plot_posterior_history,
+    write_trajectory_figures,
+)
 
 
 def _make_rollout(n_steps=6, n_sources=2, dim_theta=2, at=(2, 4)):
@@ -62,3 +65,22 @@ def test_explains_a_rollout_with_no_posterior_history(tmp_path):
     rollout.extra = {}
     with pytest.raises(ValueError, match="store_posterior_history"):
         plot_posterior_history(rollout, tmp_path / "x.png")
+
+
+def test_plots_posteriors_passed_directly(tmp_path):
+    # The final posterior is on every rollout whether or not the history was
+    # kept, so a caller can plot it without paying for the intermediate ones.
+    rollout = _make_rollout()
+    final = rollout.extra["posterior_history"][4]
+    rollout.extra = {"posterior": final}
+
+    path = tmp_path / "final.png"
+    plot_posterior_history(rollout, path, posteriors={6: final}, n_plot=50)
+    assert path.stat().st_size > 0
+
+
+def test_write_trajectory_figures_skips_a_task_with_no_plot(tmp_path):
+    class NotLocationFinding:
+        pass
+
+    assert write_trajectory_figures(NotLocationFinding(), [], tmp_path) == {}

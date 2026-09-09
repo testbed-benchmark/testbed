@@ -63,8 +63,9 @@ class SequentialDesigner(Designer):
             yourself (e.g. via extra_hooks).
         store_posterior_history: if True, the PosteriorUpdateHook also keeps
             the posterior computed after each step, exposed on the rollout
-            as extra["posterior_history"] (a list of Distribution, one per
-            step) alongside the usual extra["posterior"] for the final one.
+            as extra["posterior_history"] (a dict of Distribution keyed by how
+            many steps it conditions on) alongside the usual extra["posterior"]
+            for the final one.
             Off by default -- only meaningful when update_posterior is True.
         extra_hooks: additional hooks to run alongside the posterior update
             (after it, so they see the up-to-date posterior).

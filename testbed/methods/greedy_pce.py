@@ -24,6 +24,7 @@ from testbed.core.util import reset_prior
 from testbed.design_objectives import PCE
 from testbed.designers import SequentialDesigner
 from testbed.eval import eval_end_to_end
+from testbed.plotting import report_posterior_figures
 
 
 def build_designer(cfg, task):
@@ -35,8 +36,20 @@ def build_designer(cfg, task):
         cfg.pce.lr,
         cfg.pce.n_step_opt,
         init_design_dist=cfg.pce.init_design_dist,
+        store_posterior_history=cfg.store_posterior_history,
         n_proposal=cfg.n_posterior_samples,
     )
+
+
+def posteriors_to_plot(cfg, rollout):
+    """The posteriors a figure should show: every step's, or just the last.
+
+    Greedy infers one after every step, so keeping them all costs T particle
+    sets per trajectory. The final posterior is on the rollout either way, and
+    conditions on the whole horizon, so the cheap case is still the informative
+    one.
+    """
+    return rollout.extra.get("posterior_history") or {cfg.T: rollout.extra["posterior"]}
 
 
 def run_trajectory(task, designer):
@@ -85,6 +98,14 @@ def main(cfg):
     for index in range(cfg.n_thetas):
         rollouts.append(run_trajectory(task, build_designer(cfg, task)))
         manager.event_logger.info(f"trajectory {index + 1}/{cfg.n_thetas} done")
+
+    if cfg.plot_posteriors:
+        report_posterior_figures(
+            task,
+            rollouts,
+            manager,
+            posteriors_for=lambda rollout: posteriors_to_plot(cfg, rollout),
+        )
 
     results = {
         "end_to_end": eval_end_to_end(

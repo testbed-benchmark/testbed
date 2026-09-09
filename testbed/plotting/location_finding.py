@@ -13,6 +13,7 @@ shown as a 2D slice through it.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -44,6 +45,7 @@ def _axis_limits(arrays, pad=0.5):
 def plot_posterior_history(
     rollout,
     path,
+    posteriors=None,
     dims=(0, 1),
     n_plot=N_PLOT_DEFAULT,
     show_designs=True,
@@ -52,8 +54,14 @@ def plot_posterior_history(
     """Writes a figure with one posterior panel per inference step.
 
     Args:
-        rollout: A batch-1 rollout carrying ``extra["posterior_history"]``.
+        rollout: A batch-1 rollout, for the true sources and the designs.
         path: Where to write the figure.
+        posteriors: ``{step count: posterior}`` to draw, defaulting to the
+            rollout's ``extra["posterior_history"]``. Pass this to plot a
+            subset, or to plot a posterior the rollout carries under another
+            key: the final one is on every rollout as ``extra["posterior"]``
+            whether or not the history was kept, so plotting just that costs no
+            storage at all.
         dims: The two components of ``dim_theta`` to plot.
         n_plot: Posterior draws per panel. Drawn with replacement against the
             importance weights, so a degenerate posterior visibly collapses onto
@@ -69,12 +77,13 @@ def plot_posterior_history(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    history = rollout.extra.get("posterior_history")
+    history = rollout.extra.get("posterior_history") if posteriors is None else posteriors
     if not history:
         raise ValueError(
             "rollout.extra has no posterior_history to plot. The hook that "
             "inferred the posteriors needs store_posterior_history=True "
-            "(SequentialDesigner takes it under the same name)."
+            "(SequentialDesigner takes it under the same name), or pass the "
+            "posteriors to plot directly."
         )
     if len(dims) != 2:
         raise ValueError(f"dims must name exactly two components; got {dims}.")
@@ -175,3 +184,74 @@ def plot_posterior_history(
     figure.savefig(path, dpi=150)
     plt.close(figure)
     return path
+
+
+def report_posterior_figures(task, rollouts, manager, posteriors_for=None, **kwargs):
+    """Writes the figures into the run directory and logs them to the run.
+
+    Reports rather than raises. A run reaches this with its results already
+    computed, so neither a task without a posterior plot nor a missing
+    matplotlib is worth failing it over.
+
+    Args:
+        task: The task.
+        rollouts: One batch-1 rollout per trajectory.
+        manager: The run manager, for the directory and the loggers.
+        posteriors_for: Optional ``rollout -> {step: posterior}``.
+        **kwargs: Forwarded to :func:`plot_posterior_history`.
+    """
+    directory = Path(manager.path("figures"))
+    try:
+        figures = write_trajectory_figures(
+            task, rollouts, directory, posteriors_for=posteriors_for, **kwargs
+        )
+    except ImportError as error:
+        manager.event_logger.warning(f"plotting needs matplotlib ({error}); skipping.")
+        return
+
+    if not figures:
+        manager.event_logger.info(
+            f"{type(task).__name__} has no posterior plot; skipping."
+        )
+        return
+
+    manager.event_logger.info(
+        f"wrote posterior figures for {len(figures)} trajectories to {directory}"
+    )
+    if manager.metric_logger is not None:
+        # Logged before the metrics, since logging those closes the wandb run.
+        manager.metric_logger.log_images(figures)
+
+
+def write_trajectory_figures(task, rollouts, directory, posteriors_for=None, **kwargs):
+    """Writes one posterior figure per trajectory, keyed for a metric logger.
+
+    Args:
+        task: The task. A task with no such plot yields no figures.
+        rollouts: One batch-1 rollout per trajectory.
+        directory: Written to, and created if it does not exist.
+        posteriors_for: Optional ``rollout -> {step: posterior}``, for a method
+            that keeps its posteriors somewhere other than
+            ``extra["posterior_history"]``.
+        **kwargs: Forwarded to :func:`plot_posterior_history`.
+
+    Returns:
+        ``{key: path}``, empty when the task has no posterior plot.
+    """
+    from ..tasks import LocationFinding
+
+    if not isinstance(task, LocationFinding):
+        return {}
+
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    figures = {}
+    for index, rollout in enumerate(rollouts):
+        figures[f"posterior/trajectory{index:02d}"] = plot_posterior_history(
+            rollout,
+            directory / f"posterior_trajectory{index:02d}.png",
+            posteriors=posteriors_for(rollout) if posteriors_for else None,
+            title=f"trajectory {index}",
+            **kwargs,
+        )
+    return figures
