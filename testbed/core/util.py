@@ -1,7 +1,26 @@
 """Tensor shape and probability helpers."""
 
+import math
+
 import torch
 from torch import Tensor
+
+
+def matches_event_shape(tensor: Tensor, event_shape) -> bool:
+    """Checks whether a tensor's trailing dimensions are exactly ``event_shape``.
+
+    The leading dimensions are unconstrained -- they are the batch shape. An
+    empty ``event_shape`` matches any tensor; a tensor with fewer dimensions
+    than ``event_shape`` matches nothing.
+
+    This is the predicate form of the check :func:`broadcast_and_flatten`
+    raises on, for callers that want to branch rather than fail (e.g.
+    ``DesignSpace.contains``).
+    """
+    event_shape = torch.Size(event_shape)
+    if tensor.ndim < len(event_shape):
+        return False
+    return tensor.shape[tensor.ndim - len(event_shape) :] == event_shape
 
 
 def squeeze_history(tensor: Tensor, event_shape: torch.Size) -> Tensor:
@@ -42,6 +61,12 @@ def broadcast_and_flatten(*tensors_with_event_shapes):
     """
     batch_shapes = []
     for t, e in tensors_with_event_shapes:
+        e = torch.Size(e)
+        if not matches_event_shape(t, e):
+            raise ValueError(
+                f"Expected tensor with trailing (event) shape {tuple(e)}, "
+                f"got shape {tuple(t.shape)}."
+            )
         batch_shapes.append(t.shape[: t.ndim - len(e)])
 
     target_batch = torch.broadcast_shapes(*batch_shapes)
@@ -94,15 +119,35 @@ def normal_log_prob(y, loc, scale):
 
     scale = torch.as_tensor(scale, device=y.device)
 
-    var = scale**2
-    term1 = ((y - loc) ** 2) / var
-    term2 = torch.log(2 * torch.pi * var)
-    return -0.5 * (term1 + term2)
+    # Parametrised by z = (y - loc) / scale rather than by var = scale^2. Same
+    # value and same gradient, but forming (y - loc)^2 / var makes autograd
+    # materialise (y - loc)^2 / scale^4 in the backward, which overflows around
+    # scale ~1e-9 before dvar/dscale multiplies it back down to the cubic term
+    # it analytically is. The z form's largest intermediate is already cubic.
+    # log(scale) as the normaliser also keeps var from underflowing to 0.
+    z = (y - loc) / scale
+    return -0.5 * (z**2 + math.log(2 * math.pi)) - torch.log(scale)
 
 
 def normal_cdf(x):
     """Computes the standard normal CDF."""
     return 0.5 * (1 + torch.erf(x / 2**0.5))
+
+
+def sort_by_key(x: Tensor, key: Tensor) -> Tensor:
+    """Sorts the ``n_objects`` axis of ``x`` by ascending ``key``.
+
+    Args:
+        x: ``[batch, n_objects, *object_shape]``.
+        key: ``[batch, n_objects]``, the per-object sort key.
+
+    Returns:
+        Tensor with the same shape as ``x``, objects reordered by ``key``.
+    """
+    b, n = x.shape[:2]
+    idx = torch.argsort(key, dim=1)
+    idx = idx.view(b, n, *([1] * (x.ndim - 2))).expand_as(x)
+    return torch.gather(x, dim=1, index=idx)
 
 
 def sort_by_norm(x: Tensor) -> Tensor:
@@ -118,19 +163,52 @@ def sort_by_norm(x: Tensor) -> Tensor:
         increasing Euclidean norm.
     """
     unbatched = x.ndim == 2
-
     if unbatched:
         x = x.unsqueeze(0)
 
-    b, n = x.shape[:2]
-
     norms = torch.linalg.norm(x.flatten(start_dim=2), dim=-1)
-    idx = torch.argsort(norms, dim=1)
-
-    idx = idx.view(b, n, *([1] * (x.ndim - 2))).expand_as(x)
-    x = torch.gather(x, dim=1, index=idx)
+    x = sort_by_key(x, norms)
 
     if unbatched:
         x = x.squeeze(0)
-
     return x
+
+
+def sort_by_first_coordinate(x: Tensor) -> Tensor:
+    """Sorts tensors according to their first coordinate.
+
+    This is the canonicalization used by ScoreBED (Phillips, Kerrigan,
+    Rainforth, UAI 2026), to remove the label-switching symmetry
+    of multi-source location-finding-style tasks (whose likelihood is
+    invariant to the ordering of an exchangeable ``n_objects`` axis, e.g.
+    LocationFinding's ``n_sources``): sorting collapses every permutation of
+    a given configuration onto the same canonical representative, so the
+    posterior only needs to fit one point per equivalence class.
+
+    Args:
+        x: Either
+            ``[batch, n_objects, *object_shape]``, or
+            ``[n_objects, *object_shape]``, with ``object_shape`` non-empty.
+
+    Returns:
+        Tensor with the same shape as ``x``, with objects sorted by
+        increasing first coordinate.
+    """
+    unbatched = x.ndim == 2
+    if unbatched:
+        x = x.unsqueeze(0)
+
+    # for each entry, what is its first coordinate?
+    first_coord = x.flatten(start_dim=2)[..., 0]
+    x = sort_by_key(x, first_coord)
+
+    if unbatched:
+        x = x.squeeze(0)
+    return x
+
+
+def shape_as_str(x: Tensor | None) -> str:
+    """Returns a tensor's shape as a string; for nice printing."""
+    if x is None:
+        return "None"
+    return str(tuple(x.shape))

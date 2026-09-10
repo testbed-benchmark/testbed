@@ -1,4 +1,14 @@
-_target_: testbed.tasks.HyperbolicTemporalDiscounting
-epsilon: 0.01
-exponent: 1.0
-temperature: 0.0  # true discrete sampling; REINFORCE handles the gradient
+# @package _global_
+
+# Task defaults
+T: 20
+
+task:
+  _target_: testbed.tasks.HyperbolicTemporalDiscounting
+  epsilon: 0.01
+  exponent: 1.0
+  outer_exponent: 1.0
+  temperature: 0.0  # true discrete sampling; REINFORCE handles the gradient
+  prior: null  # use the standard DAD hyperbolic-discounting prior
+  design_space: null  # derive the standard design space from the prior
+  reparameterize_outcomes: null  # follow the task: pathwise only at temperature > 0

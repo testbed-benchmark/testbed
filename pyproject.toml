@@ -21,6 +21,7 @@ dependencies = [
     "torch>=2.1",
     'pyyaml',
     'hydra-core',
+    'tqdm',
 ]
 
 [project.optional-dependencies]
@@ -33,7 +34,14 @@ full = [
 ]
 wandb = ['wandb']
 dev = ["pytest", "pre-commit", "ruff", 'rich']
-docs = ["sphinx", "sphinx-autoapi", "sphinx-autobuild", "myst-parser", "sphinx-book-theme"]
+docs = [
+    "sphinx", 
+    "sphinx-autoapi", 
+    "sphinx-autobuild", 
+    "sphinx-book-theme",
+    "myst-nb",
+    "jupyter-cache",
+]
 
 [tool.setuptools.packages.find]
 include = ["testbed*"]

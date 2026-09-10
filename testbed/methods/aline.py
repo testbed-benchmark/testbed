@@ -5,6 +5,7 @@ authors' reference implementation at https://github.com/huangdaolang/ALINE to
 TestBED's task, logging, and evaluation interfaces.
 """
 
+import inspect
 from dataclasses import dataclass
 from math import prod
 from numbers import Integral
@@ -13,10 +14,11 @@ import hydra
 import torch
 from torch import Tensor
 
+from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core.rollout import Rollout
 from testbed.core.setup import setup
 from testbed.design_nets import AlineModel, AlineOutput
 from testbed.design_objectives import SNMC, SPCE
-from testbed.envs import BoxDesignSpace
 
 
 @dataclass
@@ -30,6 +32,7 @@ class AlineRollout:
     rewards: Tensor
     target_mask: Tensor
     final_output: AlineOutput
+    inference_log_probs: Tensor | None = None
 
 
 class Trainer:
@@ -55,6 +58,7 @@ class Trainer:
         self.cfg = cfg
         self.manager = manager
         self.best_metric = -torch.inf
+        self._joint_optimizer_started = False
         self.target_masks, self.target_weights = _build_target_masks(
             cfg, model.dim_theta, model.design_low.device
         )
@@ -109,6 +113,7 @@ class Trainer:
         target_mask: Tensor | None = None,
         random_policy: bool = False,
         deterministic: bool = False,
+        pool_size: int | None = None,
     ) -> AlineRollout:
         """Simulates a batch of fixed-pool ALINE trajectories."""
         cfg = self.cfg
@@ -118,11 +123,12 @@ class Trainer:
             target_mask = self._sample_target_mask()
         target_mask = target_mask.to(device=self.device, dtype=torch.bool)
 
+        pool_size = cfg.pool_size if pool_size is None else pool_size
         candidates = self.design_space.sample(
-            (batch_size, cfg.pool_size), device=self.device
+            (batch_size, pool_size), device=self.device
         )
         available_mask = torch.ones(
-            batch_size, cfg.pool_size, device=self.device, dtype=torch.bool
+            batch_size, pool_size, device=self.device, dtype=torch.bool
         )
         context_designs = candidates.new_empty(
             batch_size, 0, *self.task.event_shape_design
@@ -138,12 +144,20 @@ class Trainer:
         )
         current_log_prob = self._selected_log_prob(current_output, theta, target_mask)
         posterior_log_probs = []
+        inference_log_probs = []
         action_log_probs = []
         rewards = []
         batch_indices = torch.arange(batch_size, device=self.device)
 
         for time_index in range(cfg.T):
             use_policy = not random_policy and time_index >= cfg.n_initial
+            if time_index >= cfg.n_initial:
+                # Reference training scores every parameter before acquisition.
+                inference_log_probs.append(
+                    current_output.posterior.log_prob(
+                        theta.reshape(batch_size, self.model.dim_theta)
+                    ).mean(dim=1)
+                )
             if use_policy:
                 action, action_log_prob = self._policy_action(
                     current_output, deterministic=deterministic
@@ -153,7 +167,9 @@ class Trainer:
                 action_log_prob = None
 
             design = candidates[batch_indices, action]
-            outcome = self.task.sample_outcome(theta, design)
+            outcome = self.task.sample_outcome(
+                theta, design, y_history=context_y, design_history=context_designs
+            ).detach()
             context_designs = torch.cat([context_designs, design.unsqueeze(1)], dim=1)
             context_y = torch.cat([context_y, outcome.unsqueeze(1)], dim=1)
             available_mask = available_mask.clone()
@@ -168,7 +184,7 @@ class Trainer:
             )
             next_log_prob = self._selected_log_prob(next_output, theta, target_mask)
             posterior_log_probs.append(next_log_prob)
-            if action_log_prob is not None:
+            if action_log_prob is not None and time_index < cfg.T - 1:
                 action_log_probs.append(action_log_prob)
                 rewards.append(next_log_prob.detach() - current_log_prob.detach())
 
@@ -186,6 +202,7 @@ class Trainer:
             rewards=torch.stack(rewards, dim=1) if rewards else empty,
             target_mask=target_mask,
             final_output=current_output,
+            inference_log_probs=torch.stack(inference_log_probs, dim=1),
         )
 
     def train_step(self, step: int = 0) -> dict[str, float]:
@@ -193,34 +210,59 @@ class Trainer:
         self.model.train()
         warmup = step < self.cfg.n_warmup_iter
         theta = self.task.sample_prior(self.cfg.n_outer)
-        rollout = self.rollout(theta, random_policy=warmup)
-        inference_loss = -rollout.posterior_log_probs.mean()
+        rollout = self.rollout(theta, pool_size=self.cfg.T if warmup else None)
+        inference_loss = -rollout.inference_log_probs.mean()
         policy_loss = inference_loss.new_zeros(())
         mean_reward = inference_loss.new_zeros(())
 
         if not warmup:
-            rewards = rollout.rewards
+            # Match train_aline.py: clip gains, discount, then standardize
+            # across trajectories using the sample standard deviation.
+            rewards = rollout.rewards.detach().clamp_min(0.0)
+            discounts = self.cfg.gamma ** torch.arange(
+                1, rewards.shape[1] + 1, device=self.device
+            )
+            policy_rewards = rewards * discounts
             if rewards.shape[0] > 1:
                 policy_rewards = (
-                    rewards - rewards.mean(dim=0, keepdim=True)
-                ) / (rewards.std(dim=0, keepdim=True, unbiased=False) + 1e-9)
-            else:
-                policy_rewards = rewards
-            # The paper uses gamma**t for t=1,...,T; use the conventional
-            # zero-based RL discount so the immediate reward has weight one.
-            discounts = self.cfg.gamma ** torch.arange(
-                rewards.shape[1], device=self.device
-            )
-            policy_loss = -(
-                rollout.action_log_probs * policy_rewards * discounts
-            ).mean()
+                    policy_rewards - policy_rewards.mean(dim=0, keepdim=True)
+                ) / (policy_rewards.std(dim=0, keepdim=True) + 1e-9)
+            policy_loss = -(rollout.action_log_probs * policy_rewards).mean()
             mean_reward = rewards.mean()
 
         loss = inference_loss + self.cfg.alpha * policy_loss
         self.optimizer.zero_grad()
         loss.backward()
         if self.cfg.grad_clip is not None:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip)
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.cfg.grad_clip, norm_type=float("inf")
+            )
+        if not warmup and not self._joint_optimizer_started:
+            # The reference restarts AdamW and cosine decay at the boundary;
+            # only the acquisition predictor retains the full learning rate.
+            base_lr = self.optimizer.defaults["lr"]
+            acquisition = list(self.model.acquisition_head.parameters())
+            acquisition_ids = {id(p) for p in acquisition}
+            shared = [
+                p for p in self.model.parameters() if id(p) not in acquisition_ids
+            ]
+            self.optimizer = type(self.optimizer)(
+                [
+                    {"params": shared, "lr": base_lr / 5},
+                    {"params": acquisition, "lr": base_lr},
+                ],
+                **{
+                    key: value
+                    for key, value in self.optimizer.defaults.items()
+                    if key in inspect.signature(type(self.optimizer)).parameters
+                },
+            )
+            if self.scheduler is not None:
+                self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    self.optimizer,
+                    T_max=max(1, self.cfg.n_train_iter - self.cfg.n_warmup_iter),
+                )
+            self._joint_optimizer_started = True
         self.optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
@@ -250,12 +292,12 @@ class Trainer:
         if torch.all(target_mask):
             metrics["eval/spce"] = (
                 SPCE(self.task, n_contrastive=self.cfg.n_inner_eval)
-                .estimate_gain(rollout.outcomes, rollout.designs, theta)
+                .estimate_gain(Rollout(theta, rollout.outcomes, rollout.designs))
                 .item()
             )
             metrics["eval/snmc"] = (
                 SNMC(self.task, n_contrastive=self.cfg.n_inner_eval)
-                .estimate_gain(rollout.outcomes, rollout.designs, theta)
+                .estimate_gain(Rollout(theta, rollout.outcomes, rollout.designs))
                 .item()
             )
         self.model.train(was_training)
@@ -323,11 +365,9 @@ def _build_target_masks(
 
 def build_design_space(cfg, task) -> BoxDesignSpace:
     """Builds the fixed candidate-pool design space."""
-    return BoxDesignSpace(
-        cfg.design_space.low,
-        cfg.design_space.high,
-        event_shape=task.event_shape_design,
-    )
+    if not isinstance(task.design_space, BoxDesignSpace):
+        raise ValueError("ALINE requires a finite BoxDesignSpace on task.design_space.")
+    return task.design_space
 
 
 def build_model(cfg, task, design_space: BoxDesignSpace) -> AlineModel:
@@ -345,6 +385,8 @@ def build_model(cfg, task, design_space: BoxDesignSpace) -> AlineModel:
         dropout=cfg.model.dropout,
         n_components=cfg.model.n_components,
         min_scale=cfg.model.min_scale,
+        design_center=cfg.model.get("design_center", 0.0),
+        design_scale=cfg.model.get("design_scale", 1.0),
         outcome_center=cfg.model.outcome_center,
         outcome_scale=cfg.model.outcome_scale,
     )
@@ -378,8 +420,8 @@ def validate_config(task, cfg, design_space: BoxDesignSpace) -> None:
         raise ValueError(
             "pool_size must be at least T for sampling without replacement."
         )
-    if not 0 <= cfg.n_initial < cfg.T:
-        raise ValueError("n_initial must satisfy 0 <= n_initial < T.")
+    if not 0 <= cfg.n_initial < cfg.T - 1:
+        raise ValueError("n_initial must satisfy 0 <= n_initial < T - 1.")
     if cfg.n_warmup_iter < 0 or cfg.eval_every < 0:
         raise ValueError("n_warmup_iter and eval_every must be non-negative.")
     if cfg.gamma < 0:
@@ -416,7 +458,7 @@ def validate_config(task, cfg, design_space: BoxDesignSpace) -> None:
             )
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="aline")
+@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/aline")
 def main(cfg) -> None:
     """Runs ALINE training from a Hydra recipe."""
     torch.manual_seed(cfg.seed)

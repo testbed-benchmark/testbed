@@ -1,12 +1,17 @@
 """Training for ActionBED (Rossa et al., 2026)."""
 
+import inspect
+
 import hydra
 import torch
-from hydra.utils import instantiate
+from hydra.utils import get_class, instantiate
 
-from testbed.core.distributions import TorchDistribution
 from testbed.core.setup import setup
-from testbed.designers import PolicyDesigner, RandomDesigner
+from testbed.designers import (
+    ActionHook,
+    PolicyDesigner,
+    RandomDesigner,
+)
 
 # ============================================================================
 # Training class
@@ -49,9 +54,17 @@ class Trainer:
         # checkpointing
         self.best_metric = torch.inf
 
+        # Attach an action hook directly to the designer(s), so every
+        # rollout() call from them computes an action -- no need to thread
+        # hooks through each individual call site.
+        action_hook = ActionHook(self.action_net, use_raw_history=cfg.use_raw_history)
+        self.designer.hooks.append(action_hook)
+        if self.random_designer is not None:
+            self.random_designer.hooks.append(action_hook)
+
     def train(self):
         """Full training loop."""
-        self.designer.policy_net.train()
+        self.designer.design_net.train()
         self.action_net.train()
 
         # Action warm-up
@@ -106,9 +119,10 @@ class Trainer:
         save_path = self.manager.path("final_step.pt")
         torch.save(
             {
-                "design_net": self.designer.policy_net.state_dict(),
+                "design_net": self.designer.design_net.state_dict(),
                 "action_net": self.action_net.state_dict(),
                 "step": step,
+                "use_raw_history": self.designer.use_raw_history,
             },
             save_path,
         )
@@ -121,16 +135,16 @@ class Trainer:
         cfg = self.cfg
 
         theta = self.task.sample_prior(cfg.n_outer)
-        y_obs, design_obs = self.random_designer.rollout(theta)
+        rollout = self.random_designer.rollout(theta)
 
-        action = self.action_net(y_obs, design_obs)
+        action = rollout.extra["action"]
         loss = self.loss_fn(action, theta)
 
         self.optimizer.zero_grad()
         loss.backward()
 
         if cfg.grad_clip is not None:
-            all_params = list(self.designer.policy_net.parameters()) + list(
+            all_params = list(self.designer.design_net.parameters()) + list(
                 self.action_net.parameters()
             )
             torch.nn.utils.clip_grad_norm_(all_params, cfg.grad_clip)
@@ -144,16 +158,16 @@ class Trainer:
         cfg = self.cfg
 
         theta = self.task.sample_prior(cfg.n_outer)
-        y_obs, design_obs = self.designer.rollout(theta)
+        rollout = self.designer.rollout(theta)
 
-        action = self.action_net(y_obs, design_obs)
+        action = rollout.extra["action"]
         loss = self.loss_fn(action, theta)
 
         self.optimizer.zero_grad()
         loss.backward()
 
         if cfg.grad_clip is not None:
-            all_params = list(self.designer.policy_net.parameters()) + list(
+            all_params = list(self.designer.design_net.parameters()) + list(
                 self.action_net.parameters()
             )
             torch.nn.utils.clip_grad_norm_(all_params, cfg.grad_clip)
@@ -170,18 +184,18 @@ class Trainer:
         """Evalutes warmup with a fresh batch of rollouts."""
         cfg = self.cfg
 
-        policy_was_training = self.designer.policy_net.training
+        policy_was_training = self.designer.design_net.training
         action_was_training = self.action_net.training
-        self.designer.policy_net.eval()
+        self.designer.design_net.eval()
         self.action_net.eval()
 
         with torch.no_grad():
             theta = self.task.sample_prior(cfg.n_outer_eval)
-            y_obs, design_obs = self.random_designer.rollout(theta)
-            action = self.action_net(y_obs, design_obs)
+            rollout = self.random_designer.rollout(theta)
+            action = rollout.extra["action"]
             loss = self.loss_fn(action, theta)
 
-        self.designer.policy_net.train(policy_was_training)
+        self.designer.design_net.train(policy_was_training)
         self.action_net.train(action_was_training)
 
         return {
@@ -192,18 +206,18 @@ class Trainer:
         """Evalutes training with a fresh batch of rollouts."""
         cfg = self.cfg
 
-        policy_was_training = self.designer.policy_net.training
+        policy_was_training = self.designer.design_net.training
         action_was_training = self.action_net.training
-        self.designer.policy_net.eval()
+        self.designer.design_net.eval()
         self.action_net.eval()
 
         with torch.no_grad():
             theta = self.task.sample_prior(cfg.n_outer_eval)
-            y_obs, design_obs = self.designer.rollout(theta)
-            action = self.action_net(y_obs, design_obs)
+            rollout = self.designer.rollout(theta)
+            action = rollout.extra["action"]
             loss = self.loss_fn(action, theta)
 
-        self.designer.policy_net.train(policy_was_training)
+        self.designer.design_net.train(policy_was_training)
         self.action_net.train(action_was_training)
 
         return {
@@ -231,10 +245,11 @@ class Trainer:
 
             torch.save(
                 {
-                    "design_net": self.designer.policy_net.state_dict(),
+                    "design_net": self.designer.design_net.state_dict(),
                     "action_net": self.action_net.state_dict(),
                     "step": step,
                     "metric": metric_val,
+                    "use_raw_history": self.designer.use_raw_history,
                 },
                 chkpt_path,
             )
@@ -247,25 +262,7 @@ class Trainer:
 # ============================================================================
 
 
-def resolve_event_shape_action(task, manager):
-    """Output shape for the action net.
-
-    Until tasks model arbitrary actions, we assume the action space equals the
-    theta space. A task opts out by defining `event_shape_action`; otherwise we
-    fall back to event_shape_theta and warn.
-    """
-    if hasattr(task, "event_shape_action"):
-        return task.event_shape_action
-
-    manager.event_logger.warning(
-        f"{type(task).__name__} does not define `event_shape_action`; assuming "
-        f"action space == theta space (event_shape_theta="
-        f"{tuple(task.event_shape_theta)})."
-    )
-    return task.event_shape_theta
-
-
-def build_policy_nets(cfg, task, manager):
+def build_policy_nets(cfg, task):
     """Instantiates design and action policy networks."""
     design_net = instantiate(
         cfg.design_net,
@@ -278,10 +275,29 @@ def build_policy_nets(cfg, task, manager):
         cfg.action_net,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
-        event_shape_out=resolve_event_shape_action(task, manager),
+        event_shape_out=task.action_space.event_shape,
     )
 
     return design_net, action_net
+
+
+def build_loss_fn(cfg, task):
+    """Instantiates the training loss.
+
+    Most losses only depend on ``cfg.loss``, but some (e.g. LogLoss) also
+    need the task itself, which the config can't express. Rather than special
+    casing loss classes by name, we inspect the target's constructor and only
+    supply what it actually declares. Losses needing a design prior take it
+    from ``task.design_space``, so nothing extra is threaded through here.
+    """
+    loss_cls = get_class(cfg.loss._target_)
+    params = inspect.signature(loss_cls.__init__).parameters
+
+    extra_kwargs = {}
+    if "task" in params:
+        extra_kwargs["task"] = task
+
+    return instantiate(cfg.loss, **extra_kwargs)
 
 
 # ============================================================================
@@ -289,7 +305,9 @@ def build_policy_nets(cfg, task, manager):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="actionbed")
+@hydra.main(
+    version_base="1.3", config_path="../recipes", config_name="method/actionbed"
+)
 def main(cfg):
     """Entry point for ActionBED training.
 
@@ -303,24 +321,17 @@ def main(cfg):
     # Set seed
     torch.manual_seed(cfg.seed)
 
-    design_net, action_net = build_policy_nets(cfg, task, manager)
+    design_net, action_net = build_policy_nets(cfg, task)
     design_net = design_net.to(cfg.device)
     action_net = action_net.to(cfg.device)
-    designer = PolicyDesigner(task, cfg.T, design_net)
+    designer = PolicyDesigner(
+        task, cfg.T, design_net, use_raw_history=cfg.use_raw_history
+    )
 
-    # Setup for action-warmup
+    # Setup for action-warmup; designs are drawn from the task's design space.
     random_designer = None
     if cfg.n_action_warmup_iter > 0:
-        manager.event_logger.warning(
-            "Assuming a Gaussian design prior for action warmup. Also assumes that task.event_shape_design is flat."
-        )
-        design_dist = TorchDistribution(
-            torch.distributions.MultivariateNormal(
-                torch.zeros(task.event_shape_design, device=cfg.device),
-                torch.eye(task.event_shape_design.numel(), device=cfg.device),
-            )
-        )
-        random_designer = RandomDesigner(task, cfg.T, design_dist)
+        random_designer = RandomDesigner(task, cfg.T)
 
     # Create optimizer + LR scheduler
     all_policy_params = list(design_net.parameters()) + list(action_net.parameters())
@@ -332,7 +343,7 @@ def main(cfg):
             optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma
         )
 
-    loss_fn = instantiate(cfg.loss)
+    loss_fn = build_loss_fn(cfg, task)
 
     trainer = Trainer(
         task=task,

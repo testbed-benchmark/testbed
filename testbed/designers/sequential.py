@@ -1,110 +1,193 @@
 """Sequential design optimization."""
 
+from collections.abc import Sequence
+
 import torch
+from torch.distributions import Distribution as TorchDist
 
+from testbed.core.distributions import Distribution, TorchDistribution
+from testbed.core.hooks import PosteriorUpdateHook, RolloutHook
+from testbed.core.rollout import Rollout
+from testbed.design_objectives import DesignObjective
 from testbed.inference.is_sampler import run_importance_sampling
+from testbed.tasks import Task
+
+from .base import Designer
 
 
-class SequentialDesigner:
-    """Optimizes each design online."""
+class SequentialDesigner(Designer):
+    """Optimizes each design online via per-step gradient ascent on an objective.
+
+    Only supports batch size 1: each design is chosen by running its own
+    Adam optimization loop, which doesn't vectorize across independent
+    per-example optimizations the way an amortized policy net does.
+
+    Composes a PosteriorUpdateHook by default (update_posterior=True): a
+    DesignObjective like NMC/PCE reads task.current_prior, and online
+    posterior tracking is what makes this designer "sequential" rather than
+    a repeated static design. Pass extra_hooks to run alongside it.
+    """
 
     def __init__(
         self,
-        task,
-        T,
-        objective,
-        lr,
-        n_step_opt,
+        task: Task,
+        T: int,
+        objective: DesignObjective,
+        lr: float,
+        n_step_opt: int,
+        init_design_dist: Distribution | TorchDist | str | None = None,
+        *,
+        update_posterior: bool = True,
         inference_fn=run_importance_sampling,
-        init_design_dist=None,
+        store_posterior_history: bool = False,
+        extra_hooks: Sequence[RolloutHook] = (),
+        transform_designs: bool = True,
+        **inference_kwargs,
     ):
         """Initializes the sequential designer.
 
+        objective: a DesignObjective -- `estimate_gain(design) -> scalar` for
+            a single design (e.g. NMC, PCE). NOT a RolloutObjective like SPCE/
+            SNMC/Reinforce, which score a full rollout; use their
+            DesignObjective wrapper instead, e.g. PCE(task, n_outer=...,
+            n_inner=...) rather than SPCE(task, n_contrastive=...).
         init_design_dist controls how the initial design is drawn before each gradient optimization:
         None             -- standard normal N(0, I)  [default]
         "current_prior"  -- sample one design from task.current_prior (useful when the design
                             space and theta space coincide, e.g. source-finding)
-        Distribution     -- any testbed Distribution; one sample is drawn per call.
+        Distribution     -- any testbed Distribution (or torch.distributions.Distribution);
+                            one sample is drawn per call.
+        update_posterior: if True (default), a PosteriorUpdateHook runs after
+            every step using inference_fn/inference_kwargs, updating
+            task.current_prior. Set False to manage posterior updates
+            yourself (e.g. via extra_hooks).
+        store_posterior_history: if True, the PosteriorUpdateHook also keeps
+            the posterior computed after each step, exposed on the rollout
+            as extra["posterior_history"] (a list of Distribution, one per
+            step) alongside the usual extra["posterior"] for the final one.
+            Off by default -- only meaningful when update_posterior is True.
+        extra_hooks: additional hooks to run alongside the posterior update
+            (after it, so they see the up-to-date posterior).
+        transform_designs: see Designer.__init__. Default True: the raw design
+            optimized by Adam is mapped through task.design_space.to_design on
+            every iteration, and initialize_design's "current_prior" branch
+            inverts through task.design_space.to_raw. Both directions are
+            gated by this single flag, so they stay consistent with each
+            other automatically.
         """
-        self.task = task
-        self.T = T
+        if not isinstance(objective, DesignObjective):
+            raise TypeError(
+                "SequentialDesigner requires a DesignObjective (estimate_gain(design) "
+                f"for a single design, e.g. NMC/PCE); got {type(objective).__name__}. "
+                "RolloutObjectives (SPCE/SNMC/Reinforce) score a full rollout instead -- "
+                "use their DesignObjective wrapper, e.g. PCE(task, n_outer=..., n_inner=...) "
+                "instead of SPCE(task, n_contrastive=...)."
+            )
+
+        if task.design_space.is_discrete:
+            raise RuntimeError(
+                "SequentialDesigner is not compatible with tasks that have discrete design spaces."
+            )
+
+        hooks = list(extra_hooks)
+        if update_posterior:
+            hooks = [
+                PosteriorUpdateHook(
+                    inference_fn,
+                    store_history=store_posterior_history,
+                    **inference_kwargs,
+                ),
+                *hooks,
+            ]
+        elif store_posterior_history:
+            raise ValueError(
+                "store_posterior_history=True requires update_posterior=True "
+                "(there's no PosteriorUpdateHook to track history on)."
+            )
+        super().__init__(
+            task,
+            T,
+            hooks=hooks,
+            transform_designs=transform_designs,
+        )
+
         self.objective = objective
-        self.inference_fn = inference_fn
         self.lr = lr
         self.n_step_opt = n_step_opt
+
+        if isinstance(init_design_dist, TorchDist):
+            init_design_dist = TorchDistribution(init_design_dist)
         self.init_design_dist = init_design_dist
 
     def initialize_design(self):
-        """Creates an initial design for optimization."""
-        # Returns [*event_shape_design] with requires_grad=True.
-        # Override this method for custom initialization logic.
+        """Creates an initial *raw* design for optimization.
+
+        Returns ``[*event_shape_design]`` with requires_grad=True.
+        Assumed to be a raw design.
+        Override this method for custom initialization logic.
+        """
         dist = self.init_design_dist
         if dist is None:
-            design = torch.randn(self.task.event_shape_design, device=self.task.device)
-        elif dist == "current_prior":
-            design = self.task.sample_current_prior().to(self.task.device)
+            design_raw = torch.randn(
+                self.task.event_shape_design, device=self.task.device
+            )
+        elif isinstance(dist, str) and dist == "current_prior":
+            # sample_current_prior() returns a constrained-space value (e.g. a
+            # real source location); convert to raw so every branch returns
+            # the same (raw) coordinates for the optimizer.
+            design_constrained = self.task.sample_current_prior().to(self.task.device)
+            design_raw = self._to_raw(design_constrained)
         else:
-            design = (
+            design_raw = (
                 dist.sample(1)
                 .reshape(self.task.event_shape_design)
                 .to(self.task.device)
             )
-        return design.requires_grad_(True)
+        return design_raw.requires_grad_(True)
 
-    def propose_design(self, return_gain=False):
-        """Optimizes and returns the next design."""
-        # Selects the next design via gradient descent on the objective
-        # returns: [*event_shape_design]
-        design = self.initialize_design()
-        optimizer = torch.optim.Adam([design], lr=self.lr)
+    def _optimize_design(self, y_history, design_history):
+        """Runs the Adam loop; returns (constrained_design, raw_design), both ``[1, *event_shape_design]``."""
+        if y_history.shape[0] != 1:
+            raise ValueError(
+                f"SequentialDesigner only supports batch size 1; got batch {y_history.shape[0]}."
+            )
+
+        design_raw = self.initialize_design()
+        optimizer = torch.optim.Adam([design_raw], lr=self.lr)
 
         for _ in range(self.n_step_opt):
             optimizer.zero_grad()
-            gain = self.objective(design)
+            design = self._to_design(design_raw)
+            gain = self.objective.estimate_gain(
+                design, y_history=y_history, design_history=design_history
+            )
             loss = -gain
             loss.backward()
             optimizer.step()
 
-        design = design.detach()
-        if return_gain:
-            return design, gain.item()
-        return design
+        # Recompute after the final optimizer.step()
+        # Required as the current design is one step stale
+        design_raw = design_raw.detach()
+        design = self._to_design(design_raw)
+        return design.unsqueeze(0), design_raw.unsqueeze(0)
 
-    def rollout(self, theta_true):
-        """Runs the full sequential experimental design procedure.
+    def _step_design(self, state):
+        """Optimizes the next design by gradient ascent on the objective.
 
-        Propose -> Sample -> Update posterior.
-
-        Args:
-            theta_true: ``[*event_shape_theta]`` or ``[1, *event_shape_theta]``.
-                        Leading size-1 batch dims are tolerated and stripped.
-
-        Returns:
-            y_history: ``[T, *event_shape_y]``
-            design_history: ``[T, *event_shape_design]``
+        The objective reads task.current_prior, which the PosteriorUpdateHook
+        has already conditioned on the history, so the histories on the state
+        are not read directly here.
         """
-        n_event_dims = len(self.task.event_shape_theta)
-        n_batch_dims = theta_true.ndim - n_event_dims
-        batch_shape = theta_true.shape[:n_batch_dims]
-        if any(s != 1 for s in batch_shape):
-            raise ValueError(
-                f"rollout expects a single theta_true; got shape {tuple(theta_true.shape)}"
-            )
-        theta_true = theta_true.reshape(*self.task.event_shape_theta)
+        design, raw_design = self._optimize_design(
+            state.y_history, state.design_history
+        )
+        return design, raw_design, None
 
-        y_list, design_list = [], []
+    def rollout(self, theta) -> Rollout:
+        """Runs the full sequential experimental design procedure for a single theta.
 
-        for _ in range(self.T):
-            design = self.propose_design()
-            y = self.task.sample_outcome(theta_true, design)
-
-            y_list.append(y)
-            design_list.append(design)
-
-            y_history = torch.stack(y_list)  # [t+1, *event_shape_y]
-            design_history = torch.stack(design_list)  # [t+1, *event_shape_design]
-
-            posterior = self.inference_fn(self.task, y_history, design_history)
-            self.task.update_prior(posterior)
-
-        return torch.stack(y_list), torch.stack(design_list)
+        theta: ``[*event_shape_theta]`` (unbatched) or ``[1, *event_shape_theta]``.
+        """
+        if theta.ndim == len(self.task.event_shape_theta):
+            theta = theta.unsqueeze(0)
+        return super().rollout(theta)

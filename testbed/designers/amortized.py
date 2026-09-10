@@ -1,160 +1,148 @@
-"""Amortized designer abstractions."""
+"""Amortized (policy-net-backed) designer abstractions."""
 
-from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 import torch
 
-from ..design_nets.stochastic import StochasticDesignNet
-
-
-class Designer(ABC):
-    """Base class for rollout designers."""
-
-    def __init__(self, task, T):
-        """Stores the task and horizon."""
-        super().__init__()
-
-        self.task = task
-        self.T = T
-
-    @abstractmethod
-    def propose_design(self, y_history, design_history, *, mask=None):
-        """Proposes the next design."""
-        # y_history, design_history: [b=1, T, **dim]
-        # mask: optional boolean mask [b=1, T] for padded histories
-        # returns: [b=1, **dim_design]
-        ...
-
-    def _step_design(self, y_history, design_history):
-        """Proposes the next design, returning (design, policy_log_prob or None)."""
-        return self.propose_design(y_history, design_history), None
-
-    def empty_history(self, b):
-        """Returns an empty rollout (i.e., corresponding to t=0)."""
-        y_history = torch.empty(
-            (b, 0, *self.task.event_shape_y), device=self.task.device
-        )
-        design_history = torch.randn(
-            (b, 0, *self.task.event_shape_design), device=self.task.device
-        )
-        return y_history, design_history
-
-    def rollout(self, theta, return_policy_log_probs: bool = False):
-        """Runs a rollout for batched theta values."""
-        # Runs the designer given a true theta for T steps
-        # theta: [b, dim_theta]
-        # returns: y_history, design_history: [b, T, **]
-        # with return_policy_log_probs=True, also per-step policy log probs: [b, T]
-        assert theta.device == self.device, (
-            f"theta is on {theta.device} but designer is on {self.device}. "
-            f"Move theta with theta.to(designer.device), or move the designer with designer.to(theta.device)."
-        )
-
-        b = theta.shape[0]
-        T = self.T
-
-        y_list = []
-        design_list = []
-        policy_log_prob_list = []
-
-        for _ in range(T):
-            y_hist_t = (
-                torch.stack(y_list, dim=1)
-                if y_list
-                else torch.empty(b, 0, *self.task.event_shape_y, device=theta.device)
-            )
-            d_hist_t = (
-                torch.stack(design_list, dim=1)
-                if design_list
-                else torch.empty(
-                    b, 0, *self.task.event_shape_design, device=theta.device
-                )
-            )
-
-            design, policy_log_prob = self._step_design(y_hist_t, d_hist_t)
-            y = self.task.sample_outcome(theta, design)  # [b, *event_shape_y]
-
-            y_list.append(y)
-            design_list.append(design)
-            policy_log_prob_list.append(policy_log_prob)
-
-        y_history = torch.stack(y_list, dim=1)  # [b, T, *event_shape_y]
-        design_history = torch.stack(design_list, dim=1)  # [b, T, *event_shape_design]
-
-        if not return_policy_log_probs:
-            return y_history, design_history
-        if any(log_prob is None for log_prob in policy_log_prob_list):
-            raise RuntimeError(
-                "policy log probs require a stochastic designer (deterministic=False)"
-            )
-        policy_log_probs = torch.stack(policy_log_prob_list, dim=1)  # [b, T]
-        return y_history, design_history, policy_log_probs
+from ..core.hooks import RolloutHook
+from .base import Designer
 
 
 class PolicyDesigner(Designer):
-    """Designer backed by a policy network."""
+    """Designer backed by a trainable design network.
+
+    Every design network supplies a raw :class:`DesignProposal`. This class is
+    the single owner of the task design-space transform and any corresponding
+    log-probability correction.
+    """
 
     def __init__(
         self,
         task,
         T,
-        policy_net,
+        design_net,
         *,
-        deterministic: bool | None = None,
         reparameterize_policy: bool = False,
+        hooks: Sequence[RolloutHook] = (),
+        use_raw_history: bool = False,
+        transform_designs: bool = True,
     ):
-        """Initializes with a policy network.
+        """Stores the policy network and proposal options.
 
-        deterministic: None infers from the policy type; stochastic nets roll out
-        stochastically by default, so pass deterministic=True for greedy eval.
-        reparameterize_policy: sample designs with the reparameterization trick
-        so they carry the graph (pathwise gradients); False gives pure score log probs.
+        Args:
+            task: Task for which designs are produced.
+            T: Number of experimental steps.
+            design_net: Network implementing the common ``propose()`` API.
+            reparameterize_policy: Request reparameterized samples from policy
+                networks that support them.
+            hooks: Optional rollout hooks.
+            use_raw_history: Condition on raw rather than physical design
+                history. This is an advanced opt-in; physical designs are the
+                common public history convention.
+            transform_designs: Map raw proposals through the task design space
+                and correct proposal log probabilities.
         """
-        super().__init__(task, T)
-
-        self.policy_net = policy_net
-        if deterministic is None:
-            deterministic = not isinstance(policy_net, StochasticDesignNet)
-        self.deterministic = bool(deterministic)
+        super().__init__(
+            task,
+            T,
+            hooks=hooks,
+            transform_designs=transform_designs,
+        )
+        self.design_net = design_net
         self.reparameterize_policy = bool(reparameterize_policy)
+        self.use_raw_history = bool(use_raw_history)
+        normalizes_physical_history = bool(self.design_net.normalize_design_history)
+        raw_designs_are_physical = bool(self.design_net.raw_designs_are_physical)
+        if (
+            self.use_raw_history
+            and normalizes_physical_history
+            and not raw_designs_are_physical
+        ):
+            raise ValueError(
+                "use_raw_history=True is incompatible with a design network "
+                "that normalizes physical design histories."
+            )
 
     @property
     def device(self) -> torch.device:
         """Returns the policy network device."""
-        return self.policy_net.device
+        return self.design_net.device
 
     @property
-    def reinforce_requires_policy_log_probs(self) -> bool:
-        """True when estimate_gain needs per-step policy log probs.
-
-        Score-function form: the designer samples designs without
-        reparameterization (and not greedily), so the gradient must come from
-        the policy score rather than a pathwise graph.
-        """
-        return not self.deterministic and not self.reparameterize_policy
-
-    def propose_design(self, y_history, design_history, *, mask=None):
-        """Evaluates the policy network."""
-        # y_history, design_history: [b, T, **dim]
-        # mask: optional boolean mask [b, T] for padded histories
-        # returns: [b, **dim_design]
-
-        # TODO enforce policy_net can handle this kind of input or otherwise handle it here
-        # When t=0, the slices of y_history, design_history will have shape [b, 0, dim]
-        if self.deterministic:
-            # mask is not forwarded here: policy_net.__call__ (forward) does not
-            # accept a mask argument. For padded-history eval with deterministic=True,
-            # call policy_net.sample_from_observation(obs, deterministic=True) directly.
-            design = self.policy_net(y_history, design_history)
-        else:
-            design = self.policy_net.sample(y_history, design_history, mask=mask).design
-        return design
-
-    def _step_design(self, y_history, design_history):
-        """Proposes the next design; stochastic policies also return the log prob."""
-        if self.deterministic:
-            return self.policy_net(y_history, design_history), None
-        sample = self.policy_net.sample(
-            y_history, design_history, reparameterize_policy=self.reparameterize_policy
+    def requires_policy_log_probs(self) -> bool:
+        """Whether training must use proposal score-function log probabilities."""
+        produces_log_probs = bool(self.design_net.produces_policy_log_probs)
+        supports_reparameterization = bool(
+            self.design_net.supports_reparameterized_proposals
         )
-        return sample.design, sample.log_prob
+        uses_pathwise_samples = (
+            self.reparameterize_policy and supports_reparameterization
+        )
+        return produces_log_probs and not uses_pathwise_samples
+
+    def design_history_for_step(self, state) -> torch.Tensor:
+        """Returns the history passed to the policy for a rollout step.
+
+        Args:
+            state: Mutable rollout state maintained by :class:`Designer`.
+
+        Returns:
+            Tensor: Raw history when ``use_raw_history`` is enabled and
+            available; otherwise, physical design history.
+        """
+        if self.use_raw_history and state.raw_design_history is not None:
+            return state.raw_design_history
+        return state.design_history
+
+    def design_from_history(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask=None,
+    ):
+        """Proposes and transforms one design for the supplied history.
+
+        Args:
+            y_history: Outcome history accepted by the design network.
+            design_history: Physical or raw design history accepted by the
+                design network according to ``use_raw_history``.
+            mask: Optional validity mask for padded history positions.
+
+        Returns:
+            tuple[Tensor, Tensor, Tensor | None]: Physical design, raw design,
+            and physical-space log probability. The log probability is ``None``
+            for deterministic proposals.
+        """
+        proposal = self.design_net.propose(
+            y_history,
+            design_history,
+            mask=mask,
+            reparameterize_policy=self.reparameterize_policy,
+        )
+
+        # Some policies, such as CategoricalPolicyNet, choose directly from a
+        # finite set of physical designs.  Their log_prob is a categorical
+        # log-mass, not a density in the task's raw coordinates, so neither
+        # the task transform nor its Jacobian correction applies.
+        raw_designs_are_physical = bool(self.design_net.raw_designs_are_physical)
+        if not self.transform_designs or raw_designs_are_physical:
+            return proposal.raw_design, proposal.raw_design, proposal.log_prob
+
+        if proposal.log_prob is None:
+            design = self.task.design_space.to_design(proposal.raw_design)
+            return design, proposal.raw_design, None
+
+        design, log_prob = self.task.design_space.to_design(
+            proposal.raw_design,
+            proposal.log_prob,
+        )
+        return design, proposal.raw_design, log_prob
+
+    def _step_design(self, state):
+        """Adapts the common proposal path to the rollout state."""
+        return self.design_from_history(
+            state.y_history,
+            self.design_history_for_step(state),
+            mask=state.mask,
+        )

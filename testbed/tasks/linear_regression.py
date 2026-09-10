@@ -5,6 +5,7 @@ import math
 import torch
 from torch import Tensor
 
+from ..core.design_spaces import BoxDesignSpace, DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
 from .base import Task
@@ -119,7 +120,17 @@ class LinearRegression(Task):
             Setting this to zero gives the standard linear model.
         prior (Distribution, optional):
             Prior over parameters. If None, the default Gaussian LinearRegressionPrior is used.
+        design_space (DesignSpace, optional):
+            Controls the design parametrization. If None, a
+            :class:`~testbed.core.design_spaces.BoxDesignSpace` over
+            ``[-1, 1]^dim`` is used. Note the quadratic term above is centred
+            on ``||x|| = 1``, which this box attains.
     """
+
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """Gaussian noise added to a differentiable mean."""
+        return True
 
     def __init__(
         self,
@@ -128,17 +139,24 @@ class LinearRegression(Task):
         noise_scale: float = 0.01,
         quad: float = 0.0,
         prior=None,
+        design_space: DesignSpace | None = None,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the LinearRegression task."""
         # Default prior
         if prior is None:
             prior = LinearRegressionPrior(dim_theta=dim + 1)
 
+        if design_space is None:
+            design_space = BoxDesignSpace(low=-1.0, high=1.0, event_shape=[dim])
+
         super().__init__(
             event_shape_y=[dim_y],
             event_shape_theta=[dim + 1],
             event_shape_design=[dim],
             prior=prior,
+            design_space=design_space,
+            reparameterize_outcomes=reparameterize_outcomes,
         )
 
         self.noise_scale = noise_scale
@@ -148,7 +166,7 @@ class LinearRegression(Task):
         """Returns a compact representation."""
         return (
             f"LinearRegression("
-            f"dim_y={self.event_shape_design[0]}, "
+            f"dim_y={self.event_shape_y[0]}, "
             f"dim_theta={self.event_shape_theta[0]}, "
             f"dim_design={self.event_shape_design[0]}, "
             f"noise_scale={self.noise_scale})"
@@ -182,7 +200,14 @@ class LinearRegression(Task):
 
         return mean_y.unsqueeze(-1)
 
-    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
+    def _outcome_logp(
+        self,
+        y: Tensor,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Computes log probability of observations under the model.
 
         If dim_y > 1, observations are assumed to be conditionally independent given (theta, design).
@@ -194,6 +219,10 @@ class LinearRegression(Task):
                 Parameter tensor of shape ``[b, dim_theta]``.
             design (Tensor):
                 Design tensor of shape ``[b, dim_design]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:
@@ -203,7 +232,13 @@ class LinearRegression(Task):
         logp = normal_log_prob(y, loc, self.noise_scale)
         return logp.sum(dim=-1)
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
+    def _sample_outcome(
+        self,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Samples from the likelihood using reparametrization.
 
         If dim_y > 1, observations are assumed to be conditionally independent given (theta, design).
@@ -213,6 +248,10 @@ class LinearRegression(Task):
                 Parameter tensor of shape ``[b, dim_theta]``.
             design (Tensor):
                 Design tensor of shape ``[b, dim_design]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:

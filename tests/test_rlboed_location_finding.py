@@ -1,33 +1,44 @@
 """Tests for the RL-BOED (SAC) training components."""
 
 import json
+from math import log
 
 import pytest
 import torch
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import nn
 
+from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.core.manager import Manager
 from testbed.design_nets import (
+    CategoricalPolicyNet,
+    DeepSetCategoricalActor,
+    DeepSetEncoder,
     DeepSetGaussianActor,
+    GaussianPolicyNet,
+    RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
-    TanhGaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner
-from testbed.envs import BoxDesignSpace
 from testbed.envs.history import History
+from testbed.eval.eval_policy import (
+    build_design_net as reconstruct_design_net,
+)
+from testbed.eval.eval_policy import (
+    evaluate_checkpoint,
+)
 from testbed.methods.rlboed import (
     Trainer,
     _CompactEpisodeReplayBuffer,
     _resolve_buffer_device,
     _set_seed,
-    build_design_space,
     build_env,
     build_replay_buffer,
     make_networks,
     validate_config,
 )
-from testbed.tasks import LocationFinding
+from testbed.tasks import LocationFinding, PreyPopulation
 
 SoftQNetwork = RLBOEDQNetwork
 
@@ -38,21 +49,25 @@ SoftQNetwork = RLBOEDQNetwork
 
 
 def test_actor_initializes_requested_standard_deviation():
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2, init_std=0.4)
+    actor = DeepSetGaussianActor(
+        event_shape_y=(1,), event_shape_design=(2,), init_std=0.4
+    )
     y_history = torch.randn(3, 4, 1)
     design_history = torch.randn(3, 4, 2)
 
     _, log_std = actor(y_history, design_history)
 
     torch.testing.assert_close(log_std.exp(), torch.full_like(log_std, 0.4))
-    assert torch.count_nonzero(actor.log_std_head.weight) == 0
-    assert actor.log_std_head.weight.requires_grad
+    assert torch.count_nonzero(actor.head.log_std_head.weight) == 0
+    assert actor.head.log_std_head.weight.requires_grad
 
 
 @pytest.mark.parametrize("init_std", [0.0, -0.1, 1.0, 1e-10])
 def test_actor_rejects_initial_std_outside_log_std_bounds(init_std):
     with pytest.raises(ValueError, match="init_std"):
-        DeepSetGaussianActor(dim_y=1, dim_design=2, init_std=init_std)
+        DeepSetGaussianActor(
+            event_shape_y=(1,), event_shape_design=(2,), init_std=init_std
+        )
 
 
 def test_soft_q_network_is_permutation_invariant():
@@ -141,7 +156,7 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
     def record_emitter_input(module, args):
         inputs["emitter"] = args[0].detach().clone()
 
-    critic.encoder_net.register_forward_pre_hook(record_encoder_input)
+    critic.encoder.encoder_net.register_forward_pre_hook(record_encoder_input)
     critic.emitter_net.register_forward_pre_hook(record_emitter_input)
     physical_design = torch.tensor([[1.0, 4.0]])
     observation = History(
@@ -163,10 +178,10 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
     )
 
 
-def test_deployable_policy_maps_raw_history_to_physical_designs():
+def test_gaussian_policy_maps_physical_history_to_raw_proposal():
     design_space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
-    actor = DeepSetGaussianActor(dim_y=1, dim_design=2)
-    policy = TanhGaussianPolicyNet(
+    actor = DeepSetGaussianActor(event_shape_y=(1,), event_shape_design=(2,))
+    policy = GaussianPolicyNet(
         design_space,
         actor=actor,
         normalize_design_history=True,
@@ -180,12 +195,68 @@ def test_deployable_policy_maps_raw_history_to_physical_designs():
         torch.tensor([[[0.5]]]),
         torch.tensor([[[0.0, 1.0]]]),
     )
-    expected = torch.tanh(mean) * 4.0
+    expected = mean
     actual = policy(raw_y, raw_designs)
 
     torch.testing.assert_close(actual, expected)
-    assert torch.all(actual >= -4.0)
-    assert torch.all(actual <= 4.0)
+    assert design_space.contains(design_space.to_design(actual))
+
+
+def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
+    design_space = FiniteDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
+    actor = DeepSetCategoricalActor(
+        event_shape_y=(1,), event_shape_design=(1,), n_designs=3
+    )
+    policy = CategoricalPolicyNet(
+        design_space,
+        actor=actor,
+        normalize_design_history=True,
+        outcome_bounds=(0.0, 10.0),
+    )
+    with torch.no_grad():
+        actor.head.logits_head.bias.copy_(torch.tensor([0.0, -1.0, 2.0]))
+    outcomes = torch.zeros(4, 0, 1)
+    designs = torch.zeros(4, 0, 1)
+
+    proposal = policy.propose(outcomes, designs)
+    greedy = policy(outcomes, designs)
+
+    assert design_space.contains(proposal.raw_design)
+    torch.testing.assert_close(greedy, torch.full((4, 1), 10.0))
+    torch.testing.assert_close(
+        proposal.deterministic_raw_design, torch.full((4, 1), 10.0)
+    )
+    selected_log_probs = torch.log_softmax(actor.head.logits_head.bias, dim=0)[
+        proposal.info["design_index"]
+    ]
+    torch.testing.assert_close(proposal.log_prob, selected_log_probs)
+
+
+def test_discrete_q_network_is_masked_and_permutation_invariant():
+    critic = RLBOEDDiscreteQNetwork(
+        dim_y=1,
+        dim_design=1,
+        n_designs=3,
+        design_low=1.0,
+        design_high=10.0,
+        outcome_low=0.0,
+        outcome_high=10.0,
+    )
+    designs = torch.tensor([[[1.0], [5.0], [10.0]], [[5.0], [1.0], [10.0]]])
+    outcomes = torch.tensor([[[1.0], [2.0], [1000.0]], [[3.0], [4.0], [1000.0]]])
+    mask = torch.tensor([[True, True, False], [True, True, False]])
+    observation = History(3, designs=designs, outcomes=outcomes, mask=mask)
+    permuted = History(
+        3,
+        designs=designs[:, [1, 0, 2]],
+        outcomes=outcomes[:, [1, 0, 2]],
+        mask=mask[:, [1, 0, 2]],
+    )
+
+    values = critic(observation)
+
+    assert values.shape == (2, 3)
+    torch.testing.assert_close(values, critic(permuted))
 
 
 # ============================================================================
@@ -328,8 +399,33 @@ def _tiny_cfg(**sac_overrides):
             "torch_deterministic": True,
             "device": "cpu",
             "T": 2,
+            "task": {
+                "_target_": "testbed.tasks.LocationFinding",
+                "n_sources": 1,
+                "dim_theta": 2,
+                "design_space": {
+                    "_target_": "testbed.core.design_spaces.BoxDesignSpace",
+                    "low": "${design_space.low}",
+                    "high": "${design_space.high}",
+                    "event_shape": [2],
+                },
+            },
             "design_space": {"low": -2.0, "high": 3.0},
             "reward": {"n_contrastive": 2, "outcome_low": -3.0, "outcome_high": 10.0},
+            "design_net": {
+                "_target_": "testbed.design_nets.make_deepset_stochastic_policy",
+                "dim_h": [128, 128],
+                "dim_emb": 64,
+                "log_std_min": -20.0,
+                "log_std_max": 0.0,
+                "init_std": 3**-0.5,
+                "normalize_design_history": True,
+                "design_history_bounds": [0.0, 1.0],
+                "outcome_bounds": [
+                    "${reward.outcome_low}",
+                    "${reward.outcome_high}",
+                ],
+            },
             "eval_every": 0,
             "eval_n_contrastive": 4,
             "sac": {
@@ -344,7 +440,6 @@ def _tiny_cfg(**sac_overrides):
                 "gradient_steps_per_iteration": 1,
                 "policy_lr": 1e-4,
                 "q_lr": 3e-4,
-                "policy_init_std": 3**-0.5,
                 "policy_frequency": 1,
                 "target_network_frequency": 1,
                 "alpha": None,
@@ -361,14 +456,14 @@ def _tiny_cfg(**sac_overrides):
 
 
 def _build_trainer(cfg, *, manager=None):
-    task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
-    design_space = build_design_space(cfg, task)
-    validate_config(task, cfg, design_space)
+    task = instantiate(cfg.task).to(cfg.device)
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
-    env = build_env(cfg, task, design_space)
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
+    validate_config(task, cfg, design_space)
+    env = build_env(cfg, task)
     replay_buffer = build_replay_buffer(cfg, task)
-    designer = PolicyDesigner(task, cfg.T, nets.actor, deterministic=False)
+    designer = PolicyDesigner(task, cfg.T, nets.actor)
     return Trainer(task, designer, env, replay_buffer, nets, cfg, manager=manager)
 
 
@@ -379,11 +474,10 @@ def _episodic_returns(trainer):
 
 def test_trainer_requires_policy_designer():
     cfg = _tiny_cfg()
-    task = LocationFinding(n_sources=1, dim_theta=2).to(cfg.device)
-    design_space = build_design_space(cfg, task)
+    task = instantiate(cfg.task).to(cfg.device)
     _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, design_space, cfg, task.device)
-    env = build_env(cfg, task, design_space)
+    nets = make_networks(task, cfg, task.device)
+    env = build_env(cfg, task)
     replay_buffer = build_replay_buffer(cfg, task)
 
     with pytest.raises(AssertionError):
@@ -398,12 +492,33 @@ def test_validate_config_requires_box_design_space():
         validate_config(task, cfg, object())
 
 
+def test_validate_config_accepts_categorical_design_space():
+    cfg = _tiny_cfg()
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    design_space = FiniteDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]]))
+
+    validate_config(task, cfg, design_space)
+
+
+def test_rlboed_uses_a_tasks_categorical_design_space():
+    cfg = _tiny_cfg()
+    task = PreyPopulation()
+    cfg.task = {
+        "_target_": "testbed.tasks.PreyPopulation",
+    }
+    design_space = make_networks(task, cfg, task.device).design_space
+
+    assert isinstance(design_space, FiniteDesignSpace)
+    torch.testing.assert_close(design_space.values, task.design_space.values)
+    validate_config(task, cfg, design_space)
+
+
 def test_validate_config_rejects_inverted_outcome_bounds():
     cfg = _tiny_cfg()
     cfg.reward.outcome_low = 10.0
     cfg.reward.outcome_high = -3.0
     task = LocationFinding(n_sources=1, dim_theta=2)
-    design_space = build_design_space(cfg, task)
+    design_space = BoxDesignSpace(-2.0, 3.0, task.event_shape_design)
 
     with pytest.raises(ValueError, match="outcome_low"):
         validate_config(task, cfg, design_space)
@@ -418,6 +533,70 @@ def test_train_step_updates_actor_parameters():
     assert any(
         not torch.equal(b, a) for b, a in zip(before, trainer.nets.actor.parameters())
     )
+
+
+def test_categorical_train_step_updates_networks_with_finite_losses():
+    cfg = _tiny_cfg()
+    cfg.reward.outcome_low = 0.0
+    cfg.reward.outcome_high = 300.0
+    task = PreyPopulation().to(cfg.device)
+    cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
+    _set_seed(cfg.seed, cfg.torch_deterministic)
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
+    validate_config(task, cfg, design_space)
+    trainer = Trainer(
+        task,
+        PolicyDesigner(task, cfg.T, nets.actor),
+        build_env(cfg, task),
+        build_replay_buffer(cfg, task),
+        nets,
+        cfg,
+    )
+    actor_before = [parameter.clone() for parameter in trainer.nets.actor.parameters()]
+    critic_before = [parameter.clone() for parameter in trainer.nets.qf1.parameters()]
+
+    trainer.train_step()
+
+    assert isinstance(trainer.nets.actor, CategoricalPolicyNet)
+    assert torch.isfinite(trainer._qf_loss)
+    assert torch.isfinite(trainer._actor_loss)
+    assert any(
+        not torch.equal(before, after)
+        for before, after in zip(actor_before, trainer.nets.actor.parameters())
+    )
+    assert any(
+        not torch.equal(before, after)
+        for before, after in zip(critic_before, trainer.nets.qf1.parameters())
+    )
+
+
+def test_categorical_temperature_increases_when_entropy_is_below_target():
+    cfg = _tiny_cfg()
+    cfg.reward.outcome_low = 0.0
+    cfg.reward.outcome_high = 300.0
+    task = PreyPopulation().to(cfg.device)
+    cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
+    nets = make_networks(task, cfg, task.device)
+    design_space = nets.design_space
+    with torch.no_grad():
+        for parameter in nets.actor.parameters():
+            parameter.zero_()
+        nets.actor.actor.head.logits_head.bias[0] = 10.0
+    trainer = Trainer(
+        task,
+        PolicyDesigner(task, cfg.T, nets.actor),
+        build_env(cfg, task),
+        build_replay_buffer(cfg, task),
+        nets,
+        cfg,
+    )
+    alpha_before = trainer.nets.log_alpha.exp().item()
+    assert trainer.target_entropy == pytest.approx(0.98 * log(design_space.n_designs))
+
+    trainer.train_step()
+
+    assert trainer.nets.log_alpha.exp().item() > alpha_before
 
 
 def test_train_is_reproducible_with_fixed_seed():
@@ -440,8 +619,14 @@ def test_train_writes_checkpoints_and_metrics(tmp_path):
     run_dir = tmp_path / "run"
     final = torch.load(run_dir / "final_step.pt", weights_only=True)
     assert final["step"] == cfg.sac.num_training_iterations - 1
-    assert "designer" in final
+    assert "design_net" in final
+    assert "designer" not in final
+    assert "actor" not in final
     assert (run_dir / "best.pt").exists()
+    best = torch.load(run_dir / "best.pt", weights_only=True)
+    assert "design_net" in best
+    assert "designer" not in best
+    assert "actor" not in best
 
     records = [
         json.loads(line)
@@ -458,9 +643,9 @@ def test_trainer_produces_deployable_designer(tmp_path):
     trainer.train()
 
     assert isinstance(trainer.designer, PolicyDesigner)
-    assert isinstance(trainer.designer.policy_net, TanhGaussianPolicyNet)
-    assert not trainer.designer.deterministic
-    assert trainer.designer.policy_net.design_history_bounds == (0.0, 1.0)
+    assert isinstance(trainer.designer.design_net, GaussianPolicyNet)
+    assert trainer.designer.requires_policy_log_probs
+    assert trainer.designer.design_net.design_history_bounds == (0.0, 1.0)
 
     checkpoint = trainer.build_checkpoint(step=cfg.sac.num_training_iterations - 1)
     assert checkpoint["config"]["sac"]["gamma"] == cfg.sac.gamma
@@ -475,16 +660,18 @@ def test_trainer_produces_deployable_designer(tmp_path):
     torch.testing.assert_close(checkpoint["design_high"], torch.full((2,), 3.0))
 
     theta = trainer.task.sample_prior(2)
-    y_history, design_history = trainer.designer.rollout(theta)
-    assert y_history.shape == (2, 2, 1)
-    assert design_history.shape == (2, 2, 2)
-    assert torch.all(design_history >= -2.0)
-    assert torch.all(design_history <= 3.0)
+    rollout = trainer.designer.rollout(theta)
+    assert rollout.y_history.shape == (2, 2, 1)
+    assert rollout.design_history.shape == (2, 2, 2)
+    assert torch.all(rollout.design_history >= -2.0)
+    assert torch.all(rollout.design_history <= 3.0)
 
     checkpoint_path = tmp_path / "rlboed.pt"
     torch.save(trainer.build_checkpoint(), checkpoint_path)
     reloaded = torch.load(checkpoint_path, weights_only=True)
-    assert "designer" in reloaded
+    assert "design_net" in reloaded
+    assert "designer" not in reloaded
+    assert "actor" not in reloaded
     assert "actor_optimizer" in reloaded
 
 

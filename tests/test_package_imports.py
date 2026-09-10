@@ -32,6 +32,8 @@ TASKS = [
     "LinearRegression",
     "LocationFinding",
     "MichaelisMenten",
+    "PreyPopulation",
+    "StochasticPendulum",
     "Task",
 ]
 

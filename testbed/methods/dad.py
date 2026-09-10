@@ -5,7 +5,7 @@ import torch
 from hydra.utils import instantiate
 
 from testbed.core.setup import setup
-from testbed.design_objectives import SNMC, SPCE, Reinforce
+from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import PolicyDesigner
 
 # ============================================================================
@@ -16,7 +16,9 @@ from testbed.designers import PolicyDesigner
 class Trainer:
     """Training class for DAD-style training."""
 
-    def __init__(self, task, designer, objective, optimizer, cfg, manager=None):
+    def __init__(
+        self, task, designer, objective, optimizer, cfg, manager=None, scheduler=None
+    ):
         """Initializes the trainer."""
         assert isinstance(designer, PolicyDesigner), (
             "This Trainer assumes your designer is a PolicyDesigner object."
@@ -27,6 +29,7 @@ class Trainer:
         self.objective = objective
         self.optimizer = optimizer
         self.cfg = cfg
+        self.scheduler = scheduler
         self.manager = manager
 
         # checkpointing
@@ -34,7 +37,7 @@ class Trainer:
 
     def train(self):
         """Full training loop."""
-        self.designer.policy_net.train()
+        self.designer.design_net.train()
 
         for step in range(self.cfg.n_train_iter):
             metrics = self.train_step()
@@ -56,7 +59,8 @@ class Trainer:
         save_path = self.manager.path("final_step.pt")
         torch.save(
             {
-                "model": self.designer.policy_net.state_dict(),
+                "design_net": self.designer.design_net.state_dict(),
+                "use_raw_history": self.designer.use_raw_history,
                 "step": step,
             },
             save_path,
@@ -70,19 +74,8 @@ class Trainer:
         cfg = self.cfg
 
         theta0 = self.task.sample_prior(cfg.n_outer)
-
-        # Policy log probs are recorded at sample time so the value matches the
-        # exact policy distribution the designs were drawn from.
-        if self.objective.requires_policy_log_probs:
-            y_obs, design_obs, policy_log_probs = self.designer.rollout(
-                theta0, return_policy_log_probs=True
-            )
-            gain = self.objective.estimate_gain(
-                y_obs, design_obs, theta0, policy_log_probs
-            )
-        else:
-            y_obs, design_obs = self.designer.rollout(theta0)
-            gain = self.objective.estimate_gain(y_obs, design_obs, theta0)
+        rollout = self.designer.rollout(theta0)
+        gain = self.objective.estimate_gain(rollout)
         loss = -gain
 
         self.optimizer.zero_grad()
@@ -90,13 +83,16 @@ class Trainer:
 
         if cfg.grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(
-                self.designer.policy_net.parameters(), cfg.grad_clip
+                self.designer.design_net.parameters(), cfg.grad_clip
             )
 
         self.optimizer.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
 
         return {
             "gain": gain.item(),
+            "lr": self.optimizer.param_groups[0]["lr"],
         }
 
     def evaluate(self):
@@ -129,7 +125,8 @@ class Trainer:
 
             torch.save(
                 {
-                    "model": self.designer.policy_net.state_dict(),
+                    "design_net": self.designer.design_net.state_dict(),
+                    "use_raw_history": self.designer.use_raw_history,
                     "step": step,
                     "metric": metric_val,
                 },
@@ -147,18 +144,18 @@ class Trainer:
 
 
 def build_design_net(cfg, task):
-    """Instantiates the design policy network."""
-    net = instantiate(
+    """Instantiates the design policy network.
+
+    Any raw-to-design reparametrization (e.g. HTD's exp/sigmoid transform)
+    lives on task.design_space and is applied automatically by the designer
+    -- no net-level wrapper needed.
+    """
+    return instantiate(
         cfg.design_net,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
     )
-    # Optional wrapper (e.g. the HTD constraint transform), applied after the
-    # base net so event shapes still reach it.
-    if cfg.design_net_wrapper is not None:
-        net = instantiate(cfg.design_net_wrapper, design_net=net)
-    return net
 
 
 def build_objective(cfg, task):
@@ -171,10 +168,10 @@ def build_objective(cfg, task):
     objectives = {
         "snmc": lambda: SNMC(task, n_contrastive=n_inner),
         "spce": lambda: SPCE(task, n_contrastive=n_inner),
-        "reinforce": lambda: Reinforce(
+        "reinforce": lambda: SPCEReinforce(
             task,
-            SPCE(task, n_contrastive=n_inner).per_sample_gain,
-            cfg.objective.requires_policy_log_probs,
+            n_contrastive=n_inner,
+            stochastic_design_policy=cfg.objective.requires_policy_log_probs,
             baseline=cfg.objective.baseline,
         ),
     }
@@ -187,7 +184,7 @@ def build_objective(cfg, task):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="dad")
+@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/dad")
 def main(cfg):
     """Entry point for DAD training.
 
@@ -208,18 +205,25 @@ def main(cfg):
         cfg.T,
         policy_net,
         reparameterize_policy=cfg.objective.reparameterize_policy,
+        use_raw_history=cfg.use_raw_history,
     )
-    # Update config to match designer
-    cfg.objective.requires_policy_log_probs = (
-        designer.reinforce_requires_policy_log_probs
-    )
+    # Update config to match the designer's proposal/gradient capability.
+    cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
 
     objective = build_objective(cfg, task)
 
     optimizer = torch.optim.Adam(
         policy_net.parameters(),
         lr=cfg.lr,
+        betas=cfg.betas,
     )
+
+    # Multiply the LR by lr_gamma once every lr_anneal_every steps (DAD paper D.2).
+    scheduler = None
+    if cfg.lr_anneal_every is not None and cfg.lr_gamma is not None:
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=cfg.lr_anneal_every, gamma=cfg.lr_gamma
+        )
 
     trainer = Trainer(
         task=task,
@@ -228,6 +232,7 @@ def main(cfg):
         optimizer=optimizer,
         cfg=cfg,
         manager=manager,
+        scheduler=scheduler,
     )
 
     trainer.train()

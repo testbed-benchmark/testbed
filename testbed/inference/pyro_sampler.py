@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from math import prod
-from typing import Literal
+from typing import ClassVar, Literal
 
 import pyro
 import torch
@@ -26,7 +26,7 @@ class TaskPriorDist(TorchDistributionMixin, td.Distribution):
     ``support = independent(real, len(event_shape_theta))``; identity transform.
     """
 
-    arg_constraints: dict = {}
+    arg_constraints: ClassVar[dict] = {}
     has_rsample: bool = False
 
     def __init__(self, task: Task) -> None:
@@ -55,8 +55,10 @@ class TaskPriorDist(TorchDistributionMixin, td.Distribution):
         """Returns the prior support constraint."""
         return self._support
 
-    def sample(self, sample_shape: torch.Size = torch.Size([])) -> torch.Tensor:
+    def sample(self, sample_shape: torch.Size | None = None) -> torch.Tensor:
         """Draws prior samples."""
+        if sample_shape is None:
+            sample_shape = torch.Size()
         n = prod(sample_shape) if len(sample_shape) > 0 else 1
         raw = self._task.prior.sample(n_samples=n)  # [n, *event_shape_theta]
         return raw.reshape(*sample_shape, *self._task.event_shape_theta)

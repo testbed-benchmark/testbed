@@ -36,30 +36,60 @@ class Distribution(ABC, nn.Module):
                 return torch.device("cpu")
 
 
+def _wrapped_device(dist) -> torch.device:
+    """Returns the device a torch.distributions object's tensors live on.
+
+    Composite distributions (MixtureSameFamily, Independent) hold no tensors
+    directly, so nested distributions are searched too.
+    """
+    for value in dist.__dict__.values():
+        if isinstance(value, torch.Tensor):
+            return value.device
+        if isinstance(value, torch.distributions.Distribution):
+            return _wrapped_device(value)
+    return torch.device("cpu")
+
+
 class TorchDistribution(Distribution):
-    """Adapts torch.distributions.Distribution to our Distribution class."""
+    """Adapts torch.distributions.Distribution to our Distribution class.
+
+    A torch distribution keeps its parameters as plain attributes, which
+    ``nn.Module.to()`` cannot reach, so ``.to(device)`` leaves them where they
+    were. This wrapper tracks the requested device with a buffer instead and
+    moves what crosses its interface: samples come back on that device, and
+    values handed to ``log_prob`` are sent to the parameters' device to be
+    evaluated. Parameters of a design/prior distribution are small and the
+    transfers are per-call, so leaving them put costs little.
+    """
 
     def __init__(self, dist):
         """Wraps a torch distribution."""
         super().__init__()
         self.dist = dist
+        # Empty, non-persistent (so it stays out of state_dict) and carries no
+        # data: it exists only because .to() moves buffers, which is what gives
+        # this wrapper a device to track. Starts where the wrapped
+        # distribution's parameters are, so an untouched wrapper reports the
+        # device it was built on.
+        self.register_buffer(
+            "_device_tracker",
+            torch.empty(0, device=_wrapped_device(dist)),
+            persistent=False,
+        )
 
     @property
     def device(self) -> torch.device:
-        """Infers the wrapped distribution device."""
-        params = self.dist.__dict__.values()
-        for p in params:
-            if isinstance(p, torch.Tensor):
-                return p.device
-        return torch.device("cpu")
+        """Returns the device this distribution produces samples on."""
+        return self._device_tracker.device
 
     def sample(self, n_samples: int = 1) -> Tensor:
         """Draws samples from the wrapped distribution."""
-        return self.dist.sample((n_samples,))
+        return self.dist.sample((n_samples,)).to(self.device)
 
     def log_prob(self, theta: Tensor) -> Tensor:
         """Evaluates log probabilities under the wrapped distribution."""
-        return self.dist.log_prob(theta)
+        log_prob = self.dist.log_prob(theta.to(_wrapped_device(self.dist)))
+        return log_prob.to(self.device)
 
 
 class EmpiricalDistribution(Distribution):

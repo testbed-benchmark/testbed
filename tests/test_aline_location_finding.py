@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.manager import Manager
 from testbed.design_nets import AlineModel, AlineOutput
-from testbed.envs import BoxDesignSpace
 from testbed.methods.aline import AlineRollout, Trainer, validate_config
 from testbed.tasks import LocationFinding
 
@@ -140,8 +140,8 @@ def test_rollout_samples_in_bounds_without_replacement():
     assert rollout.designs.shape == (4, 3, 2)
     assert rollout.outcomes.shape == (4, 3, 1)
     assert rollout.posterior_log_probs.shape == (4, 3)
-    assert rollout.action_log_probs.shape == (4, 2)
-    assert rollout.rewards.shape == (4, 2)
+    assert rollout.action_log_probs.shape == (4, 1)
+    assert rollout.rewards.shape == (4, 1)
     assert trainer.design_space.contains(rollout.designs)
     for designs in rollout.designs:
         assert torch.unique(designs, dim=0).shape[0] == trainer.cfg.T
@@ -187,41 +187,33 @@ def test_warmup_only_updates_inference_then_joint_updates_policy():
     )
 
 
-def test_single_outer_sample_keeps_policy_gradient():
+def test_single_outer_sample_has_finite_losses_and_gradients():
     torch.manual_seed(4)
-    trainer, model = _make_trainer(
-        cfg=_make_cfg(n_outer=1, n_warmup_iter=0)
-    )
-
+    trainer, model = _make_trainer(cfg=_make_cfg(n_outer=1, n_warmup_iter=0))
     metrics = trainer.train_step(step=0)
-
-    assert torch.isfinite(torch.tensor(metrics["policy_loss"]))
-    assert any(
-        p.grad is not None and torch.any(p.grad != 0)
-        for p in model.acquisition_head.parameters()
+    assert all(torch.isfinite(torch.tensor(v)) for v in metrics.values())
+    assert all(
+        torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None
     )
 
 
-def test_policy_discount_starts_at_zero_power():
-    trainer, _ = _make_trainer(
-        cfg=_make_cfg(n_outer=2, n_warmup_iter=0, gamma=0.5)
-    )
+def test_policy_reward_matches_reference_clipping_and_standardization():
+    trainer, _ = _make_trainer(cfg=_make_cfg(n_outer=2, n_warmup_iter=0, gamma=0.5))
     rollout = AlineRollout(
         outcomes=torch.empty(2, 0, 1),
         designs=torch.empty(2, 0, 2),
         posterior_log_probs=torch.zeros(2, 2, requires_grad=True),
-        action_log_probs=torch.tensor(
-            [[1.0, 2.0], [3.0, 4.0]], requires_grad=True
-        ),
-        rewards=torch.tensor([[1.0, 3.0], [3.0, 1.0]]),
+        action_log_probs=torch.tensor([[1.0, 2.0], [4.0, 4.0]], requires_grad=True),
+        rewards=torch.tensor([[-2.0, 3.0], [-1.0, -1.0]]),
         target_mask=torch.tensor([True, True]),
         final_output=None,
+        inference_log_probs=torch.zeros(2, 2, requires_grad=True),
     )
-    trainer.rollout = lambda theta, random_policy=False: rollout
+    trainer.rollout = lambda theta, **kwargs: rollout
 
     metrics = trainer.train_step(step=0)
 
-    assert metrics["policy_loss"] == pytest.approx(-0.25)
+    assert metrics["policy_loss"] == pytest.approx(1 / (2 * 2**0.5))
 
 
 def test_validation_rejects_invalid_target_subset():
@@ -272,3 +264,198 @@ def test_train_logs_metrics_and_saves_checkpoints(tmp_path):
     assert any("inference_loss" in record for record in records)
     assert any("eval/posterior_nll" in record for record in records)
     assert any("eval/spce" in record for record in records)
+
+
+@pytest.mark.parametrize("training", [True, False])
+def test_empty_context_has_finite_outputs_and_gradients(training):
+    trainer, model = _make_trainer(cfg=_make_cfg(n_initial=0))
+    model.train(training)
+    candidates = trainer.design_space.sample((2, 3))
+    output = model(
+        torch.empty(2, 0, 1),
+        torch.empty(2, 0, 2),
+        candidates,
+        torch.tensor([True, False]),
+    )
+    loss = output.mixture_means.sum() + output.acquisition_logits.sum()
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert all(
+        torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None
+    )
+
+
+def test_rollout_passes_history_and_trains_all_parameters_before_acquisition():
+    trainer, model = _make_trainer(cfg=_make_cfg(target_subsets=[[0]]))
+    sample_outcome = trainer.task.sample_outcome
+    lengths = []
+
+    def sample(theta, design, y_history=None, design_history=None):
+        lengths.append(y_history.shape[1])
+        assert y_history.shape[1] == design_history.shape[1]
+        return sample_outcome(
+            theta, design, y_history=y_history, design_history=design_history
+        )
+
+    trainer.task.sample_outcome = sample
+    outputs = []
+    handle = model.register_forward_hook(
+        lambda module, inputs, output: outputs.append(output)
+    )
+    theta = trainer.task.sample_prior(4)
+    rollout = trainer.rollout(theta)
+    handle.remove()
+    assert lengths == [0, 1, 2]
+    expected = torch.stack(
+        [out.posterior.log_prob(theta.reshape(4, 2)).mean(-1) for out in outputs[1:-1]],
+        dim=1,
+    )
+    torch.testing.assert_close(rollout.inference_log_probs, expected)
+    targeted = [out.posterior.log_prob(theta.reshape(4, 2))[:, 0] for out in outputs]
+    torch.testing.assert_close(
+        rollout.rewards[:, 0], (targeted[2] - targeted[1]).detach()
+    )
+
+
+def test_joint_boundary_resets_optimizer_with_reference_learning_rates():
+    trainer, model = _make_trainer()
+    trainer.train_step(0)
+    old = trainer.optimizer
+    trainer.train_step(1)
+    assert trainer.optimizer is not old
+    assert [g["lr"] for g in trainer.optimizer.param_groups] == pytest.approx(
+        [2e-4, 1e-3]
+    )
+    assert {id(p) for p in trainer.optimizer.param_groups[1]["params"]} == {
+        id(p) for p in model.acquisition_head.parameters()
+    }
+
+
+@pytest.mark.parametrize("training", [True, False])
+def test_forward_matches_authors_code(training):
+    # Optional integration check against the unmodified sibling checkout.
+    # Load just the neural classes to avoid importing its training-only deps.
+    import ast
+    import os
+    from pathlib import Path
+    from typing import Any, List, Optional, Tuple
+
+    reference = Path(
+        os.environ.get(
+            "ALINE_REFERENCE_DIR", Path(__file__).resolve().parents[2] / "ALINE"
+        )
+    )
+    if not (reference / "model/encoder.py").exists():
+        pytest.skip(
+            "Set ALINE_REFERENCE_DIR to the authors' checkout for parity checks"
+        )
+    namespace = dict(
+        torch=torch,
+        nn=torch.nn,
+        F=torch.nn.functional,
+        Tensor=torch.Tensor,
+        TransformerEncoderLayer=torch.nn.TransformerEncoderLayer,
+        Any=Any,
+        List=List,
+        Optional=Optional,
+        Tuple=Tuple,
+        AttrDict=SimpleNamespace,
+    )
+    for filename, names in [
+        ("embedder.py", {"Embedder"}),
+        ("encoder.py", {"EfficientTransformerEncoderLayer", "Encoder"}),
+        ("head.py", {"GMMTargetHead", "AcquisitionHead"}),
+    ]:
+        path = reference / "model" / filename
+        tree = ast.parse(path.read_text())
+        tree.body = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name in names
+        ]
+        exec(compile(tree, str(path), "exec"), namespace)
+    torch.manual_seed(42)
+    trainer, model = _make_trainer()
+    model.train(training)
+    embedder = namespace["Embedder"](
+        2, 1, 8, 16, n_target_theta=2, embedding_type="theta"
+    )
+    encoder = namespace["Encoder"](8, 16, 2, 0.0, 1)
+    encoder.device = "cpu"
+    head = namespace["GMMTargetHead"](1, 8, 16, 3)
+    acquisition = namespace["AcquisitionHead"](8, 16, False)
+    embedder.x_embedder.load_state_dict(model.design_embedder.state_dict())
+    embedder.y_embedder.load_state_dict(model.outcome_embedder.state_dict())
+    embedder.theta_tokens.data.copy_(model.target_tokens.data)
+    encoder.encoder.load_state_dict(model.transformer.state_dict())
+    head.heads.load_state_dict(model.inference_heads.state_dict())
+    acquisition.predictor.load_state_dict(model.acquisition_head.state_dict())
+    for module in [embedder, encoder, head, acquisition]:
+        module.train(training)
+    context_x = torch.randn(2, 3, 2)
+    context_y = torch.randn(2, 3, 1)
+    candidates = torch.randn(2, 4, 2)
+    mask = torch.tensor([True, False])
+    batch = SimpleNamespace(
+        context_x=context_x,
+        context_y=context_y / 10,
+        query_x=candidates,
+        target_all=torch.zeros(2, 2, 1),
+        target_mask=mask,
+    )
+    # Use no_grad in eval to exercise the native eval paths too.
+    with torch.set_grad_enabled(training):
+        encoded = encoder(batch, embedder(batch))
+        expected = head(batch, encoded[:, 7:])
+        expected_policy = acquisition(encoded[:, 3:7])
+        actual = model(context_y, context_x, candidates, mask)
+        torch.testing.assert_close(actual.mixture_means, expected.mixture_means)
+        torch.testing.assert_close(actual.mixture_scales, expected.mixture_stds)
+        torch.testing.assert_close(
+            actual.mixture_logits.softmax(-1), expected.mixture_weights
+        )
+        torch.testing.assert_close(
+            actual.acquisition_logits.softmax(-1), expected_policy
+        )
+        if training:
+            actual.mixture_means.sum().backward()
+            expected.mixture_means.sum().backward()
+            torch.testing.assert_close(
+                model.design_embedder[0].weight.grad, embedder.x_embedder[0].weight.grad
+            )
+
+
+def test_hydra_entry_point_trains_evaluates_and_saves(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "testbed.methods.aline",
+            "device=cpu",
+            "T=3",
+            "pool_size=4",
+            "n_train_iter=2",
+            "n_warmup_iter=1",
+            "n_outer=4",
+            "n_outer_eval=4",
+            "n_inner_eval=2",
+            "eval_every=1",
+            "model.embedding_dim=8",
+            "model.feedforward_dim=16",
+            "model.n_heads=2",
+            "model.n_layers=1",
+            "model.n_components=3",
+            f"hydra.run.dir={tmp_path}",
+        ],
+        env={**os.environ, "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "best.pt").exists()
+    assert (tmp_path / "final_step.pt").exists()

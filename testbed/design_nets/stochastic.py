@@ -1,91 +1,209 @@
 """Stochastic policy networks for reinforcement learning BED agents."""
 
-from dataclasses import dataclass
-from math import atanh, log, prod
+from collections.abc import Sequence
+from math import atanh, log
 
 import torch
-import torch.nn as nn
-from torch import Tensor
-from torch.distributions import Normal
+from torch import Tensor, nn
+from torch.distributions import Categorical, Normal
 
-from testbed.design_nets.base_design_net import DesignNet
+from testbed.core.design_spaces import (
+    BoxDesignSpace,
+    DefaultDesignSpace,
+    DesignSpace,
+    FiniteDesignSpace,
+)
+from testbed.design_nets.base import DesignNet, DesignProposal
+from testbed.design_nets.encoder import DeepSetEncoder, HistoryEncoder
+from testbed.design_nets.history import PreparedHistory, prepare_history
 from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
-from testbed.envs.design_spaces import BoxDesignSpace
-
-
-@dataclass
-class PolicySample:
-    """Sampled design and log-probability from a stochastic policy.
-
-    Attributes:
-        design: Sampled bounded design with shape
-            ``[*batch_shape, *event_shape_design]``.
-        log_prob: Summed design log probability with shape ``[*batch_shape]``.
-        deterministic_design: Bounded deterministic design, typically the squashed
-            policy mean, with shape ``[*batch_shape, *event_shape_design]``.
-        raw_design: Optional unsquashed Gaussian design with shape
-            ``[*batch_shape, *event_shape_design]``.
-    """
-
-    design: Tensor
-    log_prob: Tensor
-    deterministic_design: Tensor
-    raw_design: Tensor | None = None
 
 
 class StochasticDesignNet(DesignNet):
-    """Design network with an RL-friendly stochastic design API."""
+    """Base network for sampled proposals with policy log probabilities.
 
-    def sample(
-        self,
-        y_history,
-        design_history,
-        *,
-        mask: Tensor | None = None,
-        deterministic: bool = False,
-        reparameterize_policy: bool = True,
-    ) -> PolicySample:
-        """Samples a design and returns its policy log probability.
+    Subclasses implement :meth:`propose` and set the policy's history
+    normalization contract. Their proposals participate in score-function
+    training unless they support and are asked for reparameterized samples.
+    """
 
-        Args:
-            y_history: Outcome history with shape
-                ``[*batch_shape, T, *event_shape_y]``.
-            design_history: Design history with shape
-                ``[*batch_shape, T, *event_shape_design]``.
-            mask: Optional boolean mask for padded histories with shape
-                ``[*batch_shape, T]``.
-            deterministic: If True, return the deterministic design instead
-                of a random sample.
-            reparameterize_policy: If False, draw a non-differentiable sample
-                so the log probability's gradient is the pure score (REINFORCE).
+    produces_policy_log_probs = True
+    raw_designs_are_physical = False
 
-        Returns:
-            A policy sample containing the design, log probability, deterministic
-            design, and optional raw design.
-        """
-        raise NotImplementedError
-
-    def sample_from_observation(self, obs, *, deterministic: bool = False):
-        """Samples from a ``History`` observation.
+    def _prepare_histories(
+        self, y_history, design_history, *, mask: Tensor | None = None
+    ) -> PreparedHistory:
+        """Validates, flattens, and optionally normalizes policy histories.
 
         Args:
-            obs: ``History`` returned by ``BEDEnv.reset()`` or ``BEDEnv.step()``.
-            deterministic: If True, return the deterministic design instead
-                of a random sample.
+            y_history: Outcome histories in the public history format.
+            design_history: Physical design histories in the public format.
+            mask: Optional validity mask for padded history positions.
 
         Returns:
-            A policy sample for the observation.
+            PreparedHistory: Flattened actor inputs and the flattened mask.
         """
-        return self.sample(
-            obs.outcomes,
-            obs.designs,
-            mask=obs.mask,
-            deterministic=deterministic,
+        encoder = getattr(self.actor, "encoder", None)
+        event_shape_y = getattr(self.actor, "event_shape_y", None)
+        if event_shape_y is None and encoder is not None:
+            event_shape_y = encoder.event_shape_y
+        prepared = prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=event_shape_y,
+            event_shape_design=self.event_shape_design,
+            mask=mask,
+            device=self.design_low.device,
+            dtype=self.design_low.dtype,
+        )
+
+        y_flat = prepared.y_flat
+        design_flat = prepared.design_flat
+        if self.normalize_design_history:
+            low, high = self.design_history_bounds
+            width = self.design_high - self.design_low
+            normalized = low + (design_flat - self.design_low) * (high - low) / width
+            design_flat = torch.where(
+                width == 0, torch.zeros_like(normalized), normalized
+            )
+        if self._normalize_outcomes:
+            y_flat = affine_rescale(
+                y_flat,
+                self.outcome_low.reshape(-1),
+                self.outcome_high.reshape(-1),
+                0.0,
+                1.0,
+            )
+        return PreparedHistory(
+            prepared.batch_shape, y_flat, design_flat, prepared.mask_flat
         )
 
 
+class GaussianHead(nn.Module):
+    """Maps a history encoding to Gaussian policy parameters."""
+
+    def __init__(
+        self,
+        dim_emb: int,
+        dim_design: int,
+        dim_h=(128, 128),
+        *,
+        log_std_min: float = -20.0,
+        log_std_max: float = 0.0,
+        init_std: float = 3**-0.5,
+    ):
+        """Initializes the Gaussian readout.
+
+        Args:
+            dim_emb: Dimension of the input history encoding.
+            dim_design: Flattened design dimension.
+            dim_h: Hidden layer widths; an int specifies one layer.
+            log_std_min: Lower bound for Gaussian log standard deviations.
+            log_std_max: Upper bound for Gaussian log standard deviations.
+            init_std: Initial unsquashed Gaussian standard deviation.
+        """
+        super().__init__()
+        self.dim_emb = int(dim_emb)
+        self.dim_design = int(dim_design)
+        self.log_std_min = float(log_std_min)
+        self.log_std_max = float(log_std_max)
+        self.init_std = float(init_std)
+        if self.init_std <= 0:
+            raise ValueError("init_std must be positive.")
+        init_log_std = log(self.init_std)
+        if not self.log_std_min < init_log_std < self.log_std_max:
+            raise ValueError(
+                "init_std must have a logarithm strictly between "
+                "log_std_min and log_std_max."
+            )
+
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
+        self.actor_net = MLP(
+            [self.dim_emb] + hidden_widths,
+            activation=nn.ReLU,
+            activate_last=True,
+        )
+        self.mean_head = nn.Linear(hidden_widths[-1], self.dim_design)
+        self.log_std_head = nn.Linear(hidden_widths[-1], self.dim_design)
+        _initialize_linear_layers(self)
+        nn.init.zeros_(self.log_std_head.weight)
+        scaled_log_std = (
+            2.0
+            * (
+                (init_log_std - self.log_std_min)
+                / (self.log_std_max - self.log_std_min)
+            )
+            - 1.0
+        )
+        nn.init.constant_(self.log_std_head.bias, atanh(scaled_log_std))
+
+    def forward(self, encoding: Tensor) -> tuple[Tensor, Tensor]:
+        """Returns the Gaussian mean and log standard deviation."""
+        hidden = self.actor_net(encoding)
+        mean = self.mean_head(hidden)
+        log_std = torch.tanh(self.log_std_head(hidden))
+        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
+            log_std + 1
+        )
+        return mean, log_std
+
+
+class CategoricalHead(nn.Module):
+    """Maps a history encoding to categorical design logits."""
+
+    def __init__(self, dim_emb: int, n_designs: int, dim_h=(128, 128)):
+        """Initializes the categorical readout.
+
+        Args:
+            dim_emb: Width of each history embedding.
+            n_designs: Number of designs represented by the logits.
+            dim_h: Hidden layer widths; an integer specifies one layer.
+        """
+        super().__init__()
+        self.dim_emb = int(dim_emb)
+        self.n_designs = int(n_designs)
+        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
+        self.actor_net = MLP([self.dim_emb] + hidden_widths, activation=nn.ReLU)
+        self.logits_head = nn.Linear(hidden_widths[-1], self.n_designs)
+        _initialize_linear_layers(self)
+
+    def forward(self, encoding: Tensor) -> Tensor:
+        """Returns one categorical logit per design.
+
+        Args:
+            encoding: History encodings with shape ``[batch, dim_emb]``.
+
+        Returns:
+            Tensor: Logits with shape ``[batch, n_designs]``.
+        """
+        return self.logits_head(self.actor_net(encoding))
+
+
 class GaussianPolicyActor(nn.Module):
-    """Maps flattened experimental histories to Gaussian policy parameters."""
+    """History encoder followed by a Gaussian policy head."""
+
+    def __init__(
+        self,
+        encoder: HistoryEncoder,
+        head: GaussianHead,
+    ):
+        """Initializes an encoder and Gaussian head pair.
+
+        The encoder and head must produce and consume the same embedding
+        dimension.
+
+        Args:
+            encoder: History encoder that produces the Gaussian-head input.
+            head: Readout that maps encoder outputs to Gaussian parameters.
+
+        Raises:
+            ValueError: If the encoder and head embedding widths differ.
+        """
+        super().__init__()
+        if encoder.dim_emb != head.dim_emb:
+            raise ValueError("encoder and head embedding dimensions must match.")
+        self.encoder = encoder
+        self.head = head
 
     def forward(
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
@@ -101,18 +219,18 @@ class GaussianPolicyActor(nn.Module):
             Gaussian mean and log standard deviation, both with shape
             ``[batch, dim_design]``.
         """
-        raise NotImplementedError
+        return self.head(self.encoder.encode_flat(y_history, design_history, mask=mask))
 
 
 class DeepSetGaussianActor(GaussianPolicyActor):
-    """DeepSets-style Gaussian actor using masked sum pooling over history."""
+    """Preset: ``DeepSetEncoder`` followed by a ``GaussianHead``."""
 
     def __init__(
         self,
         *,
-        dim_design: int,
-        dim_y: int = 1,
-        dim_h=[128, 128],
+        event_shape_y: Sequence[int],
+        event_shape_design: Sequence[int],
+        dim_h=(128, 128),
         dim_emb: int = 64,
         log_std_min: float = -20.0,
         log_std_max: float = 0.0,
@@ -121,90 +239,138 @@ class DeepSetGaussianActor(GaussianPolicyActor):
         """Initializes the actor network.
 
         Args:
-            dim_y: Flattened outcome dimension.
-            dim_design: Flattened design dimension.
+            event_shape_y: Shape of one outcome event.
+            event_shape_design: Shape of one design event.
             dim_h: Per-layer hidden widths as a list; an int is a single layer.
             dim_emb: History summary dimension.
             log_std_min: Lower bound for Gaussian log standard deviations.
             log_std_max: Upper bound for Gaussian log standard deviations.
             init_std: Initial unsquashed Gaussian standard deviation.
         """
+        event_shape_y = torch.Size(event_shape_y)
+        event_shape_design = torch.Size(event_shape_design)
+        encoder = DeepSetEncoder(
+            event_shape_y,
+            event_shape_design,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+        )
+        head = GaussianHead(
+            encoder.dim_emb,
+            event_shape_design.numel(),
+            dim_h=dim_h,
+            log_std_min=log_std_min,
+            log_std_max=log_std_max,
+            init_std=init_std,
+        )
+        super().__init__(encoder, head)
+        self.event_shape_y = event_shape_y
+        self.event_shape_design = event_shape_design
+        self.dim_y = event_shape_y.numel()
+        self.dim_design = event_shape_design.numel()
+
+
+class CategoricalPolicyActor(nn.Module):
+    """History encoder followed by a categorical policy head."""
+
+    def __init__(self, encoder: HistoryEncoder, head: CategoricalHead):
+        """Initializes an encoder and categorical head pair.
+
+        Args:
+            encoder: History encoder that produces the categorical-head input.
+            head: Readout that maps encoder outputs to categorical logits.
+
+        Raises:
+            ValueError: If the encoder and head embedding widths differ.
+        """
         super().__init__()
-
-        self.dim_y = int(dim_y)
-        self.dim_design = int(dim_design)
-        self.dim_emb = int(dim_emb)
-        self.log_std_min = float(log_std_min)
-        self.log_std_max = float(log_std_max)
-        self.init_std = float(init_std)
-        if self.init_std <= 0:
-            raise ValueError("init_std must be positive.")
-        init_log_std = log(self.init_std)
-        if not self.log_std_min < init_log_std < self.log_std_max:
-            raise ValueError(
-                "init_std must have a logarithm strictly between "
-                "log_std_min and log_std_max."
-            )
-
-        hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
-        self.encoder_net = MLP(
-            [self.dim_design + self.dim_y] + hidden_widths + [dim_emb],
-            activation=nn.ReLU,
-        )
-        self.actor_net = MLP([dim_emb] + hidden_widths, activation=nn.ReLU)
-        self.mean_head = nn.Linear(hidden_widths[-1], self.dim_design)
-        self.log_std_head = nn.Linear(hidden_widths[-1], self.dim_design)
-        _initialize_linear_layers(self)
-        nn.init.zeros_(self.log_std_head.weight)
-        scaled_log_std = (
-            2.0
-            * (
-                (init_log_std - self.log_std_min)
-                / (self.log_std_max - self.log_std_min)
-            )
-            - 1.0
-        )
-        nn.init.constant_(self.log_std_head.bias, atanh(scaled_log_std))
+        if encoder.dim_emb != head.dim_emb:
+            raise ValueError("encoder and head embedding dimensions must match.")
+        self.encoder = encoder
+        self.head = head
 
     def forward(
         self, y_history: Tensor, design_history: Tensor, *, mask: Tensor | None = None
-    ) -> tuple[Tensor, Tensor]:
-        """Computes Gaussian parameters from flattened histories."""
-        b_flat, T, _ = design_history.shape
+    ) -> Tensor:
+        """Computes design logits from a flattened history.
 
-        if T == 0:
-            summary = torch.zeros(
-                b_flat,
-                self.dim_emb,
-                device=design_history.device,
-                dtype=design_history.dtype,
-            )
-        else:
-            enc_input = torch.cat([y_history, design_history], dim=-1)
-            enc = self.encoder_net(enc_input)
+        Args:
+            y_history: Outcomes with shape ``[batch, T, dim_y]``.
+            design_history: Designs with shape ``[batch, T, dim_design]``.
+            mask: Optional validity mask with shape ``[batch, T]``.
 
-            if mask is not None:
-                enc = enc * mask.to(dtype=enc.dtype).unsqueeze(-1)
-
-            summary = enc.sum(dim=1)
-
-        hidden = self.actor_net(summary)
-        mean = self.mean_head(hidden)
-        log_std = torch.tanh(self.log_std_head(hidden))
-        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
-            log_std + 1
-        )
-        return mean, log_std
+        Returns:
+            Tensor: One logit per design with shape ``[batch, n_designs]``.
+        """
+        return self.head(self.encoder.encode_flat(y_history, design_history, mask=mask))
 
 
-class TanhGaussianPolicyNet(StochasticDesignNet):
-    """Tanh-squashed Gaussian policy for continuous box design spaces."""
+class DeepSetCategoricalActor(CategoricalPolicyActor):
+    """DeepSets actor that returns categorical design logits.
+
+    Attributes:
+        event_shape_design: Shape of one design event.
+        event_shape_y: Shape of one outcome event.
+        dim_design: Flattened design dimension.
+        dim_y: Flattened outcome dimension.
+        n_designs: Number of categorical designs.
+        dim_emb: History-summary dimension.
+        encoder_net: Module that embeds each design-outcome pair.
+        actor_net: Module that transforms the history summary.
+        logits_head: Linear layer that produces categorical design logits.
+    """
 
     def __init__(
         self,
-        design_space: BoxDesignSpace,
-        actor: GaussianPolicyActor | None = None,
         *,
+        event_shape_y: Sequence[int],
+        event_shape_design: Sequence[int],
+        n_designs: int,
+        dim_h=(128, 128),
+        dim_emb: int = 64,
+    ):
+        """Initializes the actor.
+
+        Args:
+            event_shape_y: Shape of one outcome event.
+            event_shape_design: Shape of one design event.
+            n_designs: Number of categorical designs.
+            dim_h: Per-layer hidden widths as a list; an int is a single layer.
+            dim_emb: History summary dimension.
+        """
+        event_shape_y = torch.Size(event_shape_y)
+        event_shape_design = torch.Size(event_shape_design)
+        encoder = DeepSetEncoder(
+            event_shape_y,
+            event_shape_design,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+        )
+        head = CategoricalHead(encoder.dim_emb, n_designs, dim_h=dim_h)
+        super().__init__(encoder, head)
+        self.event_shape_y = event_shape_y
+        self.event_shape_design = event_shape_design
+        self.dim_y = event_shape_y.numel()
+        self.dim_design = event_shape_design.numel()
+
+
+class GaussianPolicyNet(StochasticDesignNet):
+    """Gaussian policy for continuous design spaces.
+
+    The network proposes values in unconstrained Gaussian coordinates. The
+    caller's design space owns the constraint transform and density correction.
+    """
+
+    supports_reparameterized_proposals = True
+
+    def __init__(
+        self,
+        design_space: BoxDesignSpace | DefaultDesignSpace,
+        actor: nn.Module | None = None,
+        *,
+        encoder: HistoryEncoder | None = None,
+        head: GaussianHead | None = None,
+        event_shape_y: Sequence[int] | None = None,
         normalize_design_history: bool = False,
         design_history_bounds: tuple[float, float] = (-1.0, 1.0),
         outcome_bounds: tuple[float, float] | None = None,
@@ -212,10 +378,17 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         """Initializes the policy network.
 
         Args:
-            design_space: Physical continuous design space. Public policy methods
-                return designs in these coordinates.
+            design_space: Continuous design space whose shape defines the
+                proposal. Box bounds support history normalization; an
+                unconstrained space uses [-1, 1] as a reference scale only.
             actor: Optional module mapping flattened histories to Gaussian
                 mean and log standard deviation.
+            encoder: Optional history encoder used to build a default Gaussian
+                actor. Cannot be combined with ``actor``.
+            head: Optional Gaussian policy head paired with ``encoder``. If
+                omitted, a default head is created for the encoder.
+            event_shape_y: Shape of one outcome event. Required when creating
+                the default actor without an explicit ``encoder``.
             normalize_design_history: If True, affinely map physical design
                 histories to `design_history_bounds` before actor evaluation.
             design_history_bounds: Target bounds for normalized design history.
@@ -224,7 +397,6 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         """
         super().__init__()
 
-        self.design_space = design_space
         self.event_shape_design = torch.Size(design_space.event_shape)
         self.dim_design = self.event_shape_design.numel()
         self.normalize_design_history = bool(normalize_design_history)
@@ -234,18 +406,45 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
             or self.design_history_bounds[0] >= self.design_history_bounds[1]
         ):
             raise ValueError("design_history_bounds must satisfy low < high.")
-        self.actor = actor or DeepSetGaussianActor(
-            dim_design=self.dim_design,
-        )
+        if actor is not None and (encoder is not None or head is not None):
+            raise ValueError("actor cannot be combined with encoder or head.")
+        if actor is not None:
+            self.actor = actor
+        elif encoder is not None:
+            self.actor = GaussianPolicyActor(
+                encoder,
+                head or GaussianHead(encoder.dim_emb, self.dim_design),
+            )
+        elif head is not None:
+            raise ValueError("head requires an encoder.")
+        else:
+            if event_shape_y is None:
+                raise ValueError(
+                    "event_shape_y is required when creating the default actor."
+                )
+            self.actor = DeepSetGaussianActor(
+                event_shape_y=event_shape_y,
+                event_shape_design=self.event_shape_design,
+            )
 
-        low = design_space.low.reshape(self.dim_design)
-        high = design_space.high.reshape(self.dim_design)
+        if isinstance(design_space, BoxDesignSpace):
+            low = design_space.low.reshape(self.dim_design)
+            high = design_space.high.reshape(self.dim_design)
+        elif isinstance(design_space, DefaultDesignSpace):
+            # Reference scale for network inputs only; DefaultDesignSpace keeps
+            # policy proposals unconstrained.
+            low = torch.full((self.dim_design,), -1.0)
+            high = torch.full((self.dim_design,), 1.0)
+        else:
+            raise TypeError(
+                "GaussianPolicyNet requires a BoxDesignSpace or DefaultDesignSpace."
+            )
         if torch.any(low >= high):
             raise ValueError(
-                "TanhGaussianPolicyNet requires finite-width design bounds."
+                "GaussianPolicyNet requires finite-width reference bounds."
             )
-        self.register_buffer("design_scale", (high - low) / 2.0)
-        self.register_buffer("design_bias", (high + low) / 2.0)
+        self.register_buffer("design_low", low.clone())
+        self.register_buffer("design_high", high.clone())
 
         if outcome_bounds is None:
             outcome_low = torch.tensor(float("nan"), dtype=low.dtype)
@@ -260,31 +459,10 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
         self.register_buffer("outcome_high", outcome_high)
         self._normalize_outcomes = outcome_bounds is not None
 
-    def forward(self, y_history, design_history) -> Tensor:
-        """Returns the deterministic bounded design for a history.
-
-        Args:
-            y_history: Outcome history with shape
-                ``[*batch_shape, T, *event_shape_y]``.
-            design_history: Design history with shape
-                ``[*batch_shape, T, *event_shape_design]``.
-
-        Returns:
-            Deterministic bounded design with shape
-            ``[*batch_shape, *event_shape_design]``.
-        """
-        return self.sample(y_history, design_history, deterministic=True).design
-
-    def sample(
-        self,
-        y_history,
-        design_history,
-        *,
-        mask: Tensor | None = None,
-        deterministic: bool = False,
-        reparameterize_policy: bool = True,
-    ) -> PolicySample:
-        """Samples a tanh-squashed design and computes its log probability.
+    def forward(
+        self, y_history, design_history, *, mask: Tensor | None = None
+    ) -> Tensor:
+        """Returns the deterministic raw Gaussian design for a history.
 
         Args:
             y_history: Outcome history with shape
@@ -293,175 +471,79 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 ``[*batch_shape, T, *event_shape_design]``.
             mask: Optional boolean tensor for padded histories with shape
                 ``[*batch_shape, T]``.
-            deterministic: If True, use the Gaussian mean instead of drawing a
-                reparameterized sample.
-            reparameterize_policy: If False, sample without the
-                reparameterization trick so the log probability's gradient is
-                the pure score.
 
         Returns:
-            A policy sample containing a bounded design, its corrected log
-            probability, the deterministic bounded design, and the unsquashed
-            Gaussian design.
+            Gaussian mean with shape
+            ``[*batch_shape, *event_shape_design]``.
         """
-        batch_shape, y_flat, design_flat, mask_flat = self._prepare_histories(
+        history = self._prepare_histories(
             y_history,
             design_history,
             mask=mask,
         )
-        return self._sample_prepared(
-            batch_shape,
-            y_flat,
-            design_flat,
-            mask_flat,
-            deterministic=deterministic,
-            reparameterize_policy=reparameterize_policy,
+        mean, _ = self._normal_params(
+            history.y_flat, history.design_flat, history.mask_flat
         )
+        return mean.reshape(*history.batch_shape, *self.event_shape_design)
 
-    def _sample_prepared(
-        self,
-        batch_shape: torch.Size,
-        y_flat: Tensor,
-        design_flat: Tensor,
-        mask_flat: Tensor | None,
-        *,
-        deterministic: bool,
-        reparameterize_policy: bool = True,
-    ) -> PolicySample:
-        """Samples from validated histories in actor coordinates."""
-        mean, log_std = self.actor(y_flat, design_flat, mask=mask_flat)
-        self._validate_actor_params(mean, log_std, batch_size=design_flat.shape[0])
-        std = log_std.exp()
-        normal = Normal(mean, std)
-
-        if deterministic:
-            raw_design = mean
-        elif reparameterize_policy:
-            raw_design = normal.rsample()
-        else:
-            raw_design = normal.sample()
-
-        squashed_flat = self._squash(raw_design)
-        deterministic_flat = self._squash(mean)
-        log_prob = (normal.log_prob(raw_design) - self._squash_log_det(raw_design)).sum(
-            dim=-1
-        )
-
-        design = squashed_flat.reshape(*batch_shape, *self.event_shape_design)
-        deterministic_design = deterministic_flat.reshape(
-            *batch_shape, *self.event_shape_design
-        )
-        raw_design = raw_design.reshape(*batch_shape, *self.event_shape_design)
-
-        return PolicySample(
-            design=design,
-            log_prob=log_prob.reshape(batch_shape),
-            deterministic_design=deterministic_design,
-            raw_design=raw_design,
-        )
-
-    def _squash(self, raw_design: Tensor) -> Tensor:
-        """Maps an unsquashed Gaussian sample into the bounded design box."""
-        return self.design_bias + self.design_scale * torch.tanh(raw_design)
-
-    def _squash_log_det(self, raw_design: Tensor) -> Tensor:
-        """Log absolute determinant of the tanh-then-affine squash, per dimension.
-
-        Computed in the forward direction to stay finite for any finite
-        ``raw_design``; inverting via ``atanh`` would diverge once ``tanh``
-        saturates to +/-1 in floating point.
-        """
-        # log(1 - tanh(x)^2) in a numerically stable form (SpinUp / Denis Yarats).
-        tanh_log_det = 2.0 * (
-            log(2.0) - raw_design - nn.functional.softplus(-2.0 * raw_design)
-        )
-        return torch.log(self.design_scale) + tanh_log_det
-
-    def _prepare_histories(
+    def propose(
         self,
         y_history,
         design_history,
         *,
         mask: Tensor | None = None,
-    ) -> tuple[torch.Size, Tensor, Tensor, Tensor | None]:
-        """Validates histories and flattens arbitrary batch shapes.
+        reparameterize_policy: bool = False,
+    ) -> DesignProposal:
+        """Samples an unconstrained Gaussian proposal and its raw density.
 
         Args:
             y_history: Outcome history with shape
                 ``[*batch_shape, T, *event_shape_y]``.
             design_history: Design history with shape
                 ``[*batch_shape, T, *event_shape_design]``.
-            mask: Optional boolean tensor for padded histories with shape
-                ``[*batch_shape, T]``.
+            mask: Optional validity mask with shape ``[*batch_shape, T]``.
+            reparameterize_policy: Whether to sample with ``Normal.rsample``.
 
         Returns:
-            The original batch shape, flattened outcome history, flattened design
-            history, and optional flattened mask.
+            DesignProposal: A raw sampled design, its summed raw log density,
+            and its deterministic mean counterpart.
         """
-        dtype = self.design_scale.dtype
-        device = self.design_scale.device
-        y_history = torch.as_tensor(y_history, device=device, dtype=dtype)
-        design_history = torch.as_tensor(design_history, device=device, dtype=dtype)
+        history = self._prepare_histories(
+            y_history,
+            design_history,
+            mask=mask,
+        )
+        mean, log_std = self._normal_params(
+            history.y_flat, history.design_flat, history.mask_flat
+        )
+        normal = Normal(mean, log_std.exp())
+        if reparameterize_policy:
+            raw_design = normal.rsample()
+        else:
+            raw_design = normal.sample()
 
-        design_event_ndim = len(self.event_shape_design)
-        design_t_dim = design_history.ndim - design_event_ndim - 1
-        if design_t_dim < 0:
-            raise ValueError(
-                "design_history must have shape "
-                f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
-            )
+        log_prob = normal.log_prob(raw_design).sum(dim=-1)
+        raw_design = raw_design.reshape(*history.batch_shape, *self.event_shape_design)
+        deterministic_raw_design = mean.reshape(
+            *history.batch_shape, *self.event_shape_design
+        )
 
-        batch_shape = torch.Size(design_history.shape[:design_t_dim])
-        T = design_history.shape[design_t_dim]
+        return DesignProposal(
+            raw_design=raw_design,
+            log_prob=log_prob.reshape(history.batch_shape),
+            deterministic_raw_design=deterministic_raw_design,
+        )
 
-        expected_design_suffix = (T, *self.event_shape_design)
-        if (
-            design_history.shape[-len(expected_design_suffix) :]
-            != expected_design_suffix
-        ):
-            raise ValueError(
-                "design_history must have shape "
-                f"[*batch_shape, T, {tuple(self.event_shape_design)}]."
-            )
-
-        if (
-            y_history.ndim < len(batch_shape) + 2
-            or y_history.shape[: len(batch_shape)] != batch_shape
-            or y_history.shape[len(batch_shape)] != T
-        ):
-            raise ValueError("y_history must have shape [*batch_shape, T, dim_y].")
-
-        b_flat = prod(batch_shape) if batch_shape else 1
-        dim_y = prod(y_history.shape[len(batch_shape) + 1 :])
-        y_flat = y_history.reshape(b_flat, T, dim_y)
-        design_flat = design_history.reshape(b_flat, T, self.dim_design)
-
-        if self.normalize_design_history:
-            target_low, target_high = self.design_history_bounds
-            design_flat = affine_rescale(
-                design_flat,
-                self.design_bias - self.design_scale,
-                self.design_bias + self.design_scale,
-                target_low,
-                target_high,
-            )
-        if self._normalize_outcomes:
-            y_flat = affine_rescale(
-                y_flat, self.outcome_low, self.outcome_high, 0.0, 1.0
-            )
-
-        mask_flat = None
-        if mask is not None:
-            mask = torch.as_tensor(mask, device=device)
-            expected_mask_shape = (*batch_shape, T)
-            if mask.shape != expected_mask_shape:
-                raise ValueError(
-                    "mask must have shape "
-                    f"[*batch_shape, T]; expected {expected_mask_shape}."
-                )
-            mask_flat = mask.reshape(b_flat, T)
-
-        return batch_shape, y_flat, design_flat, mask_flat
+    def _normal_params(
+        self,
+        y_flat: Tensor,
+        design_flat: Tensor,
+        mask_flat: Tensor | None,
+    ) -> tuple[Tensor, Tensor]:
+        """Returns validated Gaussian parameters in flattened actor coordinates."""
+        mean, log_std = self.actor(y_flat, design_flat, mask=mask_flat)
+        self._validate_actor_params(mean, log_std, batch_size=design_flat.shape[0])
+        return mean, log_std
 
     def _validate_actor_params(
         self, mean: Tensor, log_std: Tensor, *, batch_size: int
@@ -480,3 +562,277 @@ class TanhGaussianPolicyNet(StochasticDesignNet):
                 f"[batch, dim_design]; expected {expected_shape}, got "
                 f"{tuple(log_std.shape)}."
             )
+
+
+class CategoricalPolicyNet(StochasticDesignNet):
+    """Categorical policy that maps design indices to physical designs.
+
+    Attributes:
+        event_shape_design: Shape of one physical design.
+        dim_design: Flattened design dimension.
+        n_designs: Number of categorical designs.
+        normalize_design_history: Whether design histories are normalized.
+        design_history_bounds: Target bounds for normalized design histories.
+        actor: Module that produces one logit per categorical design.
+        design_values: Physical designs indexed by categorical design.
+        design_low: Per-coordinate minimum physical design values.
+        design_high: Per-coordinate maximum physical design values.
+        outcome_low: Lower bound used to normalize outcome histories.
+        outcome_high: Upper bound used to normalize outcome histories.
+    """
+
+    raw_designs_are_physical = True
+
+    def __init__(
+        self,
+        design_space: FiniteDesignSpace,
+        actor: nn.Module | None = None,
+        *,
+        encoder: HistoryEncoder | None = None,
+        head: CategoricalHead | None = None,
+        event_shape_y: Sequence[int] | None = None,
+        normalize_design_history: bool = False,
+        design_history_bounds: tuple[float, float] = (0.0, 1.0),
+        outcome_bounds: tuple[float, float] | None = None,
+    ):
+        """Initializes the categorical policy.
+
+        Args:
+            design_space: Finite physical designs returned by policy proposals.
+            actor: Optional module returning one logit per action.
+            encoder: Optional history encoder used to build a default
+                categorical actor. Cannot be combined with ``actor``.
+            head: Optional categorical policy head paired with ``encoder``.
+                If omitted, a default head is created for the encoder.
+            event_shape_y: Shape of one outcome event. Required when creating
+                the default actor without an explicit ``encoder``.
+            normalize_design_history: Whether to rescale design histories.
+            design_history_bounds: Bounds used when design histories are rescaled.
+            outcome_bounds: Optional bounds used to rescale outcomes to [0, 1].
+
+        Raises:
+            ValueError: If history or outcome bounds are invalid.
+        """
+        super().__init__()
+        self.event_shape_design = torch.Size(design_space.event_shape)
+        self.dim_design = self.event_shape_design.numel()
+        self.n_designs = design_space.n_designs
+        self.normalize_design_history = bool(normalize_design_history)
+        self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
+        if self.design_history_bounds[0] >= self.design_history_bounds[1]:
+            raise ValueError("design_history_bounds must satisfy low < high.")
+        if actor is not None and (encoder is not None or head is not None):
+            raise ValueError("actor cannot be combined with encoder or head.")
+        if actor is not None:
+            self.actor = actor
+        elif encoder is not None:
+            self.actor = CategoricalPolicyActor(
+                encoder,
+                head or CategoricalHead(encoder.dim_emb, self.n_designs),
+            )
+        elif head is not None:
+            raise ValueError("head requires an encoder.")
+        else:
+            if event_shape_y is None:
+                raise ValueError(
+                    "event_shape_y is required when creating the default actor."
+                )
+            self.actor = DeepSetCategoricalActor(
+                event_shape_y=event_shape_y,
+                event_shape_design=self.event_shape_design,
+                n_designs=self.n_designs,
+            )
+
+        self.register_buffer("design_values", design_space.values.clone())
+        values = self.design_values.reshape(self.n_designs, self.dim_design)
+        if not torch.is_floating_point(values):
+            values = values.to(torch.get_default_dtype())
+        self.register_buffer("design_low", values.amin(dim=0))
+        self.register_buffer("design_high", values.amax(dim=0))
+        if outcome_bounds is None:
+            outcome_low = torch.tensor(float("nan"), dtype=values.dtype)
+            outcome_high = torch.tensor(float("nan"), dtype=values.dtype)
+        else:
+            outcome_low, outcome_high = (
+                torch.as_tensor(bound, dtype=values.dtype) for bound in outcome_bounds
+            )
+            if torch.any(outcome_low >= outcome_high):
+                raise ValueError("outcome_bounds must satisfy low < high.")
+        self.register_buffer("outcome_low", outcome_low)
+        self.register_buffer("outcome_high", outcome_high)
+        self._normalize_outcomes = outcome_bounds is not None
+
+    def forward(
+        self, y_history, design_history, *, mask: Tensor | None = None
+    ) -> Tensor:
+        """Returns the highest-probability physical design.
+
+        Args:
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional padding mask with shape ``[*batch_shape, T]``.
+
+        Returns:
+            Most probable designs with shape
+            ``[*batch_shape, *event_shape_design]``.
+        """
+        history = self._prepare_histories(y_history, design_history, mask=mask)
+        logits = self._validated_logits(
+            history.y_flat, history.design_flat, history.mask_flat
+        )
+        design_index = logits.argmax(dim=-1)
+        return self.design_values[design_index].reshape(
+            *history.batch_shape, *self.event_shape_design
+        )
+
+    def propose(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask: Tensor | None = None,
+        reparameterize_policy: bool = False,
+    ) -> DesignProposal:
+        """Samples a physical design and its selected-design log probability.
+
+        Args:
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional padding mask with shape ``[*batch_shape, T]``.
+            reparameterize_policy: Part of the common proposal contract;
+                categorical samples ignore it because they are not reparameterized.
+
+        Returns:
+            A proposal whose raw and deterministic values are physical designs,
+            with the selected index in ``info["design_index"]``.
+        """
+        del reparameterize_policy
+        history = self._prepare_histories(y_history, design_history, mask=mask)
+        logits = self._validated_logits(
+            history.y_flat, history.design_flat, history.mask_flat
+        )
+        distribution = Categorical(logits=logits)
+        design_index = distribution.sample()
+        deterministic_design_index = logits.argmax(dim=-1)
+        design = self.design_values[design_index].reshape(
+            *history.batch_shape, *self.event_shape_design
+        )
+        deterministic_design = self.design_values[deterministic_design_index].reshape(
+            *history.batch_shape, *self.event_shape_design
+        )
+        return DesignProposal(
+            raw_design=design,
+            log_prob=distribution.log_prob(design_index).reshape(history.batch_shape),
+            deterministic_raw_design=deterministic_design,
+            info={"design_index": design_index.reshape(history.batch_shape)},
+        )
+
+    def _validated_logits(
+        self, y_flat: Tensor, design_flat: Tensor, mask_flat: Tensor | None
+    ) -> Tensor:
+        """Returns validated categorical logits in flattened actor coordinates."""
+        logits = self.actor(y_flat, design_flat, mask=mask_flat)
+        expected_shape = (design_flat.shape[0], self.n_designs)
+        if logits.shape != expected_shape:
+            raise ValueError(
+                "actor logits must have shape "
+                f"{expected_shape}; got {tuple(logits.shape)}."
+            )
+        return logits
+
+    def logits(
+        self, y_history, design_history, *, mask: Tensor | None = None
+    ) -> Tensor:
+        """Returns one action logit per categorical design.
+
+        Args:
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional padding mask with shape ``[*batch_shape, T]``.
+
+        Returns:
+            Logits with shape ``[batch, n_designs]`` after flattening batches.
+        """
+        history = self._prepare_histories(y_history, design_history, mask=mask)
+        return self._validated_logits(
+            history.y_flat, history.design_flat, history.mask_flat
+        )
+
+    def logits_from_observation(self, obs) -> Tensor:
+        """Returns categorical logits for a ``History`` observation.
+
+        Args:
+            obs: History containing outcomes, designs, and an optional mask.
+
+        Returns:
+            Logits with shape ``[batch, n_designs]``.
+        """
+        return self.logits(obs.outcomes, obs.designs, mask=obs.mask)
+
+    def design_probabilities_from_observation(self, obs) -> tuple[Tensor, Tensor]:
+        """Returns exact categorical probabilities and log probabilities.
+
+        Args:
+            obs: History containing outcomes, designs, and an optional mask.
+
+        Returns:
+            A ``(probabilities, log_probabilities)`` tuple, each with shape
+                ``[batch, n_designs]``.
+        """
+        log_probs = torch.log_softmax(self.logits_from_observation(obs), dim=-1)
+        return log_probs.exp(), log_probs
+
+
+def make_deepset_stochastic_policy(
+    *,
+    design_space: DesignSpace,
+    dim_h,
+    dim_emb: int,
+    log_std_min: float,
+    log_std_max: float,
+    init_std: float,
+    normalize_design_history: bool,
+    design_history_bounds,
+    outcome_bounds,
+    event_shape_y,
+    event_shape_design,
+) -> StochasticDesignNet:
+    """Builds a DeepSets stochastic policy for a supported design space."""
+    event_shape_y = torch.Size(event_shape_y)
+    event_shape_design = torch.Size(event_shape_design)
+
+    common_kwargs = {
+        "normalize_design_history": normalize_design_history,
+        "design_history_bounds": tuple(design_history_bounds),
+        "outcome_bounds": tuple(outcome_bounds),
+    }
+    if isinstance(design_space, (BoxDesignSpace, DefaultDesignSpace)):
+        actor = DeepSetGaussianActor(
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+            log_std_min=log_std_min,
+            log_std_max=log_std_max,
+            init_std=init_std,
+        )
+        return GaussianPolicyNet(design_space, actor=actor, **common_kwargs)
+    if isinstance(design_space, FiniteDesignSpace):
+        actor = DeepSetCategoricalActor(
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
+            n_designs=design_space.n_designs,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+        )
+        return CategoricalPolicyNet(design_space, actor=actor, **common_kwargs)
+    raise TypeError(
+        "DeepSets stochastic policies require a BoxDesignSpace, "
+        "DefaultDesignSpace, or FiniteDesignSpace."
+    )

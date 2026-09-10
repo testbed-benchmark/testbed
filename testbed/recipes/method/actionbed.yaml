@@ -1,0 +1,36 @@
+# @package _global_
+
+defaults:
+  - /system: default
+  - /task: location_finding
+  - /net@design_net: attentive_policy
+  - /net@action_net: attentive_policy
+  - /wandb: default
+  - /final_eval: default
+  - /hydra_run: default
+  - _self_
+  
+# system (device/save_dir come from the system group)
+seed: 0
+
+use_raw_history: true
+
+# loss
+loss:
+  _target_: testbed.design_objectives.SortedMSELoss
+  reduction: mean
+# training
+n_train_iter: 150_000
+n_action_warmup_iter: 50_000
+n_outer: 2_048
+
+# eval
+eval_every: 100
+n_outer_eval: 2_048
+
+# optimizer
+lr: 5e-4
+betas: [0.8, 0.998]
+grad_clip: null # can help improve stability; try ~1.0 as a default
+lr_gamma: 0.95
+lr_period: 2000

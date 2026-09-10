@@ -92,7 +92,7 @@ class Manager:
                         mode=wandb_cfg.get("mode", "online"),
                         group=wandb_cfg.get("group"),
                     )
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - backend failures are non-fatal
                     self.event_logger.warning(
                         f"wandb logging is enabled but failed to initialize "
                         f"({e!r}); continuing with JSONL logging only."

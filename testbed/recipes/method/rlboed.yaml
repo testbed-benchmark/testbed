@@ -1,0 +1,56 @@
+# @package _global_
+
+defaults:
+  - /system: default
+  - /task: location_finding
+  - /wandb: default
+  - /final_eval: default
+  - /hydra_run: default
+  - _self_
+
+# system (device/save_dir come from the system group)
+seed: 0
+torch_deterministic: true
+# complete deployable policy
+design_net:
+  _target_: testbed.design_nets.make_deepset_stochastic_policy
+  dim_h: [128, 128]
+  dim_emb: 64
+  log_std_min: -20.0
+  log_std_max: 0.0
+  init_std: 0.5773502691896258  # 3 ** -0.5
+  normalize_design_history: true
+  design_history_bounds: [0.0, 1.0]
+  outcome_bounds:
+    - ${reward.outcome_low}
+    - ${reward.outcome_high}
+# reward
+reward:
+  # Environment-specific reference range for normalizing outcome histories in
+  # the policy and critic networks; experiment recipes must supply both values.
+  outcome_low: ???
+  outcome_high: ???
+  n_contrastive: 100_000
+# eval
+eval_every: 0  # no periodic eval during SAC training
+eval_n_contrastive: 1_000_000
+# SAC hyperparameters
+sac:
+  num_training_iterations: 2_001
+  num_envs: 100
+  buffer_size: 10_000_000
+  buffer_device: cpu
+  gamma: 0.9
+  tau: 0.001
+  batch_size: 4096
+  learning_starts: 100_000
+  gradient_steps_per_iteration: 64
+  policy_lr: 0.0001
+  q_lr: 0.0003
+  policy_frequency: 1
+  target_network_frequency: 1
+  alpha: null
+  initial_alpha: 1.0
+  target_entropy: null
+  entropy_anneal_rate: 7.142857142857143e-05  # 1 / 1.4e4
+  log_frequency: 100

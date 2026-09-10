@@ -13,6 +13,17 @@ from torch import Tensor, nn
 from torch.distributions import Categorical, MixtureSameFamily, Normal
 
 
+class _AlineEncoderLayer(nn.TransformerEncoderLayer):
+    # Avoid the eval-only native fast path: fully masked zero-context target
+    # rows need SDPA's zero attention output, not softmax(-inf) -> NaN.
+    def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False):
+        x = self.norm1(
+            src
+            + self._sa_block(src, src_mask, src_key_padding_mask, is_causal=is_causal)
+        )
+        return self.norm2(x + self._ff_block(x))
+
+
 @dataclass
 class AlineOutput:
     """Outputs from a forward pass through ALINE."""
@@ -49,6 +60,8 @@ class AlineModel(nn.Module):
         dropout: float = 0.0,
         n_components: int = 10,
         min_scale: float = 1e-4,
+        design_center=0.0,
+        design_scale=1.0,
         outcome_center=0.0,
         outcome_scale=1.0,
     ) -> None:
@@ -82,6 +95,21 @@ class AlineModel(nn.Module):
         ):
             raise ValueError("Each design lower bound must be below its upper bound.")
 
+        design_center = torch.as_tensor(design_center).broadcast_to(
+            self.event_shape_design
+        )
+        design_scale = torch.as_tensor(design_scale).broadcast_to(
+            self.event_shape_design
+        )
+        if (
+            not torch.all(torch.isfinite(design_center))
+            or not torch.all(torch.isfinite(design_scale))
+            or torch.any(design_scale <= 0)
+        ):
+            raise ValueError("design_scale must be finite and positive.")
+        self.register_buffer("design_center", design_center.reshape(-1))
+        self.register_buffer("design_scale", design_scale.reshape(-1))
+
         outcome_center = torch.as_tensor(outcome_center).broadcast_to(
             self.event_shape_y
         )
@@ -108,7 +136,7 @@ class AlineModel(nn.Module):
         )
         self.target_tokens = nn.Parameter(torch.randn(self.dim_theta, embedding_dim))
 
-        layer = nn.TransformerEncoderLayer(
+        layer = _AlineEncoderLayer(
             d_model=embedding_dim,
             nhead=n_heads,
             dim_feedforward=feedforward_dim,
@@ -134,10 +162,7 @@ class AlineModel(nn.Module):
         if torch.Size(designs.shape[2:]) != self.event_shape_design:
             raise ValueError("Design tensors must end in event_shape_design.")
         designs = designs.reshape(*designs.shape[:2], self.dim_design)
-        return (
-            2.0 * (designs - self.design_low) / (self.design_high - self.design_low)
-            - 1.0
-        )
+        return (designs - self.design_center) / self.design_scale
 
     def _normalize_outcomes(self, outcomes: Tensor) -> Tensor:
         if torch.Size(outcomes.shape[2:]) != self.event_shape_y:
@@ -162,12 +187,8 @@ class AlineModel(nn.Module):
             mask[:, :n_context] = 0.0
 
         query_indices = torch.arange(query_start, target_start, device=device)
-        mask[query_indices, query_indices] = 0.0
         selected_targets = torch.where(target_mask)[0] + target_start
         mask[query_indices[:, None], selected_targets] = 0.0
-
-        target_indices = torch.arange(target_start, n_total, device=device)
-        mask[target_indices, target_indices] = 0.0
 
         return mask
 

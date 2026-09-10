@@ -3,6 +3,7 @@
 import torch
 from torch import Tensor
 
+from ..core.design_spaces import DesignSpace
 from ..core.distributions import Distribution
 from ..core.util import normal_log_prob
 from .base import Task
@@ -125,7 +126,15 @@ class LocationFinding(Task):
             Exponent in the rate of decay of signal strength (:math:`s`) (default: 2.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default LocationFindingPrior is used.
+        design_space (DesignSpace, optional):
+            Design space for source-location queries. If None, the task retains
+            its unbounded default design space.
     """
+
+    @property
+    def reparameterizable_outcomes(self) -> bool:
+        """Gaussian noise added to a differentiable mean."""
+        return True
 
     def __init__(
         self,
@@ -138,6 +147,8 @@ class LocationFinding(Task):
         noise_scale: float = 0.5,
         exponent: float = 2.0,
         prior=None,
+        design_space: DesignSpace | None = None,
+        reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the location-finding task."""
         # Default prior
@@ -149,6 +160,8 @@ class LocationFinding(Task):
             event_shape_theta=[n_sources, dim_theta],
             event_shape_design=[dim_theta],
             prior=prior,
+            design_space=design_space,
+            reparameterize_outcomes=reparameterize_outcomes,
         )
 
         self.base_signal = base_signal
@@ -195,7 +208,14 @@ class LocationFinding(Task):
         )  # [B, 1]
         return mean_y
 
-    def _outcome_logp(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
+    def _outcome_logp(
+        self,
+        y: Tensor,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Computes log probability of observations under the model.
 
         If dim_y > 1, observations are assumed to be conditionally independent given (theta, design).
@@ -207,6 +227,10 @@ class LocationFinding(Task):
                 Parameter tensor of shape ``[b, n_sources, dim_theta]``.
             design (Tensor):
                 Design tensor of shape ``[b, dim_theta]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:
@@ -216,7 +240,13 @@ class LocationFinding(Task):
         logp = normal_log_prob(y, loc, self.noise_scale)
         return logp.sum(dim=-1)
 
-    def _sample_outcome(self, theta: Tensor, design: Tensor) -> Tensor:
+    def _sample_outcome(
+        self,
+        theta: Tensor,
+        design: Tensor,
+        y_history: Tensor = None,
+        design_history: Tensor = None,
+    ) -> Tensor:
         """Samples from the likelihood using reparametrization.
 
         If dim_y > 1, observations are assumed to be conditionally independent given (theta, design).
@@ -226,6 +256,10 @@ class LocationFinding(Task):
                 Parameter tensor of shape ``[b, n_sources, dim_theta]``.
             design (Tensor):
                 Design tensor of shape ``[b, dim_design]``.
+            y_history (Tensor, optional):
+                Ignored in this memoryless task.
+            design_history (Tensor, optional):
+                Ignored in this memoryless task.
 
         Returns:
             Tensor:

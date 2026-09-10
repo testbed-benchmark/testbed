@@ -4,80 +4,77 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from testbed.design_objectives.base_objective import Objective
+from testbed.core.rollout import Rollout
+from testbed.design_objectives.base_objective import DesignObjective, RolloutObjective
+from testbed.design_objectives.contrastive import contrastive_logsumexps
 from testbed.tasks.base import Task
 
 
-class SNMC(Objective):
+class SNMC(RolloutObjective):
     """Implements sequential NMC.
 
     See Equation 10 of the DAD paper (https://arxiv.org/pdf/2103.02438).
     """
 
-    def __init__(self, task: Task, n_contrastive: int):
-        """Initializes the SNMC estimator."""
-        super().__init__(task, is_expected_log_ratio=True)
+    def __init__(self, task: Task, n_contrastive: int, chunk_size: int | None = None):
+        """Initializes the SNMC estimator.
+
+        chunk_size caps how many contrastive samples are scored at once; the
+        default scores all of them together. Set it when n_contrastive is too
+        large to materialize, as evaluation does.
+        """
+        super().__init__(task)
         self.n_contrastive = int(n_contrastive)
+        self.chunk_size = None if chunk_size is None else int(chunk_size)
 
-    def __call__(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
-        """Estimates gain for a simulated history."""
-        return self.estimate_gain(y_history, design_history, theta_0)
+    def __call__(self, rollout: Rollout):
+        """Estimates gain for a simulated rollout."""
+        return self.estimate_gain(rollout)
 
-    def estimate_gain(self, y_history: Tensor, design_history: Tensor, theta_0: Tensor):
-        """Estimates gain from batched histories.
+    def estimate_gain(self, rollout: Rollout, y_context=None, design_context=None):
+        """Estimates gain from a batched rollout.
 
-        y_history: ``[b, T, *event_shape_y]``
-        design_history: ``[b, T, *event_shape_design]``
-        theta_0: ``[b, *event_shape_theta]``
-        returns:        scalar EIG estimate.
+        returns: scalar EIG estimate.
         """
-        return self.per_sample_gain(y_history, design_history, theta_0).mean()
+        return self.per_sample_gain(
+            rollout, y_context=y_context, design_context=design_context
+        ).mean()
 
-    def per_sample_gain(
-        self, y_history: Tensor, design_history: Tensor, theta_0: Tensor
-    ):
-        """Estimates per-sample gains from batched histories.
+    def per_sample_gain(self, rollout: Rollout, y_context=None, design_context=None):
+        """Estimates per-sample gains from a batched rollout.
 
-        Shapes as in estimate_gain; returns: [b] per-sample SNMC estimates.
+        A context is history already absorbed into ``task.current_prior``; it is
+        conditioned on but not scored. See :func:`contrastive_logsumexps`.
+
+        returns: [b] per-sample SNMC estimates.
         """
-        task = self.task
-        n_contrastive = self.n_contrastive
-        b = theta_0.shape[0]
-
-        logp_joint = task.history_logp(y_history, design_history, theta_0)  # [b,]
-
-        theta_contrastive = task.sample_current_prior(b * n_contrastive)
-        theta_contrastive = theta_contrastive.reshape(
-            b, n_contrastive, *task.event_shape_theta
+        logp_joint, chunk_logsumexps = contrastive_logsumexps(
+            self.task,
+            rollout,
+            self.n_contrastive,
+            self.chunk_size,
+            y_context=y_context,
+            design_context=design_context,
         )
-        theta_flat = theta_contrastive.reshape(
-            b * n_contrastive, *task.event_shape_theta
+        return self.gain_from_logsumexps(
+            logp_joint, chunk_logsumexps, self.n_contrastive
         )
 
-        y_rep = (
-            y_history.unsqueeze(1)
-            .expand(b, n_contrastive, *y_history.shape[1:])
-            .reshape(b * n_contrastive, *y_history.shape[1:])
-        )
-        design_rep = (
-            design_history.unsqueeze(1)
-            .expand(b, n_contrastive, *design_history.shape[1:])
-            .reshape(b * n_contrastive, *design_history.shape[1:])
-        )
+    @staticmethod
+    def gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive):
+        """Per-sample SNMC from log-likelihoods produced by contrastive_logsumexps.
 
-        logp_contrastive = task.history_logp(y_rep, design_rep, theta_flat)
-        logp_contrastive = logp_contrastive.reshape(
-            b, n_contrastive
-        )  # [b, n_contrastive]
-
-        logp_marginal = torch.logsumexp(logp_contrastive, dim=1) - np.log(
+        The marginal averages over the L contrastive samples only, excluding
+        the joint one. Split out so a caller holding the log-likelihoods (e.g.
+        testbed.eval) can take both bounds from one set of draws.
+        """
+        logp_marginal = torch.logsumexp(chunk_logsumexps, dim=1) - np.log(
             n_contrastive
         )  # [b,]
-
         return logp_joint - logp_marginal
 
 
-class NMC(Objective):
+class NMC(DesignObjective):
     """Nested Monte Carlo (NMC) estimator for EIG with a single fixed design.
 
     A thin wrapper around SNMC that draws outer samples (theta, y) and
@@ -91,11 +88,17 @@ class NMC(Objective):
         self.n_inner = int(n_inner)
         self.inner_snmc = SNMC(task, n_contrastive=n_inner)
 
-    def __call__(self, design: Tensor):
+    def __call__(
+        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
+    ):
         """Estimates gain for one design."""
-        return self.estimate_gain(design)
+        return self.estimate_gain(
+            design, y_history=y_history, design_history=design_history
+        )
 
-    def estimate_gain(self, design: Tensor):
+    def estimate_gain(
+        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
+    ):
         """Estimates gain for one fixed design.
 
         design: ``[*event_shape_design]``. Leading size-1 batch dims are tolerated and stripped.
@@ -112,13 +115,31 @@ class NMC(Objective):
 
         b = self.n_outer
 
-        # y_outer: [b, *event_shape_y], theta_outer: [b, *event_shape_theta]
-        y_outer, theta_outer = self.task.sample_joint(design, n_samples=b)
+        # sample_joint drops the leading batch dim when n_samples==1, and a
+        # context history contributes a batch dim of its own, so reshape
+        # explicitly rather than trusting the returned shape.
+        y_outer, theta_outer = self.task.sample_joint(
+            design,
+            y_history=y_history,
+            design_history=design_history,
+            n_samples=b,
+        )
+        y_outer = y_outer.reshape(b, *self.task.event_shape_y)
+        theta_outer = theta_outer.reshape(b, *self.task.event_shape_theta)
 
-        # Build T=1 histories: [b, 1, *event_shape]
-        y_history = y_outer.unsqueeze(1)
-        design_history = (
+        # Build one-step-ahead rollout: [b, 1, *event_shape]
+        this_y_history = y_outer.unsqueeze(1)
+        this_design_history = (
             design.unsqueeze(0).expand(b, *self.task.event_shape_design).unsqueeze(1)
         )
+        rollout = Rollout(
+            theta=theta_outer,
+            y_history=this_y_history,
+            design_history=this_design_history,
+        )
 
-        return self.inner_snmc(y_history, design_history, theta_outer)
+        # The incoming history is passed as context, not scored: theta here is
+        # drawn from current_prior, which already conditions on it.
+        return self.inner_snmc.estimate_gain(
+            rollout, y_context=y_history, design_context=design_history
+        )

@@ -1,15 +1,37 @@
 """Policy network exports."""
 
 from .aline import AlineModel, AlineOutput
-from .base_design_net import DesignNet
-from .deterministic import AttentivePolicyNet, DeepSetPolicyNet, MLPPolicyNet
-from .modules import affine_rescale
-from .rlboed import RLBOEDQNetwork
-from .stochastic import (
-    DeepSetGaussianActor,
-    GaussianPolicyActor,
-    PolicySample,
-    StochasticDesignNet,
-    TanhGaussianPolicyNet,
+from .base import DesignNet, DesignProposal
+from .deterministic import (
+    AttentivePolicyNet,
+    DeepSetPolicyNet,
+    GatedDeepSetPolicyNet,
+    MLPPolicyNet,
 )
-from .task_specific.htd import HTDDesignNetWrapper
+from .encoder import (
+    AttentiveEncoder,
+    DeepSetEncoder,
+    GatedDeepSetEncoder,
+    HistoryEncoder,
+)
+from .history import PreparedHistory, prepare_history
+from .modules import affine_rescale
+from .rlboed import RLBOEDDiscreteQNetwork, RLBOEDQNetwork
+from .stochastic import (
+    CategoricalHead,
+    CategoricalPolicyActor,
+    CategoricalPolicyNet,
+    DeepSetCategoricalActor,
+    DeepSetGaussianActor,
+    GaussianHead,
+    GaussianPolicyActor,
+    GaussianPolicyNet,
+    StochasticDesignNet,
+    make_deepset_stochastic_policy,
+)
+from .variational_posterior import (
+    AttentiveVariationalPosteriorNet,
+    DeepSetVariationalPosteriorNet,
+    GaussianMixtureVariationalPosteriorNet,
+    VariationalPosteriorNet,
+)

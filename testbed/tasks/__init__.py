@@ -6,3 +6,5 @@ from .hyperbolic_temporal_discounting import HyperbolicTemporalDiscounting
 from .linear_regression import LinearRegression
 from .location_finding import LocationFinding
 from .michaelis_menten import MichaelisMenten
+from .prey_population import PreyPopulation
+from .stochastic_pendulum import StochasticPendulum

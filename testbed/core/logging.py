@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+from pathlib import Path
 
 
 class BaseLogger:
@@ -10,15 +11,12 @@ class BaseLogger:
 
     def log(self, key: str, value: float, step: int):
         """Logs one metric."""
-        ...
 
     def log_dict(self, d: dict, step: int):
         """Logs multiple metrics."""
-        ...
 
     def close(self):
         """Closes logger resources."""
-        ...
 
 
 class PrintLogger(BaseLogger):
@@ -34,7 +32,6 @@ class PrintLogger(BaseLogger):
 
     def close(self):
         """Closes the logger."""
-        pass
 
 
 class EventLogger:
@@ -87,7 +84,9 @@ class JSONLLogger:
 
     def __init__(self, path, close_retries: int = 5, close_retry_delay: float = 0.1):
         """Opens the JSONL log file."""
-        self.f = open(path, "a")
+        self.f = Path(path).open(  # noqa: SIM115 - logger.close manages this long-lived handle
+            "a"
+        )
         self.start_time = time.perf_counter()
         self.close_retries = close_retries
         self.close_retry_delay = close_retry_delay
@@ -223,6 +222,7 @@ def config_to_dict(cfg):
     """
     try:
         from omegaconf import OmegaConf
+        from omegaconf.errors import OmegaConfBaseException
 
         is_config = OmegaConf.is_config(cfg)
     except ImportError:
@@ -231,7 +231,7 @@ def config_to_dict(cfg):
     if is_config:
         try:
             return OmegaConf.to_container(cfg, resolve=True)
-        except Exception:
+        except OmegaConfBaseException:
             # e.g. an unresolvable interpolation. Fall back to the raw
             # (unresolved) container rather than leaking OmegaConf internals
             # via vars(cfg).

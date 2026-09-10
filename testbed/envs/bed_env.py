@@ -9,7 +9,6 @@ import torch
 from torch import Tensor
 
 from ..tasks.base import Task
-from .design_spaces import DesignSpace
 from .history import History
 from .rewards import RewardFunction, ZeroReward
 
@@ -21,7 +20,6 @@ class BEDEnv:
         self,
         task: Task,
         horizon: int,
-        design_space: DesignSpace | None = None,
         reward_fn: RewardFunction | None = None,
         batch_shape: tuple[int, ...] = (),
         validate_designs: bool = True,
@@ -34,9 +32,6 @@ class BEDEnv:
         self.horizon = int(horizon)
         if self.horizon <= 0:
             raise ValueError("horizon must be positive.")
-        self.design_space = (
-            design_space if design_space is not None else task.design_space
-        )
         self.reward_fn = reward_fn if reward_fn is not None else ZeroReward()
         self.batch_shape = torch.Size(batch_shape)
         self.validate_designs = validate_designs
@@ -161,7 +156,15 @@ class BEDEnv:
         grad_context = torch.enable_grad() if self.track_grad else torch.no_grad()
         with grad_context:
             design = self._prepare_design(raw_design)
-            outcome = self.task.sample_outcome(self.theta_0, design)
+            # Slots [0, t) are the steps already taken; a memoryless task drops
+            # them, one with memory conditions on them.
+            past = self.history.prefix(self.t)
+            outcome = self.task.sample_outcome(
+                self.theta_0,
+                design,
+                y_history=past.outcomes,
+                design_history=past.designs,
+            )
             self.history.write(self.t, design, outcome)
             reward = self.reward_fn.step(self, design, outcome)
         self.t += 1
@@ -186,19 +189,12 @@ class BEDEnv:
     def _prepare_design(self, raw_design: Tensor) -> Tensor:
         """Converts, projects, validates, and shape-checks a design."""
         design = raw_design
-        design_space = self.design_space
-        if design_space is not None:
-            if self.project_designs:
-                design = design_space.project(design)
-            if self.validate_designs and not design_space.contains(design):
-                raise ValueError("Design is outside the design space.")
+        if self.project_designs:
+            design = self.task.design_space.project(design)
+        if self.validate_designs and not self.task.design_space.contains(design):
+            raise ValueError("Design is outside the design space.")
 
-        expected_event_shape = (
-            design_space.event_shape
-            if design_space is not None
-            else self.task.event_shape_design
-        )
-        expected = (*self.batch_shape, *expected_event_shape)
+        expected = (*self.batch_shape, *self.task.event_shape_design)
         if design.shape != expected:
             raise ValueError(
                 f"Design must have shape {expected}; got {tuple(design.shape)}."

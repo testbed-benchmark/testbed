@@ -1,0 +1,16 @@
+# @package _global_
+
+defaults:
+  - /method: rlboed
+  - override /task: prey_population
+  - _self_
+
+reward:
+  n_contrastive: 10_000
+sac:
+  num_training_iterations: 40_001
+  buffer_size: 1_000_000
+
+wandb:
+  project: prey_population
+  group: rlboed

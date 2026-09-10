@@ -4,7 +4,9 @@ Not collected by pytest (no test_ prefix); run manually:
     python tests/temporal_discounting.py
 
 Trains a DAD policy with the REINFORCE gradient estimator (DAD paper Eq. 16),
-then evaluates SPCE/SNMC bounds against a random-design baseline.
+then evaluates SPCE/SNMC bounds against a random-design baseline. Covers both
+selectable policy nets: the outcome-gated encoder of the paper's HTD experiment
+and the general-purpose concatenation DeepSets encoder.
 """
 
 import time
@@ -16,8 +18,8 @@ from rich.panel import Panel
 from rich.progress import track
 from rich.table import Table
 
-from testbed.design_nets import DeepSetPolicyNet, HTDDesignNetWrapper
-from testbed.design_objectives import SNMC, SPCE, Reinforce
+from testbed.design_nets import DeepSetPolicyNet, GatedDeepSetPolicyNet
+from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import PolicyDesigner, RandomDesigner
 from testbed.tasks import HyperbolicTemporalDiscounting
 
@@ -42,63 +44,43 @@ N_INNER_EVAL = 50_000
 console = Console()
 
 
-def make_policy_designer(task, device):
-    policy_net = DeepSetPolicyNet(
+def make_policy_designer(task, device, policy_cls):
+    # task.design_space (an HTDDesignSpace) maps the net's raw output to valid
+    # (D_1, R_0); no wrapper needed.
+    design_net = policy_cls(
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
         event_shape_out=task.event_shape_design,
         encoder_dim_h=[256, 256],
         dim_emb=16,
         decoder_dim_h=[128, 128],
-    )
-    # Map raw outputs to valid (D_1, R_0), following Step-DAD.
-    log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
-    policy_net = HTDDesignNetWrapper(policy_net, log_k_mean=log_k_mean).to(device)
-    return PolicyDesigner(task, T, policy_net)
+    ).to(device)
+    return PolicyDesigner(task, T, design_net)
 
 
-class _HTDRandomDesigns:
-    """Random HTD designs: raw N(0, 1) mapped to (D_1, R_0), as in Step-DAD."""
-
-    def __init__(self, log_k_mean, device):
-        self.log_k_mean = log_k_mean
-        self._device = torch.device(device)
-
-    @property
-    def device(self):
-        return self._device
-
-    def sample(self, n):
-        raw = torch.randn(n, 2, device=self._device)
-        D1 = torch.exp(raw[:, 0:1] - self.log_k_mean)
-        R0 = 100 * torch.sigmoid(raw[:, 1:2])
-        return torch.cat((D1, R0), dim=-1)
-
-
-def make_random_designer(task, device):
-    # Random designs in the unconstrained space, mapped to valid (D_1, R_0) the
-    # same way as the policy net's wrapper (cf. Step-DAD random baseline).
-    log_k_mean = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
-    return RandomDesigner(task, T, _HTDRandomDesigns(log_k_mean, device))
+def make_random_designer(task):
+    # HTDDesignSpace.sample draws raw N(0, 1) and maps it to valid (D_1, R_0)
+    # the same way as the policy net's wrapper (cf. Step-DAD random baseline).
+    return RandomDesigner(task, T)
 
 
 def train(task, designer):
-    objective = Reinforce(
+    objective = SPCEReinforce(
         task,
-        SPCE(task, n_contrastive=N_INNER).per_sample_gain,
-        designer,
+        n_contrastive=N_INNER,
+        stochastic_design_policy=False,  # deterministic policy net -> pathwise
     )
-    optimizer = torch.optim.Adam(designer.policy_net.parameters(), lr=LR)
+    optimizer = torch.optim.Adam(designer.design_net.parameters(), lr=LR)
 
-    designer.policy_net.train()
+    designer.design_net.train()
     for step in track(range(N_TRAIN_ITER), description="  Training DAD…"):
         theta0 = task.sample_prior(N_OUTER)
-        y_obs, design_obs = designer.rollout(theta0)
-        loss = -objective.estimate_gain(y_obs, design_obs, theta0)
+        rollout = designer.rollout(theta0)
+        loss = -objective.estimate_gain(rollout)
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(designer.policy_net.parameters(), GRAD_CLIP)
+        torch.nn.utils.clip_grad_norm_(designer.design_net.parameters(), GRAD_CLIP)
         optimizer.step()
 
         if step % (N_TRAIN_ITER // 10) == 0:
@@ -114,31 +96,44 @@ def evaluate(task, designer):
         torch.manual_seed(i)
         with torch.no_grad():
             theta0 = task.prior.sample(N_OUTER_EVAL)
-            y_obs, xi_obs = designer.rollout(theta0)
-            spce_vals.append(spce.estimate_gain(y_obs, xi_obs, theta0).item())
-            snmc_vals.append(snmc.estimate_gain(y_obs, xi_obs, theta0).item())
+            rollout = designer.rollout(theta0)
+            spce_vals.append(spce.estimate_gain(rollout).item())
+            snmc_vals.append(snmc.estimate_gain(rollout).item())
 
     return sum(spce_vals) / N_EVAL_RUNS, sum(snmc_vals) / N_EVAL_RUNS
 
 
+# Both policy nets are usable from the config, so cover both here. The gated net
+# reproduces the paper's HTD encoder (Appendix D.2); the concat net is the
+# general-purpose DeepSets baseline.
+POLICY_NETS = {
+    "DAD gated (reinforce)": GatedDeepSetPolicyNet,
+    "DAD concat (reinforce)": DeepSetPolicyNet,
+}
+
+# Only the paper-matching net is held to the paper's number.
+REFERENCE_NET = "DAD gated (reinforce)"
+
+
 def test_dad_reinforce_eig():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    torch.manual_seed(0)
 
     task = HyperbolicTemporalDiscounting().to(device)
 
-    random_designer = make_random_designer(task, device)
-    policy_designer = make_policy_designer(task, device)
+    results = {"Random": evaluate(task, make_random_designer(task))}
+    train_min = 0.0
+    for name, policy_cls in POLICY_NETS.items():
+        # Same seed per net so the comparison isn't an initialization lottery.
+        torch.manual_seed(0)
+        designer = make_policy_designer(task, device, policy_cls)
 
-    start = time.perf_counter()
-    train(task, policy_designer)
-    train_min = (time.perf_counter() - start) / 60
+        console.log(f"[bold]{name}[/bold]")
+        start = time.perf_counter()
+        train(task, designer)
+        train_min += (time.perf_counter() - start) / 60
 
-    policy_designer.policy_net.eval()
-    results = {
-        "Random": evaluate(task, random_designer),
-        "DAD (reinforce)": evaluate(task, policy_designer),
-    }
+        designer.design_net.eval()
+        results[name] = evaluate(task, designer)
 
     table = Table(
         "Designer",
@@ -163,7 +158,7 @@ def test_dad_reinforce_eig():
             Group(
                 table,
                 f"{expected}   |   "
-                f"[green]Training: {train_min:.1f} min[/green]   |   "
+                f"[green]Training ({len(POLICY_NETS)} nets): {train_min:.1f} min[/green]   |   "
                 f"T={T}, n_train_iter={N_TRAIN_ITER:,}, n_contrastive={N_INNER_EVAL:,}, device={device}",
             ),
             title="EIG -- DAD trained with REINFORCE (HTD)",
@@ -171,14 +166,18 @@ def test_dad_reinforce_eig():
         )
     )
 
-    dad_spce = results["DAD (reinforce)"][0]
     random_spce = results["Random"][0]
-    assert dad_spce > random_spce, (
-        f"Trained policy ({dad_spce:.4f}) should beat random designs ({random_spce:.4f})"
-    )
+    for name in POLICY_NETS:
+        assert results[name][0] > random_spce, (
+            f"{name} ({results[name][0]:.4f}) should beat random designs "
+            f"({random_spce:.4f})"
+        )
+
+    reference_spce = results[REFERENCE_NET][0]
     if EXPECTED_SPCE is not None:
-        assert abs(dad_spce - EXPECTED_SPCE) <= SPCE_TOL, (
-            f"Trained sPCE {dad_spce:.4f} not within {SPCE_TOL} of {EXPECTED_SPCE}"
+        assert abs(reference_spce - EXPECTED_SPCE) <= SPCE_TOL, (
+            f"{REFERENCE_NET} sPCE {reference_spce:.4f} not within {SPCE_TOL} "
+            f"of {EXPECTED_SPCE}"
         )
 
 

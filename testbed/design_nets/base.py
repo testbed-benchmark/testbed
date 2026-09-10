@@ -1,0 +1,105 @@
+"""Base design-network interface."""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
+
+import torch
+from torch import Tensor
+
+
+@dataclass
+class DesignProposal:
+    """A raw design proposed by a design network.
+
+    Attributes:
+        raw_design: Design in the network's output coordinates.
+        log_prob: Optional log probability of the raw design.
+        deterministic_raw_design: Optional deterministic counterpart to a sampled
+            raw design.
+        info: Additional proposal metadata.
+    """
+
+    raw_design: Tensor
+    log_prob: Tensor | None = None
+    deterministic_raw_design: Tensor | None = None
+    info: dict[str, Any] = field(default_factory=dict)
+
+
+class DesignNet(torch.nn.Module, ABC):
+    """Maps experimental history to a new design.
+
+    Attributes:
+        produces_policy_log_probs: Whether proposals include policy log
+            probabilities for score-function training.
+        supports_reparameterized_proposals: Whether stochastic proposals can
+            be sampled with pathwise reparameterization.
+        normalize_design_history: Whether the network normalizes physical
+            design histories before evaluating its policy. Subclasses may set
+            this per instance when normalization is configurable.
+        raw_designs_are_physical: Whether proposal ``raw_design`` values are
+            already physical designs. Subclasses that set this to ``True``
+            bypass the task design-space transform and its log-probability
+            correction.
+    """
+
+    produces_policy_log_probs = False
+    supports_reparameterized_proposals = False
+    normalize_design_history = False
+    raw_designs_are_physical = False
+
+    @property
+    def device(self) -> torch.device:
+        """Returns the network device."""
+        return next(self.parameters()).device
+
+    @abstractmethod
+    def forward(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask: Tensor | None = None,
+    ) -> Tensor:
+        """Maps past (design, outcome) pairs to the next design x_t.
+
+        Args:
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``. Its ``batch_shape``
+                and history length ``T`` must exactly match ``y_history``;
+                built-in networks do not broadcast these dimensions.
+            mask: Optional boolean mask for padded histories with shape
+                ``[*batch_shape, T]``.
+
+        Returns:
+            Tensor: The next design x_t with shape
+            ``[*batch_shape, *event_shape_design]``.
+        """
+        ...
+
+    @abstractmethod
+    def propose(
+        self,
+        y_history,
+        design_history,
+        *,
+        mask: Tensor | None = None,
+        reparameterize_policy: bool = False,
+    ) -> DesignProposal:
+        """Returns a raw design proposal for an experimental history.
+
+        Args:
+            y_history: Outcome history with the same shape requirements as
+                ``forward``.
+            design_history: Design history with the same shape requirements
+                as ``forward``.
+            mask: Optional mask for padded histories.
+            reparameterize_policy: Whether stochastic policies should use a
+                reparameterized sample.
+
+        Returns:
+            A proposal containing the network's raw design.
+        """
+        ...

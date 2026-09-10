@@ -1,9 +1,11 @@
+import typing
+
 import pytest
 import torch
 
+from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.envs import (
     BEDEnv,
-    BoxDesignSpace,
     CallableReward,
     History,
     RLBOEDDenseReward,
@@ -13,38 +15,39 @@ from testbed.envs import (
 from testbed.tasks import LocationFinding
 
 
-def make_task():
-    return LocationFinding(n_sources=1, dim_theta=2, noise_scale=0.2)
-
-
-def make_space(task):
-    return BoxDesignSpace(-1.0, 1.0, event_shape=task.event_shape_design)
-
-
-def test_box_design_space_samples_with_integer_bounds():
-    space = BoxDesignSpace(-1, 1, event_shape=(2,))
-
-    sample = space.sample((4,))
-
-    assert torch.is_floating_point(sample)
-    assert sample.shape == (4, 2)
-    assert space.contains(sample)
-
-
-def test_box_design_space_rejects_invalid_bounds_and_shapes():
-    with pytest.raises(ValueError):
-        BoxDesignSpace(torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]))
-
-    space = BoxDesignSpace(torch.tensor([-1.0, 0.0]), torch.tensor([1.0, 2.0]))
-
-    assert space.event_shape == torch.Size([2])
-    assert space.contains(torch.tensor([[0.0, 1.0], [1.0, 2.0]]))
-    assert not space.contains(torch.tensor([0.0, 1.0, 2.0]))
-    assert not space.contains(torch.tensor([0.0, 3.0]))
-    assert torch.equal(
-        space.project(torch.tensor([-2.0, 3.0])),
-        torch.tensor([-1.0, 2.0]),
+def make_task(design_space=None):
+    if design_space is None:
+        design_space = BoxDesignSpace(-1.0, 1.0, event_shape=(2,))
+    return LocationFinding(
+        n_sources=1,
+        dim_theta=2,
+        noise_scale=0.2,
+        design_space=design_space,
     )
+
+
+# BoxDesignSpace's own behaviour is covered in tests/test_design_spaces.py;
+# what follows exercises how BEDEnv uses a design space.
+
+
+def test_bed_env_rejects_invalid_categorical_designs_without_projection():
+    task = make_task(FiniteDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]])))
+    # FiniteDesignSpace.project snaps to the nearest valid design, so an invalid
+    # design only reaches validation with projection turned off.
+    env = BEDEnv(
+        task,
+        horizon=1,
+        batch_shape=(1,),
+        project_designs=False,
+    )
+    env.reset()
+
+    with pytest.raises(ValueError, match="outside the design space"):
+        env.step(torch.tensor([[0.5, 0.5]]))
+
+
+def test_bed_env_init_type_hints_resolve_at_runtime():
+    assert "task" in typing.get_type_hints(BEDEnv.__init__)
 
 
 def test_history_empty_write_append_prefix_and_bounds():
@@ -93,7 +96,6 @@ def test_bed_env_reset_and_step_shapes():
     env = BEDEnv(
         task,
         horizon=3,
-        design_space=make_space(task),
         reward_fn=RLBOEDDenseReward(n_contrastive=2),
         batch_shape=(5,),
     )
@@ -122,7 +124,7 @@ def test_bed_env_requires_reset_and_rejects_invalid_horizon():
     with pytest.raises(ValueError):
         BEDEnv(task, horizon=0)
 
-    env = BEDEnv(task, horizon=1, design_space=make_space(task))
+    env = BEDEnv(task, horizon=1)
     with pytest.raises(RuntimeError):
         _ = env.history
     with pytest.raises(RuntimeError):
@@ -134,7 +136,6 @@ def test_bed_env_reset_accepts_explicit_theta_and_info_options():
     env = BEDEnv(
         task,
         horizon=2,
-        design_space=make_space(task),
         reward_fn=RLBOEDDenseReward(n_contrastive=1),
         batch_shape=(2,),
         include_theta_in_info=True,
@@ -154,7 +155,6 @@ def test_bed_env_reset_accepts_theta_all_and_batch_shape_override():
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=make_space(task),
         reward_fn=RLBOEDDenseReward(n_contrastive=2),
         batch_shape=(1,),
     )
@@ -173,7 +173,6 @@ def test_bed_env_reset_rejects_bad_theta_shapes():
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=make_space(task),
         reward_fn=RLBOEDDenseReward(n_contrastive=1),
         batch_shape=(2,),
     )
@@ -189,7 +188,6 @@ def test_bed_env_reset_rejects_bad_theta_all_shape_with_zero_reward():
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=make_space(task),
         reward_fn=ZeroReward(),
         batch_shape=(2,),
     )
@@ -203,7 +201,6 @@ def test_bed_env_design_validation_without_projection():
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=make_space(task),
         reward_fn=ZeroReward(),
         batch_shape=(2,),
         project_designs=False,
@@ -219,7 +216,6 @@ def test_bed_env_rejects_wrong_design_shape_after_projection():
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=make_space(task),
         reward_fn=ZeroReward(),
         batch_shape=(2,),
     )
@@ -231,7 +227,7 @@ def test_bed_env_rejects_wrong_design_shape_after_projection():
 
 def test_bed_env_can_reset_after_termination():
     task = make_task()
-    env = BEDEnv(task, horizon=1, design_space=make_space(task), reward_fn=ZeroReward())
+    env = BEDEnv(task, horizon=1, reward_fn=ZeroReward())
 
     env.reset(seed=0)
     env.step(torch.zeros(2))
@@ -248,7 +244,6 @@ def test_bed_env_projects_box_designs():
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=make_space(task),
         reward_fn=ZeroReward(),
         batch_shape=(2,),
     )
@@ -267,7 +262,6 @@ def test_bed_env_step_detaches_rollout_tensors_by_default():
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=make_space(task),
         reward_fn=CallableReward(lambda env, design, outcome: design.sum(dim=-1)),
         project_designs=False,
     )
@@ -290,7 +284,6 @@ def test_bed_env_scalar_batch_shape():
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=make_space(task),
         reward_fn=ZeroReward(),
     )
 
@@ -308,7 +301,6 @@ def test_bed_env_scalar_batch_shape():
 
 def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
     task = make_task()
-    space = make_space(task)
     horizon = 4
     batch_shape = (6,)
     n_contrastive = 3
@@ -316,14 +308,12 @@ def test_dense_reward_sum_matches_terminal_reward_for_same_rollout():
     dense_env = BEDEnv(
         task,
         horizon=horizon,
-        design_space=space,
         reward_fn=RLBOEDDenseReward(n_contrastive),
         batch_shape=batch_shape,
     )
     terminal_env = BEDEnv(
         task,
         horizon=horizon,
-        design_space=space,
         reward_fn=RLBOEDTerminalReward(n_contrastive),
         batch_shape=batch_shape,
     )
@@ -365,14 +355,12 @@ def test_contrastive_rewards_handle_zero_contrastive_particles():
     dense_env = BEDEnv(
         task,
         horizon=2,
-        design_space=make_space(task),
         reward_fn=RLBOEDDenseReward(n_contrastive=0),
         batch_shape=(3,),
     )
     terminal_env = BEDEnv(
         task,
         horizon=2,
-        design_space=make_space(task),
         reward_fn=RLBOEDTerminalReward(n_contrastive=0),
         batch_shape=(3,),
     )
@@ -399,7 +387,6 @@ def test_reward_error_paths_and_callable_reward():
     env = BEDEnv(
         task,
         horizon=1,
-        design_space=make_space(task),
         reward_fn=CallableReward(lambda env, design, outcome: design.sum(dim=-1)),
         batch_shape=(2,),
     )
@@ -419,3 +406,55 @@ def test_reward_error_paths_and_callable_reward():
     terminal_reward = RLBOEDTerminalReward(n_contrastive=1)
     with pytest.raises(RuntimeError, match="Reward function has not been reset"):
         terminal_reward.step(env, torch.zeros(2, 2), torch.zeros(2, 1))
+
+
+def test_step_conditions_on_the_history_for_a_task_with_memory():
+    # The env writes into a padded History but used to sample each outcome with
+    # no history, silently simulating a memoryless process. Pin it against the
+    # task's own recursion: y_t = make_mean(theta, x, y_{<t}) + sqrt(dt)*sigma*eps.
+    import math
+
+    from testbed.tasks import StochasticPendulum
+
+    task = StochasticPendulum()
+    assert not task.memoryless
+    design = torch.zeros(1, 1)  # fixed, so any drift comes from the history
+
+    torch.manual_seed(0)
+    env = BEDEnv(task, horizon=6, batch_shape=(1,))
+    env.reset()
+    theta = env.theta_0
+
+    torch.manual_seed(7)
+    for _ in range(6):
+        env.step(design)
+
+    torch.manual_seed(7)
+    previous, expected = torch.zeros(1, 2), []
+    for _ in range(6):
+        mean = task.make_mean(theta, design, previous.unsqueeze(1))
+        previous = mean + math.sqrt(task.dt) * task.noise_scale * torch.randn_like(mean)
+        expected.append(previous[0])
+
+    assert torch.allclose(env.history.outcomes[0], torch.stack(expected), atol=1e-6)
+
+
+def test_step_is_unchanged_for_a_memoryless_task():
+    # A memoryless task drops the history, so threading it through must not
+    # perturb the common path.
+    task = make_task()
+    design = torch.zeros(1, 2)
+
+    torch.manual_seed(0)
+    env = BEDEnv(task, horizon=4, batch_shape=(1,))
+    env.reset()
+    theta = env.theta_0
+
+    torch.manual_seed(3)
+    for _ in range(4):
+        env.step(design)
+
+    torch.manual_seed(3)
+    direct = torch.stack([task.sample_outcome(theta, design)[0] for _ in range(4)])
+
+    assert torch.equal(env.history.outcomes[0], direct)

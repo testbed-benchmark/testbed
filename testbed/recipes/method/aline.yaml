@@ -1,0 +1,59 @@
+# @package _global_
+
+defaults:
+  - /system: default
+  - /task: location_finding
+  - /wandb: default
+  - /hydra_run: default
+  - _self_
+
+# system
+seed: 0
+
+# rollout
+T: 30
+pool_size: 200
+n_initial: 1
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: -4.0
+    high: 4.0
+    event_shape: [2]
+
+# Flattened parameter-index subsets. One subset is sampled per minibatch.
+target_subsets:
+  - [0, 1]
+target_weights: null
+
+# model
+model:
+  embedding_dim: 32
+  feedforward_dim: 128
+  n_heads: 4
+  n_layers: 3
+  dropout: 0.0
+  n_components: 10
+  min_scale: 1e-4
+  design_center: 0.0
+  design_scale: 1.0
+  outcome_center: 0.0
+  outcome_scale: 10.0
+
+# training
+n_train_iter: 100_000
+n_warmup_iter: 20_000
+n_outer: 200
+alpha: 1.0
+gamma: 1.0
+grad_clip: 1.0
+
+optimizer:
+  lr: 1e-3
+  weight_decay: 0.01
+
+# evaluation
+eval_every: 0
+n_outer_eval: 200
+n_inner_eval: 1_000
+eval_deterministic: true
