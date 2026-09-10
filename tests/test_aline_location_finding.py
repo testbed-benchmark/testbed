@@ -21,7 +21,6 @@ def _make_cfg(**overrides):
     values = {
         "T": 3,
         "pool_size": 4,
-        "n_initial": 1,
         "n_outer": 4,
         "n_outer_eval": 4,
         "n_inner_eval": 2,
@@ -136,8 +135,8 @@ def test_rollout_samples_in_bounds_without_replacement():
     assert rollout.designs.shape == (4, 3, 2)
     assert rollout.outcomes.shape == (4, 3, 1)
     assert rollout.posterior_log_probs.shape == (4, 3)
-    assert rollout.action_log_probs.shape == (4, 1)
-    assert rollout.rewards.shape == (4, 1)
+    assert rollout.action_log_probs.shape == (4, 3)
+    assert rollout.rewards.shape == (4, 3)
     assert trainer.design_space.contains(rollout.designs)
     for designs in rollout.designs:
         assert torch.unique(designs, dim=0).shape[0] == trainer.cfg.T
@@ -167,17 +166,34 @@ def test_mean_log_prob_includes_every_parameter(n_sources, dim_theta):
 def test_warmup_only_updates_inference_then_joint_updates_policy():
     torch.manual_seed(2)
     trainer, model = _make_trainer()
+    calls = {"random": 0, "policy": 0}
+    random_action = trainer._random_action
+    policy_action = trainer._policy_action
+
+    def tracked_random_action(available_mask):
+        calls["random"] += 1
+        return random_action(available_mask)
+
+    def tracked_policy_action(output, *, deterministic):
+        calls["policy"] += 1
+        return policy_action(output, deterministic=deterministic)
+
+    trainer._random_action = tracked_random_action
+    trainer._policy_action = tracked_policy_action
     before_warmup = [p.detach().clone() for p in model.acquisition_head.parameters()]
 
     warmup_metrics = trainer.train_step(step=0)
 
     assert warmup_metrics["policy_loss"] == 0.0
+    assert calls == {"random": trainer.cfg.T, "policy": 0}
     for before, after in zip(before_warmup, model.acquisition_head.parameters()):
         torch.testing.assert_close(before, after)
     assert all(p.grad is None for p in model.acquisition_head.parameters())
 
+    calls = {"random": 0, "policy": 0}
     joint_metrics = trainer.train_step(step=1)
 
+    assert calls == {"random": 0, "policy": trainer.cfg.T}
     assert all(torch.isfinite(torch.tensor(value)) for value in joint_metrics.values())
     assert any(
         p.grad is not None and torch.any(p.grad != 0)
@@ -204,7 +220,6 @@ def test_policy_reward_matches_reference_clipping_and_standardization():
         action_log_probs=torch.tensor([[1.0, 2.0], [4.0, 4.0]], requires_grad=True),
         rewards=torch.tensor([[-2.0, 3.0], [-1.0, -1.0]]),
         final_output=None,
-        inference_log_probs=torch.zeros(2, 2, requires_grad=True),
     )
     trainer.rollout = lambda theta, **kwargs: rollout
 
@@ -253,7 +268,7 @@ def test_train_logs_metrics_and_saves_checkpoints(tmp_path):
 
 @pytest.mark.parametrize("training", [True, False])
 def test_empty_context_has_finite_outputs_and_gradients(training):
-    trainer, model = _make_trainer(cfg=_make_cfg(n_initial=0))
+    trainer, model = _make_trainer()
     model.train(training)
     candidates = trainer.design_space.sample((2, 3))
     output = model(
@@ -269,7 +284,7 @@ def test_empty_context_has_finite_outputs_and_gradients(training):
     )
 
 
-def test_rollout_passes_history_and_trains_all_parameters_before_acquisition():
+def test_rollout_passes_history_and_trains_all_post_acquisition_states():
     trainer, model = _make_trainer()
     sample_outcome = trainer.task.sample_outcome
     lengths = []
@@ -291,15 +306,25 @@ def test_rollout_passes_history_and_trains_all_parameters_before_acquisition():
     handle.remove()
     assert lengths == [0, 1, 2]
     expected = torch.stack(
-        [out.posterior.log_prob(theta.reshape(4, 2)).mean(-1) for out in outputs[1:-1]],
+        [out.posterior.log_prob(theta.reshape(4, 2)).mean(-1) for out in outputs[1:]],
         dim=1,
     )
-    torch.testing.assert_close(rollout.inference_log_probs, expected)
+    torch.testing.assert_close(rollout.posterior_log_probs, expected)
     full_log_probs = [
         out.posterior.log_prob(theta.reshape(4, 2)).mean(-1) for out in outputs
     ]
+    expected_rewards = torch.stack(
+        [
+            (next_log_prob - current_log_prob).detach()
+            for current_log_prob, next_log_prob in zip(
+                full_log_probs[:-1], full_log_probs[1:]
+            )
+        ],
+        dim=1,
+    )
     torch.testing.assert_close(
-        rollout.rewards[:, 0], (full_log_probs[2] - full_log_probs[1]).detach()
+        rollout.rewards,
+        expected_rewards,
     )
 
 

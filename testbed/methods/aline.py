@@ -29,7 +29,6 @@ class AlineRollout:
     action_log_probs: Tensor
     rewards: Tensor
     final_output: AlineOutput
-    inference_log_probs: Tensor | None = None
 
 
 class Trainer:
@@ -124,25 +123,22 @@ class Trainer:
             candidates,
             available_mask,
         )
+        # The paper defines R_1 relative to q(theta | D_0). This learned
+        # empty-history score is only a reward baseline, not an inference target.
         current_log_prob = self._mean_log_prob(current_output, theta)
         posterior_log_probs = []
-        inference_log_probs = []
         action_log_probs = []
         rewards = []
         batch_indices = torch.arange(batch_size, device=self.device)
 
-        for time_index in range(cfg.T):
-            use_policy = not random_policy and time_index >= cfg.n_initial
-            if time_index >= cfg.n_initial:
-                # Reference training scores every parameter before acquisition.
-                inference_log_probs.append(current_log_prob)
-            if use_policy:
+        for _ in range(cfg.T):
+            if random_policy:
+                action = self._random_action(available_mask)
+                action_log_prob = None
+            else:
                 action, action_log_prob = self._policy_action(
                     current_output, deterministic=deterministic
                 )
-            else:
-                action = self._random_action(available_mask)
-                action_log_prob = None
 
             design = candidates[batch_indices, action]
             outcome = self.task.sample_outcome(
@@ -161,7 +157,7 @@ class Trainer:
             )
             next_log_prob = self._mean_log_prob(next_output, theta)
             posterior_log_probs.append(next_log_prob)
-            if action_log_prob is not None and time_index < cfg.T - 1:
+            if action_log_prob is not None:
                 action_log_probs.append(action_log_prob)
                 rewards.append(next_log_prob.detach() - current_log_prob.detach())
 
@@ -178,7 +174,6 @@ class Trainer:
             ),
             rewards=torch.stack(rewards, dim=1) if rewards else empty,
             final_output=current_output,
-            inference_log_probs=torch.stack(inference_log_probs, dim=1),
         )
 
     def train_step(self, step: int = 0) -> dict[str, float]:
@@ -186,8 +181,13 @@ class Trainer:
         self.model.train()
         warmup = step < self.cfg.n_warmup_iter
         theta = self.task.sample_prior(self.cfg.n_outer)
-        rollout = self.rollout(theta, pool_size=self.cfg.T if warmup else None)
-        inference_loss = -rollout.inference_log_probs.mean()
+        rollout = self.rollout(
+            theta,
+            random_policy=warmup,
+            pool_size=self.cfg.T if warmup else None,
+        )
+        # The rollout stores post-acquisition scores for D_1, ..., D_T.
+        inference_loss = -rollout.posterior_log_probs.mean()
         policy_loss = inference_loss.new_zeros(())
         mean_reward = inference_loss.new_zeros(())
 
@@ -372,8 +372,6 @@ def validate_config(task, cfg, design_space: BoxDesignSpace) -> None:
         raise ValueError(
             "pool_size must be at least T for sampling without replacement."
         )
-    if not 0 <= cfg.n_initial < cfg.T - 1:
-        raise ValueError("n_initial must satisfy 0 <= n_initial < T - 1.")
     if cfg.n_warmup_iter < 0 or cfg.eval_every < 0:
         raise ValueError("n_warmup_iter and eval_every must be non-negative.")
     if cfg.gamma < 0:

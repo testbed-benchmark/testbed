@@ -13,7 +13,6 @@ seed: 0
 # rollout
 T: 30
 pool_size: 200
-n_initial: 1
 task:
   design_space:
     _target_: testbed.core.design_spaces.BoxDesignSpace
