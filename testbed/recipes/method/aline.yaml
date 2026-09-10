@@ -4,6 +4,7 @@ defaults:
   - /system: default
   - /task: location_finding
   - /wandb: default
+  - /final_eval: default
   - /hydra_run: default
   - _self_
 
@@ -55,3 +56,8 @@ eval_batch_size: 5
 n_outer_eval: 200
 n_inner_eval: 1_000
 eval_deterministic: true
+
+final_eval:
+  # ALINE's transformer attends over eval_pool_size candidates, so keep the
+  # outer batches as small as its periodic evaluation batches.
+  outer_batch_size: ${eval_batch_size}

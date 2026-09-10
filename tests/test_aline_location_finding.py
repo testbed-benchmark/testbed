@@ -8,8 +8,11 @@ import torch
 
 from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.manager import Manager
+from testbed.core.rollout import Rollout
 from testbed.design_nets import AlineModel, AlineOutput
-from testbed.methods.aline import AlineRollout, Trainer
+from testbed.designers import AlineDesigner
+from testbed.eval import evaluate_checkpoint
+from testbed.methods.aline import Trainer
 from testbed.tasks import LocationFinding
 
 
@@ -157,16 +160,104 @@ def test_rollout_samples_in_bounds_without_replacement():
     trainer, _ = _make_trainer()
     theta = trainer.task.sample_prior(4)
 
-    rollout = trainer.rollout(theta, deterministic=True)
+    rollout = trainer.designer.rollout(
+        theta, deterministic=True, return_posterior_scores=True
+    )
 
-    assert rollout.designs.shape == (4, 3, 2)
-    assert rollout.outcomes.shape == (4, 3, 1)
-    assert rollout.posterior_log_probs.shape == (4, 4)
-    assert rollout.action_log_probs.shape == (4, 3)
-    assert rollout.rewards.shape == (4, 3)
-    assert trainer.design_space.contains(rollout.designs)
-    for designs in rollout.designs:
+    assert rollout.design_history.shape == (4, 3, 2)
+    assert rollout.y_history.shape == (4, 3, 1)
+    assert rollout.extra["posterior_log_probs"].shape == (4, 4)
+    assert rollout.extra["policy_log_probs"].shape == (4, 3)
+    assert isinstance(rollout, Rollout)
+    assert trainer.design_space.contains(rollout.design_history)
+    for designs in rollout.design_history:
         assert torch.unique(designs, dim=0).shape[0] == trainer.cfg.T
+
+
+def test_aline_designer_produces_common_rollout_for_two_sources():
+    torch.manual_seed(7)
+    task = LocationFinding(n_sources=2, dim_theta=2)
+    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
+    task.design_space = space
+    designer = AlineDesigner(
+        task,
+        T=3,
+        model=_make_model(task, space).eval(),
+        pool_size=4,
+    )
+
+    rollout = designer.rollout(task.sample_prior(2))
+
+    assert rollout.theta.shape == (2, 2, 2)
+    assert rollout.y_history.shape == (2, 3, 1)
+    assert rollout.design_history.shape == (2, 3, 2)
+    assert task.design_space.contains(rollout.design_history)
+    for designs in rollout.design_history:
+        assert torch.unique(designs, dim=0).shape[0] == designer.T
+
+
+@pytest.mark.parametrize("random_policy", [False, True])
+def test_shared_rollout_keeps_one_pool_and_masks_selected_candidates(random_policy):
+    trainer, model = _make_trainer()
+    designer = trainer.designer
+    seen = []
+    handle = model.register_forward_pre_hook(
+        lambda module, inputs: seen.append((inputs[2], inputs[3].clone()))
+    )
+    theta = trainer.task.sample_prior(2).requires_grad_()
+    rollout = designer.rollout(
+        theta,
+        random_policy=random_policy,
+        pool_size=designer.T,
+        return_posterior_scores=True,
+    )
+    handle.remove()
+
+    assert len(seen) == designer.T + 1
+    candidates = seen[0][0]
+    for t, (pool, mask) in enumerate(seen):
+        assert pool is candidates
+        assert torch.all(mask.sum(dim=1) == designer.T - t)
+        for b in range(2):
+            for design in rollout.design_history[b, :t]:
+                selected = (pool[b] == design).all(dim=-1)
+                assert selected.sum() == 1
+                assert not mask[b, selected].any()
+    assert not rollout.y_history.requires_grad
+    assert rollout.extra["posterior_log_probs"].shape == (2, designer.T + 1)
+    assert rollout.extra["posterior_log_probs"].requires_grad
+    assert ("policy_log_probs" in rollout.extra) is (not random_policy)
+    assert designer.pool_size == trainer.cfg.pool_size
+    assert designer.deterministic is False
+
+
+def test_posterior_collection_preserves_deterministic_evaluation_trajectory():
+    trainer, model = _make_trainer()
+    model.eval()
+    theta = trainer.task.sample_prior(2)
+    torch.manual_seed(12)
+    ordinary = trainer.designer.rollout(theta, deterministic=True)
+    torch.manual_seed(12)
+    scored = trainer.designer.rollout(
+        theta, deterministic=True, return_posterior_scores=True
+    )
+    torch.testing.assert_close(ordinary.design_history, scored.design_history)
+    torch.testing.assert_close(ordinary.y_history, scored.y_history)
+    torch.testing.assert_close(
+        ordinary.extra["policy_log_probs"], scored.extra["policy_log_probs"]
+    )
+    assert "posterior_log_probs" not in ordinary.extra
+
+
+def test_designer_accepts_unbatched_theta_and_rejects_invalid_inputs():
+    trainer, _ = _make_trainer()
+    designer = trainer.designer
+    theta = trainer.task.sample_prior(2)[0]
+    assert designer.rollout(theta).theta.shape == (1, 1, 2)
+    with pytest.raises(ValueError, match="pool_size must be at least T"):
+        designer.rollout(theta, pool_size=designer.T - 1)
+    with pytest.raises(ValueError, match="theta must have one batch dimension"):
+        designer.rollout(torch.zeros(2, 2))
 
 
 @pytest.mark.parametrize("n_sources, dim_theta", [(1, 2), (2, 3)])
@@ -183,7 +274,7 @@ def test_mean_log_prob_includes_every_parameter(n_sources, dim_theta):
         mixture_scales=torch.ones(2, n_parameters, 1),
     )
     theta = torch.ones(2, n_sources, dim_theta, requires_grad=True)
-    actual = trainer._mean_log_prob(output, theta)
+    actual = trainer.designer._mean_log_prob(output, theta)
     expected = torch.distributions.Normal(0, 1).log_prob(theta).mean(dim=(1, 2))
     torch.testing.assert_close(actual, expected)
     actual.sum().backward()
@@ -194,8 +285,8 @@ def test_warmup_only_updates_inference_then_joint_updates_policy():
     torch.manual_seed(2)
     trainer, model = _make_trainer()
     calls = {"random": 0, "policy": 0}
-    random_action = trainer._random_action
-    policy_action = trainer._policy_action
+    random_action = trainer.designer._random_action
+    policy_action = trainer.designer._policy_action
 
     def tracked_random_action(available_mask):
         calls["random"] += 1
@@ -205,8 +296,16 @@ def test_warmup_only_updates_inference_then_joint_updates_policy():
         calls["policy"] += 1
         return policy_action(output, deterministic=deterministic)
 
-    trainer._random_action = tracked_random_action
-    trainer._policy_action = tracked_policy_action
+    trainer.designer._random_action = tracked_random_action
+    trainer.designer._policy_action = tracked_policy_action
+    rollout_calls = []
+    shared_rollout = trainer.designer.rollout
+
+    def tracked_rollout(theta, **kwargs):
+        rollout_calls.append(kwargs)
+        return shared_rollout(theta, **kwargs)
+
+    trainer.designer.rollout = tracked_rollout
     before_warmup = [p.detach().clone() for p in model.acquisition_head.parameters()]
 
     warmup_metrics = trainer.train_step(step=0)
@@ -221,6 +320,18 @@ def test_warmup_only_updates_inference_then_joint_updates_policy():
     joint_metrics = trainer.train_step(step=1)
 
     assert calls == {"random": 0, "policy": trainer.cfg.T}
+    assert rollout_calls == [
+        {
+            "random_policy": True,
+            "pool_size": trainer.cfg.T,
+            "return_posterior_scores": True,
+        },
+        {
+            "random_policy": False,
+            "pool_size": trainer.cfg.pool_size,
+            "return_posterior_scores": True,
+        },
+    ]
     assert all(torch.isfinite(torch.tensor(value)) for value in joint_metrics.values())
     assert any(
         p.grad is not None and torch.any(p.grad != 0)
@@ -240,41 +351,55 @@ def test_single_outer_sample_has_finite_losses_and_gradients():
 
 def test_policy_reward_matches_reference_clipping_and_standardization():
     trainer, _ = _make_trainer(cfg=_make_cfg(n_outer=2, n_warmup_iter=0, gamma=0.5))
-    rollout = AlineRollout(
-        outcomes=torch.empty(2, 0, 1),
-        designs=torch.empty(2, 0, 2),
-        posterior_log_probs=torch.zeros(2, 3, requires_grad=True),
-        action_log_probs=torch.tensor([[1.0, 2.0], [4.0, 4.0]], requires_grad=True),
-        rewards=torch.tensor([[-2.0, 3.0], [-1.0, -1.0]]),
-        final_output=None,
+    rollout = Rollout(
+        theta=trainer.task.sample_prior(2),
+        y_history=torch.empty(2, 0, 1),
+        design_history=torch.empty(2, 0, 2),
+        extra={
+            "posterior_log_probs": torch.tensor(
+                [[0.0, -2.0, 1.0], [0.0, -1.0, -2.0]], requires_grad=True
+            ),
+            "policy_log_probs": torch.tensor(
+                [[1.0, 2.0], [4.0, 4.0]], requires_grad=True
+            ),
+        },
     )
-    trainer.rollout = lambda theta, **kwargs: rollout
+    trainer.designer.rollout = lambda theta, **kwargs: rollout
 
     metrics = trainer.train_step(step=0)
 
     assert metrics["policy_loss"] == pytest.approx(1 / (2 * 2**0.5))
     torch.testing.assert_close(
-        rollout.posterior_log_probs.grad,
-        torch.full_like(rollout.posterior_log_probs, -1 / 6),
+        rollout.extra["posterior_log_probs"].grad,
+        torch.full_like(rollout.extra["posterior_log_probs"], -1 / 6),
     )
 
 
 def test_evaluate_full_parameter_eig_without_target_configuration():
     torch.manual_seed(5)
     trainer, model = _make_trainer(task=LocationFinding(n_sources=2, dim_theta=3))
-    rollout = trainer.rollout
+    rollout = trainer.designer.rollout
     calls = []
 
     def tracked_rollout(theta, **kwargs):
         calls.append((theta.shape[0], kwargs.get("pool_size")))
         return rollout(theta, **kwargs)
 
-    trainer.rollout = tracked_rollout
+    trainer.designer.rollout = tracked_rollout
     metrics = trainer.evaluate()
     assert calls == [(2, trainer.cfg.eval_pool_size)] * 2
     assert set(metrics) == {"eval/posterior_nll", "eval/spce", "eval/snmc"}
     assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
     assert model.training
+
+
+def test_periodic_evaluation_accepts_one_outer_sample():
+    trainer, _ = _make_trainer(
+        cfg=_make_cfg(n_outer_eval=1),
+        task=LocationFinding(n_sources=2, dim_theta=2),
+    )
+    metrics = trainer.evaluate()
+    assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
 
 
 def test_train_logs_metrics_and_saves_checkpoints(tmp_path):
@@ -342,30 +467,14 @@ def test_rollout_passes_history_and_trains_every_posterior_state():
         lambda module, inputs, output: outputs.append(output)
     )
     theta = trainer.task.sample_prior(4)
-    rollout = trainer.rollout(theta)
+    rollout = trainer.designer.rollout(theta, return_posterior_scores=True)
     handle.remove()
     assert lengths == [0, 1, 2]
     expected = torch.stack(
         [out.posterior.log_prob(theta.reshape(4, 2)).mean(-1) for out in outputs],
         dim=1,
     )
-    torch.testing.assert_close(rollout.posterior_log_probs, expected)
-    full_log_probs = [
-        out.posterior.log_prob(theta.reshape(4, 2)).mean(-1) for out in outputs
-    ]
-    expected_rewards = torch.stack(
-        [
-            (next_log_prob - current_log_prob).detach()
-            for current_log_prob, next_log_prob in zip(
-                full_log_probs[:-1], full_log_probs[1:]
-            )
-        ],
-        dim=1,
-    )
-    torch.testing.assert_close(
-        rollout.rewards,
-        expected_rewards,
-    )
+    torch.testing.assert_close(rollout.extra["posterior_log_probs"], expected)
 
 
 def test_joint_boundary_resets_optimizer_with_reference_learning_rates():
@@ -495,7 +604,7 @@ def test_forward_matches_authors_code(training):
             )
 
 
-def test_hydra_entry_point_trains_evaluates_and_saves(tmp_path):
+def test_hydra_entry_point_trains_evaluates_and_saves(tmp_path, monkeypatch):
     import os
     import subprocess
     import sys
@@ -505,6 +614,7 @@ def test_hydra_entry_point_trains_evaluates_and_saves(tmp_path):
             sys.executable,
             "-m",
             "testbed.methods.aline",
+            "task=location_finding_2src",
             "device=cpu",
             "T=3",
             "pool_size=4",
@@ -531,3 +641,26 @@ def test_hydra_entry_point_trains_evaluates_and_saves(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert (tmp_path / "best.pt").exists()
     assert (tmp_path / "final_step.pt").exists()
+
+    calls = []
+    shared_rollout = AlineDesigner.rollout
+
+    def tracked_rollout(self, theta, **kwargs):
+        result = shared_rollout(self, theta, **kwargs)
+        assert isinstance(result, Rollout)
+        calls.append((self.pool_size, self.deterministic, result.theta.shape[1:]))
+        return result
+
+    monkeypatch.setattr(AlineDesigner, "rollout", tracked_rollout)
+    evaluation = evaluate_checkpoint(
+        str(tmp_path),
+        n_outer=2,
+        n_contrastive=2,
+        outer_batch_size=1,
+        contrastive_chunk_size=2,
+        device="cpu",
+    )
+    assert calls == [(5, True, torch.Size([2, 2]))] * 2
+    assert evaluation["weights_used"] == "model"
+    assert torch.isfinite(torch.tensor(evaluation["lower_bound"]))
+    assert torch.isfinite(torch.tensor(evaluation["upper_bound"]))

@@ -107,8 +107,8 @@ class AlineModel(nn.Module):
             or torch.any(design_scale <= 0)
         ):
             raise ValueError("design_scale must be finite and positive.")
-        self.register_buffer("design_center", design_center.reshape(-1))
-        self.register_buffer("design_scale", design_scale.reshape(-1))
+        self.register_buffer("design_center", design_center.reshape(-1).clone())
+        self.register_buffer("design_scale", design_scale.reshape(-1).clone())
 
         outcome_center = torch.as_tensor(outcome_center)
         outcome_scale = torch.as_tensor(outcome_scale, device=outcome_center.device)
@@ -128,10 +128,10 @@ class AlineModel(nn.Module):
         ):
             raise ValueError("outcome_scale must be positive.")
 
-        self.register_buffer("design_low", design_low.reshape(-1))
-        self.register_buffer("design_high", design_high.reshape(-1))
-        self.register_buffer("outcome_center", outcome_center.reshape(-1))
-        self.register_buffer("outcome_scale", outcome_scale.reshape(-1))
+        self.register_buffer("design_low", design_low.reshape(-1).clone())
+        self.register_buffer("design_high", design_high.reshape(-1).clone())
+        self.register_buffer("outcome_center", outcome_center.reshape(-1).clone())
+        self.register_buffer("outcome_scale", outcome_scale.reshape(-1).clone())
 
         self.design_embedder = self._make_mlp(
             self.dim_design, feedforward_dim, embedding_dim

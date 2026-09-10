@@ -6,29 +6,16 @@ targeting the EIG in all parameters.
 """
 
 import inspect
-from dataclasses import dataclass
 
 import hydra
 import torch
-from torch import Tensor
 
 from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.rollout import Rollout
 from testbed.core.setup import setup
-from testbed.design_nets import AlineModel, AlineOutput
+from testbed.design_nets import AlineModel
 from testbed.design_objectives import SNMC, SPCE
-
-
-@dataclass
-class AlineRollout:
-    """A batched ALINE trajectory and its training signals."""
-
-    outcomes: Tensor
-    designs: Tensor
-    posterior_log_probs: Tensor
-    action_log_probs: Tensor
-    rewards: Tensor
-    final_output: AlineOutput
+from testbed.designers import AlineDesigner
 
 
 class Trainer:
@@ -49,6 +36,14 @@ class Trainer:
         self.task = task
         self.model = model
         self.design_space = design_space
+        self.designer = AlineDesigner(
+            task,
+            cfg.T,
+            model,
+            pool_size=cfg.pool_size,
+            deterministic=False,
+            design_space=design_space,
+        )
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.cfg = cfg
@@ -61,141 +56,31 @@ class Trainer:
         """Returns the model device."""
         return self.model.design_low.device
 
-    def _as_theta_batch(self, theta: Tensor) -> Tensor:
-        if torch.Size(theta.shape) == self.task.event_shape_theta:
-            theta = theta.unsqueeze(0)
-        if torch.Size(theta.shape[1:]) != self.task.event_shape_theta:
-            raise ValueError(
-                "theta must have one batch dimension and the task event shape."
-            )
-        if theta.device != self.device:
-            raise ValueError("theta and the ALINE model must be on the same device.")
-        return theta
-
-    def _mean_log_prob(self, output: AlineOutput, theta: Tensor) -> Tensor:
-        theta_flat = theta.reshape(theta.shape[0], self.model.dim_theta)
-        marginal_log_probs = output.posterior.log_prob(theta_flat)
-        return marginal_log_probs.mean(dim=1)
-
-    @staticmethod
-    def _random_action(available_mask: Tensor) -> Tensor:
-        return torch.multinomial(available_mask.float(), 1).squeeze(1)
-
-    @staticmethod
-    def _policy_action(
-        output: AlineOutput, *, deterministic: bool
-    ) -> tuple[Tensor, Tensor]:
-        policy = torch.distributions.Categorical(logits=output.acquisition_logits)
-        action = (
-            output.acquisition_logits.argmax(dim=1)
-            if deterministic
-            else policy.sample()
-        )
-        return action, policy.log_prob(action)
-
-    def rollout(
-        self,
-        theta: Tensor,
-        *,
-        random_policy: bool = False,
-        deterministic: bool = False,
-        pool_size: int | None = None,
-    ) -> AlineRollout:
-        """Simulates a batch of fixed-pool ALINE trajectories."""
-        cfg = self.cfg
-        theta = self._as_theta_batch(theta)
-        batch_size = theta.shape[0]
-        pool_size = cfg.pool_size if pool_size is None else pool_size
-        candidates = self.design_space.sample(
-            (batch_size, pool_size), device=self.device
-        )
-        available_mask = torch.ones(
-            batch_size, pool_size, device=self.device, dtype=torch.bool
-        )
-        context_designs = candidates.new_empty(
-            batch_size, 0, *self.task.event_shape_design
-        )
-        context_y = candidates.new_empty(batch_size, 0, *self.task.event_shape_y)
-
-        current_output = self.model(
-            context_y,
-            context_designs,
-            candidates,
-            available_mask,
-        )
-        # The first reward is relative to q(theta | D_0), so train this learned
-        # empty-history posterior along with the post-acquisition posteriors.
-        current_log_prob = self._mean_log_prob(current_output, theta)
-        posterior_log_probs = [current_log_prob]
-        action_log_probs = []
-        rewards = []
-        batch_indices = torch.arange(batch_size, device=self.device)
-
-        for _ in range(cfg.T):
-            if random_policy:
-                action = self._random_action(available_mask)
-                action_log_prob = None
-            else:
-                action, action_log_prob = self._policy_action(
-                    current_output, deterministic=deterministic
-                )
-
-            design = candidates[batch_indices, action]
-            outcome = self.task.sample_outcome(
-                theta, design, y_history=context_y, design_history=context_designs
-            ).detach()
-            context_designs = torch.cat([context_designs, design.unsqueeze(1)], dim=1)
-            context_y = torch.cat([context_y, outcome.unsqueeze(1)], dim=1)
-            available_mask = available_mask.clone()
-            available_mask[batch_indices, action] = False
-
-            next_output = self.model(
-                context_y,
-                context_designs,
-                candidates,
-                available_mask,
-            )
-            next_log_prob = self._mean_log_prob(next_output, theta)
-            posterior_log_probs.append(next_log_prob)
-            if action_log_prob is not None:
-                action_log_probs.append(action_log_prob)
-                rewards.append(next_log_prob.detach() - current_log_prob.detach())
-
-            current_output = next_output
-            current_log_prob = next_log_prob
-
-        empty = theta.new_empty(batch_size, 0)
-        return AlineRollout(
-            outcomes=context_y,
-            designs=context_designs,
-            posterior_log_probs=torch.stack(posterior_log_probs, dim=1),
-            action_log_probs=(
-                torch.stack(action_log_probs, dim=1) if action_log_probs else empty
-            ),
-            rewards=torch.stack(rewards, dim=1) if rewards else empty,
-            final_output=current_output,
-        )
-
     def train_step(self, step: int = 0) -> dict[str, float]:
         """Takes one warm-up or joint ALINE training step."""
         self.model.train()
         warmup = step < self.cfg.n_warmup_iter
         theta = self.task.sample_prior(self.cfg.n_outer)
-        rollout = self.rollout(
+        rollout = self.designer.rollout(
             theta,
             random_policy=warmup,
-            pool_size=self.cfg.T if warmup else None,
+            pool_size=self.cfg.T if warmup else self.cfg.pool_size,
+            return_posterior_scores=True,
         )
         # Train the posterior at every state D_0, ..., D_T. In particular, the
         # D_0 score is the baseline for the clipped first-step reward.
-        inference_loss = -rollout.posterior_log_probs.mean()
+        posterior_log_probs = rollout.extra["posterior_log_probs"]
+        inference_loss = -posterior_log_probs.mean()
         policy_loss = inference_loss.new_zeros(())
         mean_reward = inference_loss.new_zeros(())
 
         if not warmup:
             # Match train_aline.py: clip gains, discount, then standardize
             # across trajectories using the sample standard deviation.
-            rewards = rollout.rewards.detach().clamp_min(0.0)
+            rewards = (
+                posterior_log_probs[:, 1:].detach()
+                - posterior_log_probs[:, :-1].detach()
+            ).clamp_min(0.0)
             discounts = self.cfg.gamma ** torch.arange(
                 1, rewards.shape[1] + 1, device=self.device
             )
@@ -204,7 +89,7 @@ class Trainer:
                 policy_rewards = (
                     policy_rewards - policy_rewards.mean(dim=0, keepdim=True)
                 ) / (policy_rewards.std(dim=0, keepdim=True) + 1e-9)
-            policy_loss = -(rollout.action_log_probs * policy_rewards).mean()
+            policy_loss = -(rollout.extra["policy_log_probs"] * policy_rewards).mean()
             mean_reward = rewards.mean()
 
         loss = inference_loss + self.cfg.alpha * policy_loss
@@ -256,20 +141,23 @@ class Trainer:
         """Evaluates posterior fit and full-parameter EIG bounds."""
         was_training = self.model.training
         self.model.eval()
-        theta = self._as_theta_batch(self.task.sample_prior(self.cfg.n_outer_eval))
+        theta = self.task.sample_prior(self.cfg.n_outer_eval).reshape(
+            self.cfg.n_outer_eval, *self.task.event_shape_theta
+        )
         rollouts = [
-            self.rollout(
+            self.designer.rollout(
                 theta_batch,
                 deterministic=self.cfg.eval_deterministic,
                 pool_size=self.cfg.eval_pool_size,
+                return_posterior_scores=True,
             )
             for theta_batch in theta.split(self.cfg.eval_batch_size)
         ]
         posterior_log_probs = torch.cat(
-            [rollout.posterior_log_probs for rollout in rollouts]
+            [rollout.extra["posterior_log_probs"] for rollout in rollouts]
         )
-        outcomes = torch.cat([rollout.outcomes for rollout in rollouts])
-        designs = torch.cat([rollout.designs for rollout in rollouts])
+        outcomes = torch.cat([rollout.y_history for rollout in rollouts])
+        designs = torch.cat([rollout.design_history for rollout in rollouts])
         metrics = {"eval/posterior_nll": -posterior_log_probs[:, -1].mean().item()}
         metrics["eval/spce"] = (
             SPCE(self.task, n_contrastive=self.cfg.n_inner_eval)

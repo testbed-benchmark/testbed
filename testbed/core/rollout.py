@@ -16,7 +16,7 @@ class Rollout:
 
     theta/y_history/design_history are exactly the three quantities every
     design objective needs; anything method-specific (an action, a posterior,
-    a per-step action history, ...) is contributed by a `RolloutHook` and
+    a per-step action history, ...) is contributed by a designer or `RolloutHook` and
     lives in `extra` rather than growing this dataclass or any objective's
     signature.
     """
