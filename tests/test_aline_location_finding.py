@@ -161,7 +161,7 @@ def test_rollout_samples_in_bounds_without_replacement():
 
     assert rollout.designs.shape == (4, 3, 2)
     assert rollout.outcomes.shape == (4, 3, 1)
-    assert rollout.posterior_log_probs.shape == (4, 3)
+    assert rollout.posterior_log_probs.shape == (4, 4)
     assert rollout.action_log_probs.shape == (4, 3)
     assert rollout.rewards.shape == (4, 3)
     assert trainer.design_space.contains(rollout.designs)
@@ -243,7 +243,7 @@ def test_policy_reward_matches_reference_clipping_and_standardization():
     rollout = AlineRollout(
         outcomes=torch.empty(2, 0, 1),
         designs=torch.empty(2, 0, 2),
-        posterior_log_probs=torch.zeros(2, 2, requires_grad=True),
+        posterior_log_probs=torch.zeros(2, 3, requires_grad=True),
         action_log_probs=torch.tensor([[1.0, 2.0], [4.0, 4.0]], requires_grad=True),
         rewards=torch.tensor([[-2.0, 3.0], [-1.0, -1.0]]),
         final_output=None,
@@ -253,6 +253,10 @@ def test_policy_reward_matches_reference_clipping_and_standardization():
     metrics = trainer.train_step(step=0)
 
     assert metrics["policy_loss"] == pytest.approx(1 / (2 * 2**0.5))
+    torch.testing.assert_close(
+        rollout.posterior_log_probs.grad,
+        torch.full_like(rollout.posterior_log_probs, -1 / 6),
+    )
 
 
 def test_evaluate_full_parameter_eig_without_target_configuration():
@@ -320,7 +324,7 @@ def test_empty_context_has_finite_outputs_and_gradients(training):
     )
 
 
-def test_rollout_passes_history_and_trains_all_post_acquisition_states():
+def test_rollout_passes_history_and_trains_every_posterior_state():
     trainer, model = _make_trainer()
     sample_outcome = trainer.task.sample_outcome
     lengths = []
@@ -342,7 +346,7 @@ def test_rollout_passes_history_and_trains_all_post_acquisition_states():
     handle.remove()
     assert lengths == [0, 1, 2]
     expected = torch.stack(
-        [out.posterior.log_prob(theta.reshape(4, 2)).mean(-1) for out in outputs[1:]],
+        [out.posterior.log_prob(theta.reshape(4, 2)).mean(-1) for out in outputs],
         dim=1,
     )
     torch.testing.assert_close(rollout.posterior_log_probs, expected)

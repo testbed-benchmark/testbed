@@ -123,10 +123,10 @@ class Trainer:
             candidates,
             available_mask,
         )
-        # The paper defines R_1 relative to q(theta | D_0). This learned
-        # empty-history score is only a reward baseline, not an inference target.
+        # The first reward is relative to q(theta | D_0), so train this learned
+        # empty-history posterior along with the post-acquisition posteriors.
         current_log_prob = self._mean_log_prob(current_output, theta)
-        posterior_log_probs = []
+        posterior_log_probs = [current_log_prob]
         action_log_probs = []
         rewards = []
         batch_indices = torch.arange(batch_size, device=self.device)
@@ -186,7 +186,8 @@ class Trainer:
             random_policy=warmup,
             pool_size=self.cfg.T if warmup else None,
         )
-        # The rollout stores post-acquisition scores for D_1, ..., D_T.
+        # Train the posterior at every state D_0, ..., D_T. In particular, the
+        # D_0 score is the baseline for the clipped first-step reward.
         inference_loss = -rollout.posterior_log_probs.mean()
         policy_loss = inference_loss.new_zeros(())
         mean_reward = inference_loss.new_zeros(())
