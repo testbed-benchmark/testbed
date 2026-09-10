@@ -9,7 +9,7 @@ import torch
 from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.manager import Manager
 from testbed.design_nets import AlineModel, AlineOutput
-from testbed.methods.aline import AlineRollout, Trainer, validate_config
+from testbed.methods.aline import AlineRollout, Trainer
 from testbed.tasks import LocationFinding
 
 
@@ -22,8 +22,6 @@ def _make_cfg(**overrides):
         "T": 3,
         "pool_size": 4,
         "n_initial": 1,
-        "target_subsets": [[0, 1]],
-        "target_weights": None,
         "n_outer": 4,
         "n_outer_eval": 4,
         "n_inner_eval": 2,
@@ -55,8 +53,8 @@ def _make_model(task, space):
     )
 
 
-def _make_trainer(cfg=None, manager=None):
-    task = _make_task()
+def _make_trainer(cfg=None, manager=None, task=None):
+    task = _make_task() if task is None else task
     space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
     model = _make_model(task, space)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -89,7 +87,6 @@ def test_model_outputs_valid_policy_and_factorized_gmm():
         context_y,
         context_designs,
         candidates,
-        torch.tensor([True, False]),
         available,
     )
 
@@ -117,10 +114,9 @@ def test_attention_prevents_candidate_leakage():
     candidates = space.sample((1, 3))
     changed_candidates = candidates.clone()
     changed_candidates[:, 1:] = -changed_candidates[:, 1:]
-    target_mask = torch.tensor([True, True])
 
-    output = model(context_y, context_designs, candidates, target_mask)
-    changed = model(context_y, context_designs, changed_candidates, target_mask)
+    output = model(context_y, context_designs, candidates)
+    changed = model(context_y, context_designs, changed_candidates)
 
     torch.testing.assert_close(
         output.acquisition_logits[:, 0], changed.acquisition_logits[:, 0]
@@ -147,23 +143,25 @@ def test_rollout_samples_in_bounds_without_replacement():
         assert torch.unique(designs, dim=0).shape[0] == trainer.cfg.T
 
 
-def test_selected_log_prob_ignores_nontarget_parameters():
-    trainer, _ = _make_trainer()
+@pytest.mark.parametrize("n_sources, dim_theta", [(1, 2), (2, 3)])
+def test_mean_log_prob_includes_every_parameter(n_sources, dim_theta):
+    task = LocationFinding(n_sources=n_sources, dim_theta=dim_theta)
+    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
+    model = _make_model(task, space)
+    trainer = Trainer(task, model, space, None, _make_cfg())
+    n_parameters = n_sources * dim_theta
     output = AlineOutput(
         acquisition_logits=torch.zeros(2, 1),
-        mixture_logits=torch.zeros(2, 2, 1),
-        mixture_means=torch.zeros(2, 2, 1),
-        mixture_scales=torch.ones(2, 2, 1),
+        mixture_logits=torch.zeros(2, n_parameters, 1),
+        mixture_means=torch.zeros(2, n_parameters, 1),
+        mixture_scales=torch.ones(2, n_parameters, 1),
     )
-    theta = torch.tensor([[[0.0, 1.0]], [[0.5, 2.0]]])
-    changed_theta = theta.clone()
-    changed_theta[..., 1] = 100.0
-    target_mask = torch.tensor([True, False])
-
-    actual = trainer._selected_log_prob(output, theta, target_mask)
-    changed = trainer._selected_log_prob(output, changed_theta, target_mask)
-
-    torch.testing.assert_close(actual, changed)
+    theta = torch.ones(2, n_sources, dim_theta, requires_grad=True)
+    actual = trainer._mean_log_prob(output, theta)
+    expected = torch.distributions.Normal(0, 1).log_prob(theta).mean(dim=(1, 2))
+    torch.testing.assert_close(actual, expected)
+    actual.sum().backward()
+    torch.testing.assert_close(theta.grad, torch.full_like(theta, -1 / n_parameters))
 
 
 def test_warmup_only_updates_inference_then_joint_updates_policy():
@@ -205,7 +203,6 @@ def test_policy_reward_matches_reference_clipping_and_standardization():
         posterior_log_probs=torch.zeros(2, 2, requires_grad=True),
         action_log_probs=torch.tensor([[1.0, 2.0], [4.0, 4.0]], requires_grad=True),
         rewards=torch.tensor([[-2.0, 3.0], [-1.0, -1.0]]),
-        target_mask=torch.tensor([True, True]),
         final_output=None,
         inference_log_probs=torch.zeros(2, 2, requires_grad=True),
     )
@@ -216,26 +213,13 @@ def test_policy_reward_matches_reference_clipping_and_standardization():
     assert metrics["policy_loss"] == pytest.approx(1 / (2 * 2**0.5))
 
 
-def test_validation_rejects_invalid_target_subset():
-    task = _make_task()
-    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
-    cfg = _make_cfg(target_subsets=[[0, 2]])
-
-    with pytest.raises(ValueError, match="outside flattened theta"):
-        validate_config(task, cfg, space)
-
-
-@pytest.mark.parametrize(
-    "weights",
-    ([1.0, float("nan")], [1.0, float("inf")]),
-)
-def test_validation_rejects_nonfinite_target_weights(weights):
-    task = _make_task()
-    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
-    cfg = _make_cfg(target_subsets=[[0], [1]], target_weights=weights)
-
-    with pytest.raises(ValueError, match="finite, non-negative"):
-        validate_config(task, cfg, space)
+def test_evaluate_full_parameter_eig_without_target_configuration():
+    torch.manual_seed(5)
+    trainer, model = _make_trainer(task=LocationFinding(n_sources=2, dim_theta=3))
+    metrics = trainer.evaluate()
+    assert set(metrics) == {"eval/posterior_nll", "eval/spce", "eval/snmc"}
+    assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
+    assert model.training
 
 
 def test_train_logs_metrics_and_saves_checkpoints(tmp_path):
@@ -264,6 +248,7 @@ def test_train_logs_metrics_and_saves_checkpoints(tmp_path):
     assert any("inference_loss" in record for record in records)
     assert any("eval/posterior_nll" in record for record in records)
     assert any("eval/spce" in record for record in records)
+    assert any("eval/snmc" in record for record in records)
 
 
 @pytest.mark.parametrize("training", [True, False])
@@ -275,7 +260,6 @@ def test_empty_context_has_finite_outputs_and_gradients(training):
         torch.empty(2, 0, 1),
         torch.empty(2, 0, 2),
         candidates,
-        torch.tensor([True, False]),
     )
     loss = output.mixture_means.sum() + output.acquisition_logits.sum()
     assert torch.isfinite(loss)
@@ -286,7 +270,7 @@ def test_empty_context_has_finite_outputs_and_gradients(training):
 
 
 def test_rollout_passes_history_and_trains_all_parameters_before_acquisition():
-    trainer, model = _make_trainer(cfg=_make_cfg(target_subsets=[[0]]))
+    trainer, model = _make_trainer()
     sample_outcome = trainer.task.sample_outcome
     lengths = []
 
@@ -311,9 +295,11 @@ def test_rollout_passes_history_and_trains_all_parameters_before_acquisition():
         dim=1,
     )
     torch.testing.assert_close(rollout.inference_log_probs, expected)
-    targeted = [out.posterior.log_prob(theta.reshape(4, 2))[:, 0] for out in outputs]
+    full_log_probs = [
+        out.posterior.log_prob(theta.reshape(4, 2)).mean(-1) for out in outputs
+    ]
     torch.testing.assert_close(
-        rollout.rewards[:, 0], (targeted[2] - targeted[1]).detach()
+        rollout.rewards[:, 0], (full_log_probs[2] - full_log_probs[1]).detach()
     )
 
 
@@ -395,7 +381,7 @@ def test_forward_matches_authors_code(training):
     context_x = torch.randn(2, 3, 2)
     context_y = torch.randn(2, 3, 1)
     candidates = torch.randn(2, 4, 2)
-    mask = torch.tensor([True, False])
+    mask = torch.ones(model.dim_theta, dtype=torch.bool)
     batch = SimpleNamespace(
         context_x=context_x,
         context_y=context_y / 10,
@@ -408,7 +394,7 @@ def test_forward_matches_authors_code(training):
         encoded = encoder(batch, embedder(batch))
         expected = head(batch, encoded[:, 7:])
         expected_policy = acquisition(encoded[:, 3:7])
-        actual = model(context_y, context_x, candidates, mask)
+        actual = model(context_y, context_x, candidates)
         torch.testing.assert_close(actual.mixture_means, expected.mixture_means)
         torch.testing.assert_close(actual.mixture_scales, expected.mixture_stds)
         torch.testing.assert_close(
@@ -418,10 +404,29 @@ def test_forward_matches_authors_code(training):
             actual.acquisition_logits.softmax(-1), expected_policy
         )
         if training:
-            actual.mixture_means.sum().backward()
-            expected.mixture_means.sum().backward()
+            actual_loss = -actual.posterior.log_prob(torch.ones(2, 2)).mean()
+            actual_loss = (
+                actual_loss - actual.acquisition_logits.log_softmax(-1)[:, 0].mean()
+            )
+            expected_posterior = torch.distributions.MixtureSameFamily(
+                torch.distributions.Categorical(probs=expected.mixture_weights),
+                torch.distributions.Normal(
+                    expected.mixture_means, expected.mixture_stds
+                ),
+            )
+            expected_loss = -expected_posterior.log_prob(torch.ones(2, 2)).mean()
+            expected_loss = expected_loss - expected_policy[:, 0].log().mean()
+            actual_loss.backward()
+            expected_loss.backward()
             torch.testing.assert_close(
                 model.design_embedder[0].weight.grad, embedder.x_embedder[0].weight.grad
+            )
+            torch.testing.assert_close(
+                model.target_tokens.grad, embedder.theta_tokens.grad
+            )
+            torch.testing.assert_close(
+                model.acquisition_head[0].weight.grad,
+                acquisition.predictor[0].weight.grad,
             )
 
 

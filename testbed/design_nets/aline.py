@@ -1,7 +1,7 @@
 """Neural architecture for ALINE.
 
-The implementation follows Huang et al. (2025), while focusing on parameter
-targets for Bayesian experimental design.
+The implementation follows Huang et al. (2025), specialized to full-parameter
+Bayesian experimental design.
 """
 
 from dataclasses import dataclass
@@ -174,7 +174,6 @@ class AlineModel(nn.Module):
         self,
         n_context: int,
         n_query: int,
-        target_mask: Tensor,
         *,
         device: torch.device,
     ) -> Tensor:
@@ -186,9 +185,7 @@ class AlineModel(nn.Module):
         if n_context:
             mask[:, :n_context] = 0.0
 
-        query_indices = torch.arange(query_start, target_start, device=device)
-        selected_targets = torch.where(target_mask)[0] + target_start
-        mask[query_indices[:, None], selected_targets] = 0.0
+        mask[query_start:target_start, target_start:] = 0.0
 
         return mask
 
@@ -197,7 +194,6 @@ class AlineModel(nn.Module):
         context_y: Tensor,
         context_designs: Tensor,
         candidates: Tensor,
-        target_mask: Tensor,
         available_mask: Tensor | None = None,
     ) -> AlineOutput:
         """Scores candidate designs and estimates parameter marginals."""
@@ -209,15 +205,6 @@ class AlineModel(nn.Module):
             raise ValueError("Context and candidate batch sizes must match.")
         if candidates.shape[1] == 0:
             raise ValueError("ALINE requires at least one candidate design.")
-
-        target_mask = torch.as_tensor(
-            target_mask, device=candidates.device, dtype=torch.bool
-        )
-        if target_mask.shape != (self.dim_theta,) or not torch.any(target_mask):
-            raise ValueError(
-                f"target_mask must be a nonempty bool tensor of shape "
-                f"({self.dim_theta},)."
-            )
 
         batch_size, n_context = context_designs.shape[:2]
         n_query = candidates.shape[1]
@@ -231,7 +218,7 @@ class AlineModel(nn.Module):
         )
 
         attention_mask = self._attention_mask(
-            n_context, n_query, target_mask, device=embeddings.device
+            n_context, n_query, device=embeddings.device
         )
         encoded = self.transformer(embeddings, mask=attention_mask)
         query_encoded = encoded[:, n_context : n_context + n_query]

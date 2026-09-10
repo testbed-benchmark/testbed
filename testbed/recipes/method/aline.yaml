@@ -21,10 +21,7 @@ task:
     high: 4.0
     event_shape: [2]
 
-# Flattened parameter-index subsets. One subset is sampled per minibatch.
-target_subsets:
-  - [0, 1]
-target_weights: null
+# Acquisition always targets all task parameters using the reference mean-field posterior.
 
 # model
 model:
