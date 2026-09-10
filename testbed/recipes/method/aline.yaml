@@ -39,7 +39,8 @@ model:
 
 # training
 n_train_iter: 100_000
-n_warmup_iter: 20_000
+# max_epoch/burning_epoch in the reference config/train_bed.yaml.
+n_warmup_iter: 10_000
 n_outer: 200
 alpha: 1.0
 gamma: 1.0

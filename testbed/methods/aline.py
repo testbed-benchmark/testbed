@@ -172,10 +172,21 @@ class Trainer:
         self.model.train(was_training)
         return metrics
 
-    def _maybe_save_best(self, step: int, metrics: dict[str, float]) -> None:
+    def _maybe_save_best(
+        self, step: int, metrics: dict[str, float], min_step: int = 0
+    ) -> None:
+        # Saves a checkpoint of the model if it has the best posterior fit seen
+        # so far. NB: we maximize the mean marginal posterior log probability,
+        # which is the per-step training signal; periodic eval is off by default
+        # so eval/spce is not available to select on.
+
+        # Warm-up draws random designs from a T-sized pool, so its scores are
+        # not comparable with the joint phase's; min_step skips them.
+        if step < min_step:
+            return
         if self.manager is None:
             return
-        metric = metrics["eval/spce"]
+        metric = -metrics["inference_loss"]
         if metric <= self.best_metric:
             return
         self.best_metric = metric
@@ -184,7 +195,8 @@ class Trainer:
             self.manager.path("best.pt"),
         )
         self.manager.event_logger.info(
-            f"Saving new best ALINE checkpoint: metric={metric} @ step={step}"
+            f"Saving new best ALINE checkpoint: posterior_log_prob={metric} "
+            f"@ step={step}"
         )
 
     def train(self) -> None:
@@ -200,7 +212,8 @@ class Trainer:
                 eval_metrics["step"] = step
                 if self.manager and self.manager.metric_logger:
                     self.manager.metric_logger.log(eval_metrics)
-                self._maybe_save_best(step, eval_metrics)
+
+            self._maybe_save_best(step, metrics, min_step=self.cfg.n_warmup_iter)
 
         if self.manager is not None:
             torch.save(

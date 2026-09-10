@@ -130,6 +130,33 @@ def test_fractional_outcome_scale_is_not_truncated_by_integer_center():
     )
 
 
+def test_fractional_design_bounds_are_not_truncated_by_integer_partners():
+    task = _make_task()
+    model = AlineModel(
+        event_shape_y=task.event_shape_y,
+        event_shape_theta=task.event_shape_theta,
+        event_shape_design=task.event_shape_design,
+        design_low=0,
+        design_high=0.5,
+        embedding_dim=8,
+        feedforward_dim=16,
+        n_heads=2,
+        n_layers=1,
+        n_components=3,
+        design_center=0,
+        design_scale=0.5,
+    )
+
+    assert model.design_low.is_floating_point()
+    assert model.design_center.is_floating_point()
+    torch.testing.assert_close(model.design_high, torch.tensor([0.5, 0.5]))
+    torch.testing.assert_close(model.design_scale, torch.tensor([0.5, 0.5]))
+    torch.testing.assert_close(
+        model._normalize_designs(torch.tensor([[[1.0, 1.0]]])),
+        torch.tensor([[[2.0, 2.0]]]),
+    )
+
+
 def test_attention_prevents_candidate_leakage():
     torch.manual_seed(0)
     task = _make_task()
@@ -429,6 +456,27 @@ def test_train_logs_metrics_and_saves_checkpoints(tmp_path):
     assert any("eval/posterior_nll" in record for record in records)
     assert any("eval/spce" in record for record in records)
     assert any("eval/snmc" in record for record in records)
+
+
+def test_best_checkpoint_is_saved_without_periodic_evaluation(tmp_path):
+    torch.manual_seed(3)
+    manager = Manager(
+        SimpleNamespace(),
+        root=str(tmp_path),
+        name="aline_test",
+        timestamp=False,
+        console=False,
+    )
+    # The shipped recipe leaves periodic eval off, so best.pt must not depend
+    # on it, and warm-up steps must not claim the best score.
+    cfg = _make_cfg(eval_every=0, n_train_iter=3, n_warmup_iter=2)
+    trainer, _ = _make_trainer(cfg=cfg, manager=manager)
+
+    trainer.train()
+
+    best = torch.load(tmp_path / "aline_test" / "best.pt", weights_only=True)
+    assert set(best) == {"model", "step", "metric"}
+    assert best["step"] >= cfg.n_warmup_iter
 
 
 @pytest.mark.parametrize("training", [True, False])

@@ -84,10 +84,9 @@ class AlineModel(nn.Module):
         if self.min_scale <= 0:
             raise ValueError("min_scale must be positive.")
 
-        design_low = torch.as_tensor(design_low).broadcast_to(self.event_shape_design)
-        design_high = torch.as_tensor(
-            design_high, device=design_low.device, dtype=design_low.dtype
-        ).broadcast_to(self.event_shape_design)
+        design_low, design_high = self._as_float_pair(design_low, design_high)
+        design_low = design_low.broadcast_to(self.event_shape_design)
+        design_high = design_high.broadcast_to(self.event_shape_design)
         if (
             not torch.all(torch.isfinite(design_low))
             or not torch.all(torch.isfinite(design_high))
@@ -95,12 +94,9 @@ class AlineModel(nn.Module):
         ):
             raise ValueError("Each design lower bound must be below its upper bound.")
 
-        design_center = torch.as_tensor(design_center).broadcast_to(
-            self.event_shape_design
-        )
-        design_scale = torch.as_tensor(design_scale).broadcast_to(
-            self.event_shape_design
-        )
+        design_center, design_scale = self._as_float_pair(design_center, design_scale)
+        design_center = design_center.broadcast_to(self.event_shape_design)
+        design_scale = design_scale.broadcast_to(self.event_shape_design)
         if (
             not torch.all(torch.isfinite(design_center))
             or not torch.all(torch.isfinite(design_scale))
@@ -110,17 +106,11 @@ class AlineModel(nn.Module):
         self.register_buffer("design_center", design_center.reshape(-1).clone())
         self.register_buffer("design_scale", design_scale.reshape(-1).clone())
 
-        outcome_center = torch.as_tensor(outcome_center)
-        outcome_scale = torch.as_tensor(outcome_scale, device=outcome_center.device)
-        outcome_dtype = torch.promote_types(outcome_center.dtype, outcome_scale.dtype)
-        if not torch.is_floating_point(torch.empty((), dtype=outcome_dtype)):
-            outcome_dtype = torch.get_default_dtype()
-        outcome_center = outcome_center.to(dtype=outcome_dtype).broadcast_to(
-            self.event_shape_y
+        outcome_center, outcome_scale = self._as_float_pair(
+            outcome_center, outcome_scale
         )
-        outcome_scale = outcome_scale.to(dtype=outcome_dtype).broadcast_to(
-            self.event_shape_y
-        )
+        outcome_center = outcome_center.broadcast_to(self.event_shape_y)
+        outcome_scale = outcome_scale.broadcast_to(self.event_shape_y)
         if (
             not torch.all(torch.isfinite(outcome_center))
             or not torch.all(torch.isfinite(outcome_scale))
@@ -154,6 +144,22 @@ class AlineModel(nn.Module):
             self._make_mlp(embedding_dim, feedforward_dim, 3)
             for _ in range(n_components)
         )
+
+    @staticmethod
+    def _as_float_pair(first, second) -> tuple[Tensor, Tensor]:
+        """Puts a (bound, bound) or (center, scale) pair on one float dtype.
+
+        Casting either one to the other's dtype would truncate a fractional
+        value against an integer partner -- ``(0, 0.5)`` bounds would collapse
+        to ``(0, 0)``. Integers are legitimate input here, so promote the pair
+        and fall back to the default dtype when neither side is floating point.
+        """
+        first = torch.as_tensor(first)
+        second = torch.as_tensor(second, device=first.device)
+        dtype = torch.promote_types(first.dtype, second.dtype)
+        if not torch.is_floating_point(torch.empty((), dtype=dtype)):
+            dtype = torch.get_default_dtype()
+        return first.to(dtype=dtype), second.to(dtype=dtype)
 
     @staticmethod
     def _make_mlp(dim_in: int, dim_hidden: int, dim_out: int) -> nn.Sequential:
