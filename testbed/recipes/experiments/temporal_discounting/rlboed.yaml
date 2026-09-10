@@ -11,8 +11,8 @@ defaults:
 task:
   design_space:
     _target_: testbed.core.design_spaces.BoxDesignSpace
-    low: [5.0, 20.0]
-    high: [40.0, 80.0]
+    low: [0.5, 1.0]
+    high: [200.0, 99.0]
     event_shape: [2]
 
 # HTD observations are Bernoulli choices.
@@ -20,6 +20,7 @@ reward:
   outcome_low: 0.0
   outcome_high: 1.0
   n_contrastive: 100_000
+  gamma: 0.9
 
 # HTD has a cheap explicit likelihood, so use the longer continuous-task
 # schedule while keeping the replay buffer at the size used by CES and prey.
