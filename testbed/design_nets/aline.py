@@ -110,12 +110,17 @@ class AlineModel(nn.Module):
         self.register_buffer("design_center", design_center.reshape(-1))
         self.register_buffer("design_scale", design_scale.reshape(-1))
 
-        outcome_center = torch.as_tensor(outcome_center).broadcast_to(
+        outcome_center = torch.as_tensor(outcome_center)
+        outcome_scale = torch.as_tensor(outcome_scale, device=outcome_center.device)
+        outcome_dtype = torch.promote_types(outcome_center.dtype, outcome_scale.dtype)
+        if not torch.is_floating_point(torch.empty((), dtype=outcome_dtype)):
+            outcome_dtype = torch.get_default_dtype()
+        outcome_center = outcome_center.to(dtype=outcome_dtype).broadcast_to(
             self.event_shape_y
         )
-        outcome_scale = torch.as_tensor(
-            outcome_scale, device=outcome_center.device, dtype=outcome_center.dtype
-        ).broadcast_to(self.event_shape_y)
+        outcome_scale = outcome_scale.to(dtype=outcome_dtype).broadcast_to(
+            self.event_shape_y
+        )
         if (
             not torch.all(torch.isfinite(outcome_center))
             or not torch.all(torch.isfinite(outcome_scale))

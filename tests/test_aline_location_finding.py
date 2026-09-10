@@ -21,6 +21,8 @@ def _make_cfg(**overrides):
     values = {
         "T": 3,
         "pool_size": 4,
+        "eval_pool_size": 5,
+        "eval_batch_size": 2,
         "n_outer": 4,
         "n_outer_eval": 4,
         "n_inner_eval": 2,
@@ -48,7 +50,6 @@ def _make_model(task, space):
         n_heads=2,
         n_layers=1,
         n_components=3,
-        outcome_scale=10.0,
     )
 
 
@@ -97,6 +98,32 @@ def test_model_outputs_valid_policy_and_factorized_gmm():
     assert output.posterior.log_prob(task.sample_prior(2).reshape(2, 2)).shape == (
         2,
         2,
+    )
+
+
+def test_fractional_outcome_scale_is_not_truncated_by_integer_center():
+    task = _make_task()
+    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
+    model = AlineModel(
+        event_shape_y=task.event_shape_y,
+        event_shape_theta=task.event_shape_theta,
+        event_shape_design=task.event_shape_design,
+        design_low=space.low,
+        design_high=space.high,
+        embedding_dim=8,
+        feedforward_dim=16,
+        n_heads=2,
+        n_layers=1,
+        n_components=3,
+        outcome_center=0,
+        outcome_scale=0.5,
+    )
+
+    assert model.outcome_center.is_floating_point()
+    torch.testing.assert_close(model.outcome_scale, torch.tensor([0.5]))
+    torch.testing.assert_close(
+        model._normalize_outcomes(torch.tensor([[[1.0]]])),
+        torch.tensor([[[2.0]]]),
     )
 
 
@@ -231,7 +258,16 @@ def test_policy_reward_matches_reference_clipping_and_standardization():
 def test_evaluate_full_parameter_eig_without_target_configuration():
     torch.manual_seed(5)
     trainer, model = _make_trainer(task=LocationFinding(n_sources=2, dim_theta=3))
+    rollout = trainer.rollout
+    calls = []
+
+    def tracked_rollout(theta, **kwargs):
+        calls.append((theta.shape[0], kwargs.get("pool_size")))
+        return rollout(theta, **kwargs)
+
+    trainer.rollout = tracked_rollout
     metrics = trainer.evaluate()
+    assert calls == [(2, trainer.cfg.eval_pool_size)] * 2
     assert set(metrics) == {"eval/posterior_nll", "eval/spce", "eval/snmc"}
     assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
     assert model.training
@@ -409,7 +445,7 @@ def test_forward_matches_authors_code(training):
     mask = torch.ones(model.dim_theta, dtype=torch.bool)
     batch = SimpleNamespace(
         context_x=context_x,
-        context_y=context_y / 10,
+        context_y=context_y,
         query_x=candidates,
         target_all=torch.zeros(2, 2, 1),
         target_mask=mask,
@@ -468,6 +504,8 @@ def test_hydra_entry_point_trains_evaluates_and_saves(tmp_path):
             "device=cpu",
             "T=3",
             "pool_size=4",
+            "eval_pool_size=5",
+            "eval_batch_size=2",
             "n_train_iter=2",
             "n_warmup_iter=1",
             "n_outer=4",

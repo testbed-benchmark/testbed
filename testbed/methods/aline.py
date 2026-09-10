@@ -256,21 +256,28 @@ class Trainer:
         was_training = self.model.training
         self.model.eval()
         theta = self._as_theta_batch(self.task.sample_prior(self.cfg.n_outer_eval))
-        rollout = self.rollout(
-            theta,
-            deterministic=self.cfg.eval_deterministic,
+        rollouts = [
+            self.rollout(
+                theta_batch,
+                deterministic=self.cfg.eval_deterministic,
+                pool_size=self.cfg.eval_pool_size,
+            )
+            for theta_batch in theta.split(self.cfg.eval_batch_size)
+        ]
+        posterior_log_probs = torch.cat(
+            [rollout.posterior_log_probs for rollout in rollouts]
         )
-        metrics = {
-            "eval/posterior_nll": -rollout.posterior_log_probs[:, -1].mean().item()
-        }
+        outcomes = torch.cat([rollout.outcomes for rollout in rollouts])
+        designs = torch.cat([rollout.designs for rollout in rollouts])
+        metrics = {"eval/posterior_nll": -posterior_log_probs[:, -1].mean().item()}
         metrics["eval/spce"] = (
             SPCE(self.task, n_contrastive=self.cfg.n_inner_eval)
-            .estimate_gain(Rollout(theta, rollout.outcomes, rollout.designs))
+            .estimate_gain(Rollout(theta, outcomes, designs))
             .item()
         )
         metrics["eval/snmc"] = (
             SNMC(self.task, n_contrastive=self.cfg.n_inner_eval)
-            .estimate_gain(Rollout(theta, rollout.outcomes, rollout.designs))
+            .estimate_gain(Rollout(theta, outcomes, designs))
             .item()
         )
         self.model.train(was_training)
@@ -360,6 +367,8 @@ def validate_config(task, cfg, design_space: BoxDesignSpace) -> None:
     positive = {
         "T": cfg.T,
         "pool_size": cfg.pool_size,
+        "eval_pool_size": cfg.eval_pool_size,
+        "eval_batch_size": cfg.eval_batch_size,
         "n_outer": cfg.n_outer,
         "n_outer_eval": cfg.n_outer_eval,
         "n_inner_eval": cfg.n_inner_eval,
@@ -371,6 +380,10 @@ def validate_config(task, cfg, design_space: BoxDesignSpace) -> None:
     if cfg.pool_size < cfg.T:
         raise ValueError(
             "pool_size must be at least T for sampling without replacement."
+        )
+    if cfg.eval_pool_size < cfg.T:
+        raise ValueError(
+            "eval_pool_size must be at least T for sampling without replacement."
         )
     if cfg.n_warmup_iter < 0 or cfg.eval_every < 0:
         raise ValueError("n_warmup_iter and eval_every must be non-negative.")

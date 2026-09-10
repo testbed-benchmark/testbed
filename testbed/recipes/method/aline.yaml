@@ -34,7 +34,7 @@ model:
   design_center: 0.0
   design_scale: 1.0
   outcome_center: 0.0
-  outcome_scale: 10.0
+  outcome_scale: 1.0
 
 # training
 n_train_iter: 100_000
@@ -50,6 +50,8 @@ optimizer:
 
 # evaluation
 eval_every: 0
+eval_pool_size: 2_000
+eval_batch_size: 5
 n_outer_eval: 200
 n_inner_eval: 1_000
 eval_deterministic: true
