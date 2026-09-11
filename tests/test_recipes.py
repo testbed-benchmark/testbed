@@ -187,9 +187,15 @@ def test_htd_joint_var_post_recipe_uses_a_constrained_posterior():
         cfg.posterior_net._target_
         == "testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet"
     )
-    # One elementwise exp block: 2 unconstrained coordinates -> (k, alpha).
-    assert cfg.posterior_net.transform.raw_sizes == [2]
-    assert cfg.posterior_net.transform.theta_sizes == [2]
+    # Two width-1 blocks: exp on k, identity on alpha. alpha must NOT go
+    # through a log; that is what NaN'd sweep 3tu0ab2h.
+    assert cfg.posterior_net.transform.raw_sizes == [1, 1]
+    assert cfg.posterior_net.transform.theta_sizes == [1, 1]
+    targets = [t._target_ for t in cfg.posterior_net.transform.transforms]
+    assert targets == [
+        "torch.distributions.transforms.ExpTransform",
+        "torch.distributions.transforms.AffineTransform",
+    ]
     assert cfg.posterior_net.canonicalize_theta is False
 
 

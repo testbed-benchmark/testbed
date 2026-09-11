@@ -79,19 +79,16 @@ design_net:
     _target_: torch.nn.Softplus
     _partial_: true
 
-# posterior network: an attentive Gaussian-mixture readout, but over 2
-# unconstrained coordinates pushed forward onto theta rather than over theta
-# itself. theta = (k, alpha) is supported on the positive quadrant of R^2
-# (log k ~ Normal(-4.25, 1.5), alpha ~ HalfNormal(2)), so a mixture in theta's
-# own coordinates leaks mass onto k < 0 and alpha < 0.
+# posterior network: attentive Gaussian-mixture readout over (log k, alpha).
 #
-# This is a milder defect than CES's: the support is full-dimensional, so the
-# prior and an R^2 mixture are densities w.r.t. the same measure and the
-# Barber-Agakov gain stays a real bound, just a loose one. The transform is here
-# for tightness, not validity. It also removes the k/alpha scale mismatch
-# (k ~ 0.014 against alpha ~ 1.3) that made a shared init_scale of 1.0 two
-# orders of magnitude too wide in k, and makes the posterior exactly Gaussian in
-# log k, which is the shape the lognormal prior already has.
+# k is transformed: log k ~ Normal(-4.25, 1.5) exactly, so the mixture becomes
+# Gaussian in the coordinate the prior already is
+#
+# alpha is not. alpha ~ HalfNormal(2) has its mode at zero, so log alpha has a
+# tail decaying like e^z that no Gaussian covers; a draw near zero lands ~13
+# spreads out and its gradient (~1/scale^2) overflows. Left alone, alpha leaks 
+# 0.3% of its mass below zero, costing 0.006 nats of tightness on a ~3.4-nat gain, 
+# and the bound stays valid.
 #
 # No canonicalisation: the two coordinates are not exchangeable (and the
 # constrained net rejects the combination anyway).
@@ -112,27 +109,26 @@ posterior_net:
   theta_loc: null
   theta_scale: null
   canonicalize_theta: false
-  # 2 unconstrained coordinates -> 2 constrained ones, elementwise:
-  #   (z_k, z_alpha) -> (k, alpha), both in (0, inf)
-  # One block rather than two: exp is elementwise, so a single width-2 block has
-  # the same block-diagonal Jacobian as two width-1 ones. Unlike CES there is no
-  # floor or squash to keep in sync with the prior, so the pushforward
-  # integrates to exactly 1; test_htd_posterior_pushforward_normalises checks it.
+  # (z_k, alpha) -> (k, alpha): exp on k, identity on alpha. The alpha block
+  # contributes nothing to the Jacobian, so the pushforward integrates to 1 over
+  # the prior's support; test_htd_posterior_pushforward_normalises checks it.
   transform:
     _target_: testbed.design_nets.BlockTransform
-    raw_sizes: [2]
-    theta_sizes: [2]
+    raw_sizes: [1, 1]
+    theta_sizes: [1, 1]
     transforms:
       - _target_: torch.distributions.transforms.ExpTransform
+      - _target_: torch.distributions.transforms.AffineTransform
+        loc: 0.0
+        scale: 1.0
 
 wandb:
   project: temporal_discounting  # one project per task; methods separate by group
-  # Separate group from the runs that modelled theta in R^2 directly. Those
-  # bounds were valid, unlike CES's, just loose from the mass the mixture leaked
-  # onto k < 0 and alpha < 0, so the two cohorts are still different posterior
-  # families and averaging them in a table grouped by method would be wrong.
+  # One group per posterior family, so a table grouped by method never averages
+  # across them: theta modelled in R^2 directly (valid, loose), then exp on both
+  # coordinates (sweep 3tu0ab2h, NaN'd), now exp on k alone.
   #
   # The group belongs here rather than in the sweep's parameters:
   # generate_seed_sweeps.py reads it from the recipe to decide which seeds are
   # already done, and rewrites the sweep YAML from scratch.
-  group: joint_var_post_constrained
+  group: joint_var_post_constrained_k

@@ -4,7 +4,7 @@ from functools import partial
 
 import pytest
 import torch
-from torch.distributions import Independent, MultivariateNormal, Normal
+from torch.distributions import HalfNormal, Independent, MultivariateNormal, Normal
 from torch.distributions.transforms import (
     AffineTransform,
     ComposeTransform,
@@ -1219,14 +1219,14 @@ def test_log_det_correction_does_not_change_the_posterior_gradient():
 
 
 def _htd_transform():
-    """The HTD map: 2 unconstrained coordinates -> (k, alpha), both positive.
+    """The HTD map: (z_k, alpha) -> (k, alpha). exp on k, identity on alpha.
 
     Mirrors the transform in experiments/temporal_discounting/joint_var_post.yaml.
     """
     return BlockTransform(
-        transforms=[ExpTransform()],
-        raw_sizes=[2],
-        theta_sizes=[2],
+        transforms=[ExpTransform(), AffineTransform(loc=0.0, scale=1.0)],
+        raw_sizes=[1, 1],
+        theta_sizes=[1, 1],
     )
 
 
@@ -1264,27 +1264,34 @@ def test_htd_transform_round_trips_on_real_prior_draws():
 def test_htd_posterior_pushforward_normalises():
     """The measure claim, for HTD.
 
-    Unlike CES this integrates to exactly 1: theta's support is the full
-    positive quadrant rather than a lower-dimensional manifold, and HTDPrior
-    accounts for its own density everywhere, with no squash left out.
+    Only k is transformed, so the Jacobian is log k alone. This integrates to
+    exactly 1 over the prior's support: the alpha proposal is kept positive
+    because HalfNormal.log_prob rejects negatives outright.
     """
     torch.manual_seed(0)
     task = HyperbolicTemporalDiscounting()
     transform = _htd_transform()
 
     raw = transform.inv(task.sample_prior(20_000))
-    proposal = Independent(Normal(raw.mean(0), 2.0 * raw.std(0)), 1)
-    z = proposal.sample((200_000,))
+    z_k = Normal(raw[:, 0].mean(), 2.0 * raw[:, 0].std())
+    z_alpha = HalfNormal(4.0)
+    z = torch.stack([z_k.sample((200_000,)), z_alpha.sample((200_000,))], dim=-1)
     log_weights = (
         task.prior.log_prob(transform(z))
         + transform.log_abs_det_jacobian(z, transform(z))
-        - proposal.log_prob(z)
+        - z_k.log_prob(z[:, 0])
+        - z_alpha.log_prob(z[:, 1])
     )
 
     assert log_weights.exp().mean().item() == pytest.approx(1.0, rel=0.05)
 
 
-def test_htd_constrained_posterior_samples_stay_positive():
+def test_htd_constrained_posterior_keeps_k_positive():
+    """k is the transformed coordinate, so only it is positive by construction.
+
+    alpha is modelled in its own coordinates and may leak below zero; that leak
+    is the accepted cost of not putting alpha through a log.
+    """
     torch.manual_seed(0)
     task = HyperbolicTemporalDiscounting()
     net = _make_htd_posterior(task)
@@ -1293,7 +1300,30 @@ def test_htd_constrained_posterior_samples_stay_positive():
     theta = net.sample(y_history, design_history, n_samples=64)
 
     assert theta.shape == (64, 8, 2)
-    assert (theta > 0).all()
+    assert (theta[..., 0] > 0).all()
+
+
+def test_htd_log_prob_is_tame_for_a_near_zero_alpha():
+    """Regression test for the NaN that killed sweep 3tu0ab2h.
+
+    alpha ~ HalfNormal(2) has its mode at zero, so draws near zero are routine.
+    Under exp on both coordinates such a draw landed ~13 spreads into a tail no
+    Gaussian covers, and the gradient chasing it overflowed. Untransformed it is
+    an ordinary point, so log_prob must stay close to that of a central alpha.
+    """
+    torch.manual_seed(0)
+    task = HyperbolicTemporalDiscounting()
+    net = _make_htd_posterior(task)
+    y_history, design_history = _htd_history(task, b=2)
+
+    k = task.sample_prior(2)[0, 0]
+    theta = torch.stack(
+        [torch.tensor([k, 2.6e-7]), torch.tensor([k, 1.6])]  # tail alpha, central
+    )
+    log_q = net.log_prob(theta, y_history, design_history)
+
+    assert torch.isfinite(log_q).all()
+    assert (log_q[0] - log_q[1]).abs() < 5.0
 
 
 def test_htd_barber_agakov_gain_is_finite_for_an_untrained_posterior():
