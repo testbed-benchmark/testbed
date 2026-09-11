@@ -5,6 +5,14 @@ defaults:
   - override /task: location_finding_2src
   - _self_
 
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: -4.0
+    high: 4.0
+    event_shape:
+      - ${task.dim_theta}
+
 wandb:
   project: location_finding_2src
   group: aline

@@ -182,11 +182,7 @@ class AlineModel(nn.Module):
         return (outcomes - self.outcome_center) / self.outcome_scale
 
     def _attention_mask(
-        self,
-        n_context: int,
-        n_query: int,
-        *,
-        device: torch.device,
+        self, n_context: int, n_query: int, *, device: torch.device
     ) -> Tensor:
         n_total = n_context + n_query + self.dim_theta
         mask = torch.full((n_total, n_total), float("-inf"), device=device)

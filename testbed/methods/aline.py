@@ -14,7 +14,7 @@ from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.rollout import Rollout
 from testbed.core.setup import setup
 from testbed.design_nets import AlineModel
-from testbed.design_objectives import SNMC, SPCE
+from testbed.design_objectives import SPCE
 from testbed.designers import AlineDesigner
 
 
@@ -138,7 +138,7 @@ class Trainer:
 
     @torch.no_grad()
     def evaluate(self) -> dict[str, float]:
-        """Evaluates posterior fit and full-parameter EIG bounds."""
+        """Evaluates posterior fit and the full-parameter sPCE lower bound."""
         was_training = self.model.training
         self.model.eval()
         theta = self.task.sample_prior(self.cfg.n_outer_eval).reshape(
@@ -161,11 +161,6 @@ class Trainer:
         metrics = {"eval/posterior_nll": -posterior_log_probs[:, -1].mean().item()}
         metrics["eval/spce"] = (
             SPCE(self.task, n_contrastive=self.cfg.n_inner_eval)
-            .estimate_gain(Rollout(theta, outcomes, designs))
-            .item()
-        )
-        metrics["eval/snmc"] = (
-            SNMC(self.task, n_contrastive=self.cfg.n_inner_eval)
             .estimate_gain(Rollout(theta, outcomes, designs))
             .item()
         )

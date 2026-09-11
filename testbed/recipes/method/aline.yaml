@@ -12,18 +12,8 @@ defaults:
 seed: 0
 
 # rollout
-T: 30
 pool_size: 200
-task:
-  design_space:
-    _target_: testbed.core.design_spaces.BoxDesignSpace
-    low: -4.0
-    high: 4.0
-    event_shape: [2]
 
-# Acquisition always targets all task parameters using the reference mean-field posterior.
-
-# model
 model:
   embedding_dim: 32
   feedforward_dim: 128
@@ -51,14 +41,15 @@ optimizer:
   weight_decay: 0.01
 
 # evaluation
-eval_every: 0
+eval_every: 10_000
 eval_pool_size: 2_000
 eval_batch_size: 5
-n_outer_eval: 200
-n_inner_eval: 1_000
+n_outer_eval: 2_048
+n_inner_eval: 1_000_000
 eval_deterministic: true
 
 final_eval:
+  n_contrastive: 10_000_000
   # ALINE's transformer attends over eval_pool_size candidates, so keep the
   # outer batches as small as its periodic evaluation batches.
   outer_batch_size: ${eval_batch_size}
