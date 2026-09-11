@@ -11,7 +11,6 @@ import hydra
 import torch
 
 from testbed.core.design_spaces import BoxDesignSpace
-from testbed.core.rollout import Rollout
 from testbed.core.setup import setup
 from testbed.design_nets import AlineModel
 from testbed.design_objectives import SPCE
@@ -144,26 +143,28 @@ class Trainer:
         theta = self.task.sample_prior(self.cfg.n_outer_eval).reshape(
             self.cfg.n_outer_eval, *self.task.event_shape_theta
         )
-        rollouts = [
-            self.designer.rollout(
+        spce = SPCE(
+            self.task,
+            n_contrastive=self.cfg.n_inner_eval,
+            chunk_size=getattr(self.cfg, "eval_contrastive_chunk_size", 10_000),
+        )
+        posterior_sum = theta.new_zeros(())
+        gain_sum = theta.new_zeros(())
+        for theta_batch in theta.split(self.cfg.eval_batch_size):
+            rollout = self.designer.rollout(
                 theta_batch,
                 deterministic=self.cfg.eval_deterministic,
                 pool_size=self.cfg.eval_pool_size,
                 return_posterior_scores=True,
             )
-            for theta_batch in theta.split(self.cfg.eval_batch_size)
-        ]
-        posterior_log_probs = torch.cat(
-            [rollout.extra["posterior_log_probs"] for rollout in rollouts]
-        )
-        outcomes = torch.cat([rollout.y_history for rollout in rollouts])
-        designs = torch.cat([rollout.design_history for rollout in rollouts])
-        metrics = {"eval/posterior_nll": -posterior_log_probs[:, -1].mean().item()}
-        metrics["eval/spce"] = (
-            SPCE(self.task, n_contrastive=self.cfg.n_inner_eval)
-            .estimate_gain(Rollout(theta, outcomes, designs))
-            .item()
-        )
+            posterior_sum += rollout.extra["posterior_log_probs"][:, -1].sum()
+            gain_sum += spce.per_sample_gain(rollout).sum()
+        # Sum individual scores so the final, possibly smaller batch has the
+        # correct weight. Never combine all trajectories for contrastive scoring.
+        metrics = {
+            "eval/posterior_nll": (-posterior_sum / self.cfg.n_outer_eval).item(),
+            "eval/spce": (gain_sum / self.cfg.n_outer_eval).item(),
+        }
         self.model.train(was_training)
         return metrics
 
@@ -274,6 +275,8 @@ def validate_config(task, cfg, design_space: BoxDesignSpace) -> None:
     for name, value in positive.items():
         if value <= 0:
             raise ValueError(f"{name} must be positive.")
+    if getattr(cfg, "eval_contrastive_chunk_size", 10_000) <= 0:
+        raise ValueError("eval_contrastive_chunk_size must be positive.")
     if cfg.pool_size < cfg.T:
         raise ValueError(
             "pool_size must be at least T for sampling without replacement."

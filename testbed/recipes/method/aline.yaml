@@ -43,13 +43,13 @@ optimizer:
 # evaluation
 eval_every: 10_000
 eval_pool_size: 2_000
-eval_batch_size: 5
+eval_batch_size: 50
+eval_contrastive_chunk_size: 200_000
 n_outer_eval: 2_048
 n_inner_eval: 1_000_000
 eval_deterministic: true
 
 final_eval:
   n_contrastive: 10_000_000
-  # ALINE's transformer attends over eval_pool_size candidates, so keep the
-  # outer batches as small as its periodic evaluation batches.
   outer_batch_size: ${eval_batch_size}
+  contrastive_chunk_size: ${eval_contrastive_chunk_size}
