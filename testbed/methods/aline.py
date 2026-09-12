@@ -246,6 +246,7 @@ def build_model(cfg, task, design_space: BoxDesignSpace) -> AlineModel:
         design_scale=cfg.model.get("design_scale", 1.0),
         outcome_center=cfg.model.outcome_center,
         outcome_scale=cfg.model.outcome_scale,
+        canonicalize_theta=cfg.model.canonicalize_theta,
     )
 
 

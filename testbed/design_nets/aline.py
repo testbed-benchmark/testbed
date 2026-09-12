@@ -82,8 +82,43 @@ class AlineModel(nn.Module):
         design_scale=1.0,
         outcome_center=0.0,
         outcome_scale=1.0,
+        canonicalize_theta: bool = False,
     ) -> None:
-        """Initializes the ALINE architecture."""
+        """Initializes the ALINE architecture.
+
+        Args:
+            event_shape_y: Shape of a single observation, excluding batch and
+                time dimensions.
+            event_shape_theta: Shape of a single parameter sample, excluding
+                the batch dimension.
+            event_shape_design: Shape of a single design, excluding batch and
+                time or candidate dimensions.
+            design_low: Finite lower design bounds, broadcastable to
+                ``event_shape_design``.
+            design_high: Finite upper design bounds, broadcastable to
+                ``event_shape_design`` and strictly above ``design_low``.
+            embedding_dim: Embedding dimension, divisible by ``n_heads``.
+            feedforward_dim: Hidden dimension of the feedforward networks.
+            n_heads: Number of attention heads per transformer layer.
+            n_layers: Number of transformer encoder layers.
+            dropout: Transformer dropout probability in [0, 1].
+            n_components: Number of Gaussian mixture components per
+                scalar parameter's marginal posterior.
+            min_scale: Lower bound on Gaussian component standard
+                deviations.
+            design_center: Finite center for design normalization, broadcastable
+                to ``event_shape_design``.
+            design_scale: Finite positive scale for design normalization,
+                broadcastable to ``event_shape_design``.
+            outcome_center: Finite center for observation normalization,
+                broadcastable to ``event_shape_y``.
+            outcome_scale: Finite positive scale for observation normalization,
+                broadcastable to ``event_shape_y``.
+            canonicalize_theta: Whether to use a consistent ordering for
+                exchangeable parameter objects, such as location-finding
+                sources. Requires an object axis in ``event_shape_theta``,
+                with ``len(event_shape_theta) >= 2``.
+        """
         super().__init__()
         self.event_shape_y = torch.Size(event_shape_y)
         self.event_shape_theta = torch.Size(event_shape_theta)
@@ -92,6 +127,12 @@ class AlineModel(nn.Module):
         self.dim_theta = prod(self.event_shape_theta)
         self.dim_design = prod(self.event_shape_design)
         self.min_scale = float(min_scale)
+        self.canonicalize_theta = bool(canonicalize_theta)
+        if self.canonicalize_theta and len(self.event_shape_theta) < 2:
+            raise ValueError(
+                "canonicalize_theta requires an exchangeable object axis, i.e. "
+                f"len(event_shape_theta) >= 2; got {tuple(self.event_shape_theta)}."
+            )
 
         if embedding_dim <= 0 or feedforward_dim <= 0:
             raise ValueError("Embedding and feedforward dimensions must be positive.")

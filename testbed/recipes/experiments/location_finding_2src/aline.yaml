@@ -5,6 +5,9 @@ defaults:
   - override /task: location_finding_2src
   - _self_
 
+model:
+  canonicalize_theta: true # the two sources are exchangeable
+
 task:
   design_space:
     _target_: testbed.core.design_spaces.BoxDesignSpace

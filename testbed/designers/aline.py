@@ -5,6 +5,7 @@ from torch import Tensor
 from torch.distributions import Categorical
 
 from testbed.core.rollout import Rollout
+from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets import AlineOutput
 
 from .base import Designer
@@ -55,6 +56,10 @@ class AlineDesigner(Designer):
         return theta
 
     def _mean_log_prob(self, output: AlineOutput, theta: Tensor) -> Tensor:
+        # Canonicalize only the inference targets; retain the original theta
+        # for simulation and likelihood-based evaluation.
+        if self.model.canonicalize_theta:
+            theta = sort_by_first_coordinate(theta)
         theta_flat = theta.reshape(theta.shape[0], self.model.dim_theta)
         return output.posterior.log_prob(theta_flat).mean(dim=1)
 

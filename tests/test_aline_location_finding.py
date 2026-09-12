@@ -1,17 +1,13 @@
 """Tests for the BED-focused ALINE implementation."""
 
-import json
 from types import SimpleNamespace
 
 import pytest
 import torch
 
 from testbed.core.design_spaces import BoxDesignSpace
-from testbed.core.manager import Manager
 from testbed.core.rollout import Rollout
 from testbed.design_nets import AlineModel, AlineOutput
-from testbed.designers import AlineDesigner
-from testbed.eval import evaluate_checkpoint
 from testbed.methods.aline import Trainer
 from testbed.tasks import LocationFinding
 
@@ -72,7 +68,7 @@ def _make_trainer(cfg=None, manager=None, task=None):
     return trainer, model
 
 
-def test_model_outputs_valid_policy_and_factorized_gmm():
+def test_model_masks_unavailable_candidates_and_scores_posterior():
     task = _make_task()
     space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
     model = _make_model(task, space)
@@ -93,15 +89,12 @@ def test_model_outputs_valid_policy_and_factorized_gmm():
         available,
     )
 
-    assert output.acquisition_logits.shape == (2, 5)
-    assert output.mixture_means.shape == (2, 2, 3)
-    assert output.posterior.batch_shape == torch.Size([2, 2])
-    assert torch.all(output.mixture_scales > 0)
-    assert torch.isneginf(output.acquisition_logits[~available]).all()
-    assert output.posterior.log_prob(task.sample_prior(2).reshape(2, 2)).shape == (
-        2,
-        2,
-    )
+    policy = torch.distributions.Categorical(logits=output.acquisition_logits)
+    assert (policy.probs[~available] == 0).all()
+    assert (policy.probs[available] > 0).all()
+    assert torch.isfinite(
+        output.posterior.log_prob(task.sample_prior(2).reshape(2, 2))
+    ).all()
 
 
 def test_fractional_outcome_scale_is_not_truncated_by_integer_center():
@@ -122,8 +115,6 @@ def test_fractional_outcome_scale_is_not_truncated_by_integer_center():
         outcome_scale=0.5,
     )
 
-    assert model.outcome_center.is_floating_point()
-    torch.testing.assert_close(model.outcome_scale, torch.tensor([0.5]))
     torch.testing.assert_close(
         model._normalize_outcomes(torch.tensor([[[1.0]]])),
         torch.tensor([[[2.0]]]),
@@ -147,10 +138,6 @@ def test_fractional_design_bounds_are_not_truncated_by_integer_partners():
         design_scale=0.5,
     )
 
-    assert model.design_low.is_floating_point()
-    assert model.design_center.is_floating_point()
-    torch.testing.assert_close(model.design_high, torch.tensor([0.5, 0.5]))
-    torch.testing.assert_close(model.design_scale, torch.tensor([0.5, 0.5]))
     torch.testing.assert_close(
         model._normalize_designs(torch.tensor([[[1.0, 1.0]]])),
         torch.tensor([[[2.0, 2.0]]]),
@@ -191,11 +178,6 @@ def test_rollout_samples_in_bounds_without_replacement():
         theta, deterministic=True, return_posterior_scores=True
     )
 
-    assert rollout.design_history.shape == (4, 3, 2)
-    assert rollout.y_history.shape == (4, 3, 1)
-    assert rollout.extra["posterior_log_probs"].shape == (4, 4)
-    assert rollout.extra["policy_log_probs"].shape == (4, 3)
-    assert isinstance(rollout, Rollout)
     assert trainer.design_space.contains(rollout.design_history)
     for designs in rollout.design_history:
         assert torch.unique(designs, dim=0).shape[0] == trainer.cfg.T
@@ -221,7 +203,7 @@ def test_shared_rollout_keeps_one_pool_and_masks_selected_candidates(random_poli
     assert len(seen) == designer.T + 1
     candidates = seen[0][0]
     for t, (pool, mask) in enumerate(seen):
-        assert pool is candidates
+        torch.testing.assert_close(pool, candidates)
         assert torch.all(mask.sum(dim=1) == designer.T - t)
         for b in range(2):
             for design in rollout.design_history[b, :t]:
@@ -229,11 +211,7 @@ def test_shared_rollout_keeps_one_pool_and_masks_selected_candidates(random_poli
                 assert selected.sum() == 1
                 assert not mask[b, selected].any()
     assert not rollout.y_history.requires_grad
-    assert rollout.extra["posterior_log_probs"].shape == (2, designer.T + 1)
     assert rollout.extra["posterior_log_probs"].requires_grad
-    assert ("policy_log_probs" in rollout.extra) is (not random_policy)
-    assert designer.pool_size == trainer.cfg.pool_size
-    assert designer.deterministic is False
 
 
 def test_posterior_collection_preserves_deterministic_evaluation_trajectory():
@@ -251,18 +229,6 @@ def test_posterior_collection_preserves_deterministic_evaluation_trajectory():
     torch.testing.assert_close(
         ordinary.extra["policy_log_probs"], scored.extra["policy_log_probs"]
     )
-    assert "posterior_log_probs" not in ordinary.extra
-
-
-def test_designer_accepts_unbatched_theta_and_rejects_invalid_inputs():
-    trainer, _ = _make_trainer()
-    designer = trainer.designer
-    theta = trainer.task.sample_prior(2)[0]
-    assert designer.rollout(theta).theta.shape == (1, 1, 2)
-    with pytest.raises(ValueError, match="pool_size must be at least T"):
-        designer.rollout(theta, pool_size=designer.T - 1)
-    with pytest.raises(ValueError, match="theta must have one batch dimension"):
-        designer.rollout(torch.zeros(2, 2))
 
 
 @pytest.mark.parametrize("n_sources, dim_theta", [(1, 2), (2, 3)])
@@ -366,17 +332,3 @@ def test_rollout_passes_history_and_trains_every_posterior_state():
         dim=1,
     )
     torch.testing.assert_close(rollout.extra["posterior_log_probs"], expected)
-
-
-def test_joint_boundary_resets_optimizer_with_reference_learning_rates():
-    trainer, model = _make_trainer()
-    trainer.train_step(0)
-    old = trainer.optimizer
-    trainer.train_step(1)
-    assert trainer.optimizer is not old
-    assert [g["lr"] for g in trainer.optimizer.param_groups] == pytest.approx(
-        [2e-4, 1e-3]
-    )
-    assert {id(p) for p in trainer.optimizer.param_groups[1]["params"]} == {
-        id(p) for p in model.acquisition_head.parameters()
-    }

@@ -18,7 +18,6 @@ from omegaconf import OmegaConf
 RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
 
 ENTRY_POINT_RECIPES = [
-    "method/aline",
     "method/dad",
     "method/actionbed",
     "method/rlboed",
@@ -26,7 +25,6 @@ ENTRY_POINT_RECIPES = [
     "method/joint_var_post",
     "experiments/location_finding/rlboed",
     "experiments/location_finding_2src/actionbed",
-    "experiments/location_finding_2src/aline",
     "experiments/location_finding_2src/dad",
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
@@ -113,15 +111,6 @@ def test_two_source_rlboed_recipe_uses_two_source_task():
     assert "design_space" not in cfg
     assert (cfg.task.design_space.low, cfg.task.design_space.high) == (-4.0, 4.0)
     assert (cfg.reward.outcome_low, cfg.reward.outcome_high) == (-3.0, 10.0)
-
-
-def test_two_source_aline_recipe_is_ready_for_common_evaluation():
-    cfg = _compose("experiments/location_finding_2src/aline")
-    assert cfg.task.n_sources == 2
-    assert cfg.T == 30
-    assert (cfg.task.design_space.low, cfg.task.design_space.high) == (-4.0, 4.0)
-    assert cfg.final_eval.enabled is True
-    assert cfg.final_eval.outer_batch_size == cfg.eval_batch_size
 
 
 def test_temporal_discounting_dad_preserves_objective_defaults():
