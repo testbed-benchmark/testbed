@@ -136,7 +136,7 @@ class LinearRegression(Task):
         self,
         dim: int,
         dim_y: int = 1,
-        noise_scale: float = 0.01,
+        noise_scale: float = 0.1,
         quad: float = 0.0,
         prior=None,
         design_space: DesignSpace | None = None,
