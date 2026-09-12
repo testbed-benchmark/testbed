@@ -69,8 +69,6 @@ class AlineModel(nn.Module):
         event_shape_y,
         event_shape_theta,
         event_shape_design,
-        design_low,
-        design_high,
         embedding_dim: int = 32,
         feedforward_dim: int = 128,
         n_heads: int = 4,
@@ -93,10 +91,6 @@ class AlineModel(nn.Module):
                 the batch dimension.
             event_shape_design: Shape of a single design, excluding batch and
                 time or candidate dimensions.
-            design_low: Finite lower design bounds, broadcastable to
-                ``event_shape_design``.
-            design_high: Finite upper design bounds, broadcastable to
-                ``event_shape_design`` and strictly above ``design_low``.
             embedding_dim: Embedding dimension, divisible by ``n_heads``.
             feedforward_dim: Hidden dimension of the feedforward networks.
             n_heads: Number of attention heads per transformer layer.
@@ -143,16 +137,6 @@ class AlineModel(nn.Module):
         if self.min_scale <= 0:
             raise ValueError("min_scale must be positive.")
 
-        design_low, design_high = self._as_float_pair(design_low, design_high)
-        design_low = design_low.broadcast_to(self.event_shape_design)
-        design_high = design_high.broadcast_to(self.event_shape_design)
-        if (
-            not torch.all(torch.isfinite(design_low))
-            or not torch.all(torch.isfinite(design_high))
-            or torch.any(design_low >= design_high)
-        ):
-            raise ValueError("Each design lower bound must be below its upper bound.")
-
         design_center, design_scale = self._as_float_pair(design_center, design_scale)
         design_center = design_center.broadcast_to(self.event_shape_design)
         design_scale = design_scale.broadcast_to(self.event_shape_design)
@@ -177,8 +161,6 @@ class AlineModel(nn.Module):
         ):
             raise ValueError("outcome_scale must be positive.")
 
-        self.register_buffer("design_low", design_low.reshape(-1).clone())
-        self.register_buffer("design_high", design_high.reshape(-1).clone())
         self.register_buffer("outcome_center", outcome_center.reshape(-1).clone())
         self.register_buffer("outcome_scale", outcome_scale.reshape(-1).clone())
 

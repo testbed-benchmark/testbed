@@ -13,7 +13,9 @@ from testbed.tasks import LocationFinding
 
 
 def _make_task():
-    return LocationFinding(n_sources=1, dim_theta=2)
+    return LocationFinding(
+        n_sources=1, dim_theta=2, design_space=BoxDesignSpace(-4.0, 4.0, (2,))
+    )
 
 
 def _make_cfg(**overrides):
@@ -32,18 +34,17 @@ def _make_cfg(**overrides):
         "gamma": 1.0,
         "alpha": 1.0,
         "grad_clip": 1.0,
+        "optimizer": SimpleNamespace(lr=1e-3, weight_decay=0.01),
     }
     values.update(overrides)
     return SimpleNamespace(**values)
 
 
-def _make_model(task, space):
+def _make_model(task):
     return AlineModel(
         event_shape_y=task.event_shape_y,
         event_shape_theta=task.event_shape_theta,
         event_shape_design=task.event_shape_design,
-        design_low=space.low,
-        design_high=space.high,
         embedding_dim=8,
         feedforward_dim=16,
         n_heads=2,
@@ -54,14 +55,10 @@ def _make_model(task, space):
 
 def _make_trainer(cfg=None, manager=None, task=None):
     task = _make_task() if task is None else task
-    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
-    model = _make_model(task, space)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    model = _make_model(task)
     trainer = Trainer(
         task,
         model,
-        space,
-        optimizer,
         cfg or _make_cfg(),
         manager=manager,
     )
@@ -71,7 +68,7 @@ def _make_trainer(cfg=None, manager=None, task=None):
 def test_model_masks_unavailable_candidates_and_scores_posterior():
     task = _make_task()
     space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
-    model = _make_model(task, space)
+    model = _make_model(task)
     context_designs = space.sample((2, 2))
     context_y = task.sample_outcome(
         task.sample_prior(2).unsqueeze(1).expand(-1, 2, -1, -1),
@@ -99,13 +96,10 @@ def test_model_masks_unavailable_candidates_and_scores_posterior():
 
 def test_fractional_outcome_scale_is_not_truncated_by_integer_center():
     task = _make_task()
-    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
     model = AlineModel(
         event_shape_y=task.event_shape_y,
         event_shape_theta=task.event_shape_theta,
         event_shape_design=task.event_shape_design,
-        design_low=space.low,
-        design_high=space.high,
         embedding_dim=8,
         feedforward_dim=16,
         n_heads=2,
@@ -121,14 +115,12 @@ def test_fractional_outcome_scale_is_not_truncated_by_integer_center():
     )
 
 
-def test_fractional_design_bounds_are_not_truncated_by_integer_partners():
+def test_fractional_design_scale_is_not_truncated_by_integer_center():
     task = _make_task()
     model = AlineModel(
         event_shape_y=task.event_shape_y,
         event_shape_theta=task.event_shape_theta,
         event_shape_design=task.event_shape_design,
-        design_low=0,
-        design_high=0.5,
         embedding_dim=8,
         feedforward_dim=16,
         n_heads=2,
@@ -148,7 +140,7 @@ def test_attention_prevents_candidate_leakage():
     torch.manual_seed(0)
     task = _make_task()
     space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
-    model = _make_model(task, space).eval()
+    model = _make_model(task).eval()
     theta = task.sample_prior(2)[:1]
     context_designs = space.sample((1, 2))
     context_y = task.sample_outcome(
@@ -178,7 +170,7 @@ def test_rollout_samples_in_bounds_without_replacement():
         theta, deterministic=True, return_posterior_scores=True
     )
 
-    assert trainer.design_space.contains(rollout.design_history)
+    assert trainer.task.design_space.contains(rollout.design_history)
     for designs in rollout.design_history:
         assert torch.unique(designs, dim=0).shape[0] == trainer.cfg.T
 
@@ -233,10 +225,13 @@ def test_posterior_collection_preserves_deterministic_evaluation_trajectory():
 
 @pytest.mark.parametrize("n_sources, dim_theta", [(1, 2), (2, 3)])
 def test_mean_log_prob_includes_every_parameter(n_sources, dim_theta):
-    task = LocationFinding(n_sources=n_sources, dim_theta=dim_theta)
-    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
-    model = _make_model(task, space)
-    trainer = Trainer(task, model, space, None, _make_cfg())
+    task = LocationFinding(
+        n_sources=n_sources,
+        dim_theta=dim_theta,
+        design_space=BoxDesignSpace(-4.0, 4.0, (dim_theta,)),
+    )
+    model = _make_model(task)
+    trainer = Trainer(task, model, _make_cfg())
     n_parameters = n_sources * dim_theta
     output = AlineOutput(
         acquisition_logits=torch.zeros(2, 1),
@@ -292,7 +287,7 @@ def test_policy_reward_matches_reference_clipping_and_standardization():
 def test_empty_context_has_finite_outputs_and_gradients(training):
     trainer, model = _make_trainer()
     model.train(training)
-    candidates = trainer.design_space.sample((2, 3))
+    candidates = trainer.task.design_space.sample((2, 3))
     output = model(
         torch.empty(2, 0, 1),
         torch.empty(2, 0, 2),

@@ -1,8 +1,8 @@
 """Standalone sPCE/sNMC evaluation for any trained BED policy checkpoint.
 
-Ordinary policies use `cfg.design_net` and a `"design_net"` checkpoint key.
-ALINE's joint acquisition/inference model uses its saved `cfg.model` and
-`"model"` key and is adapted to the same Designer rollout interface here.
+The saved `cfg.design_net` constructs the network, and `cfg.final_eval.designer`
+selects the rollout implementation and its evaluation settings. Network weights
+are stored under `"design_net"`.
 
 If the checkpoint has a `"design_net_ema"` key (currently only
 `methods.var_post.Trainer` saves one), it's preferred over the raw
@@ -29,11 +29,11 @@ import sys
 from pathlib import Path
 
 import torch
-from hydra.utils import instantiate
+from hydra.utils import get_class, instantiate
 from omegaconf import OmegaConf
 
 from testbed.core.setup import instantiate_design_net
-from testbed.designers import AlineDesigner, PolicyDesigner
+from testbed.designers import PolicyDesigner
 from testbed.eval import eval_spce_snmc
 
 
@@ -58,39 +58,23 @@ def evaluate_checkpoint(
 
     task = instantiate(cfg.task).to(device)
     state = torch.load(run_dir / checkpoint, map_location=device, weights_only=False)
-    if "model" in state:
-        from testbed.methods.aline import build_design_space, build_model
+    design_net = build_design_net(cfg, task).to(device)
+    key = (
+        "design_net"
+        if use_raw_weights or "design_net_ema" not in state
+        else "design_net_ema"
+    )
+    design_net.load_state_dict(state[key])
+    design_net.eval()
 
-        model = build_model(cfg, task, build_design_space(cfg, task)).to(device)
-        model.load_state_dict(state["model"])
-        model.eval()
-        designer = AlineDesigner(
-            task,
-            cfg.T,
-            model,
-            pool_size=cfg.eval_pool_size,
-            deterministic=cfg.eval_deterministic,
-        )
-        key = "model"
-    else:
-        design_net = build_design_net(cfg, task).to(device)
-        key = (
-            "design_net"
-            if use_raw_weights or "design_net_ema" not in state
-            else "design_net_ema"
-        )
-        design_net.load_state_dict(state[key])
-        design_net.eval()
-
-        use_raw_history = state.get(
+    designer_config = cfg.final_eval.designer
+    designer_kwargs = {}
+    if issubclass(get_class(designer_config._target_), PolicyDesigner):
+        # Policy checkpoints preserve the coordinates used during training.
+        designer_kwargs["use_raw_history"] = state.get(
             "use_raw_history", not design_net.produces_policy_log_probs
         )
-        designer = PolicyDesigner(
-            task,
-            cfg.T,
-            design_net,
-            use_raw_history=use_raw_history,
-        )
+    designer = instantiate(designer_config, task, cfg.T, design_net, **designer_kwargs)
 
     out = eval_spce_snmc(
         task,

@@ -4,6 +4,7 @@ import torch
 from torch import Tensor
 from torch.distributions import Categorical
 
+from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.rollout import Rollout
 from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets import AlineOutput
@@ -22,7 +23,6 @@ class AlineDesigner(Designer):
         *,
         pool_size: int,
         deterministic: bool = True,
-        design_space=None,
     ) -> None:
         """Stores the model and fixed-pool settings."""
         super().__init__(task, T, transform_designs=False)
@@ -30,7 +30,19 @@ class AlineDesigner(Designer):
             raise ValueError("T must be positive.")
         if pool_size < T:
             raise ValueError("pool_size must be at least T.")
-        self.design_space = task.design_space if design_space is None else design_space
+        space = task.design_space
+        if not isinstance(space, BoxDesignSpace):
+            raise ValueError(
+                "ALINE requires a finite BoxDesignSpace on task.design_space."
+            )
+        if space.event_shape != task.event_shape_design:
+            raise ValueError("The design-space event shape must match the task.")
+        if (
+            not torch.all(torch.isfinite(space.low))
+            or not torch.all(torch.isfinite(space.high))
+            or torch.any(space.low >= space.high)
+        ):
+            raise ValueError("ALINE requires finite design bounds with low < high.")
         self.model = model
         self.pool_size = int(pool_size)
         self.deterministic = bool(deterministic)
@@ -38,7 +50,7 @@ class AlineDesigner(Designer):
     @property
     def device(self) -> torch.device:
         """Returns the ALINE model device."""
-        return self.model.design_low.device
+        return next(self.model.parameters()).device
 
     def _step_design(self, state):
         """Requires the complete fixed-pool rollout owned by this designer."""
@@ -106,7 +118,7 @@ class AlineDesigner(Designer):
             raise ValueError("pool_size must be at least T.")
         deterministic = self.deterministic if deterministic is None else deterministic
         batch_size = theta.shape[0]
-        candidates = self.design_space.sample(
+        candidates = self.task.design_space.sample(
             (batch_size, pool_size), device=self.device
         )
         available_mask = torch.ones(

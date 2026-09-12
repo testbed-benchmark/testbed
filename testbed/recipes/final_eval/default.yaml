@@ -8,3 +8,6 @@ n_contrastive: 1_000_000
 outer_batch_size: 256
 contrastive_chunk_size: 200_000
 use_raw_weights: false  # prefer design_net_ema when the checkpoint has one
+
+designer:
+  _target_: testbed.designers.PolicyDesigner

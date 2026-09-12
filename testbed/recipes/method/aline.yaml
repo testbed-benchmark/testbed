@@ -14,7 +14,8 @@ seed: 0
 # rollout
 pool_size: 200
 
-model:
+design_net:
+  _target_: testbed.design_nets.AlineModel
   canonicalize_theta: false
   embedding_dim: 32
   feedforward_dim: 128
@@ -50,6 +51,10 @@ n_inner_eval: 1_000_000
 eval_deterministic: true
 
 final_eval:
+  designer:
+    _target_: testbed.designers.AlineDesigner
+    pool_size: ${eval_pool_size}
+    deterministic: ${eval_deterministic}
   n_contrastive: 100_000_000
   outer_batch_size: ${eval_batch_size}
   contrastive_chunk_size: ${eval_contrastive_chunk_size}

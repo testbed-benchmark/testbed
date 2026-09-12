@@ -5,7 +5,7 @@ defaults:
   - override /task: location_finding_2src
   - _self_
 
-model:
+design_net:
   canonicalize_theta: true # the two sources are exchangeable
 
 task:

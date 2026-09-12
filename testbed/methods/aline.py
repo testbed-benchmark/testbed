@@ -5,13 +5,10 @@ Unlike the authors' code however, this implementation is specialized to
 targeting the EIG in all parameters.
 """
 
-import inspect
-
 import hydra
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace
-from testbed.core.setup import setup
+from testbed.core.setup import instantiate_design_net, setup
 from testbed.design_nets import AlineModel
 from testbed.design_objectives import SPCE
 from testbed.designers import AlineDesigner
@@ -24,36 +21,62 @@ class Trainer:
         self,
         task,
         model: AlineModel,
-        design_space: BoxDesignSpace,
-        optimizer,
         cfg,
         manager=None,
-        scheduler=None,
     ) -> None:
         """Initializes the ALINE trainer."""
-        validate_config(task, cfg, design_space)
+        validate_config(task, cfg)
         self.task = task
         self.model = model
-        self.design_space = design_space
         self.designer = AlineDesigner(
             task,
             cfg.T,
             model,
             pool_size=cfg.pool_size,
             deterministic=False,
-            design_space=design_space,
         )
-        self.optimizer = optimizer
-        self.scheduler = scheduler
         self.cfg = cfg
         self.manager = manager
         self.best_metric = -torch.inf
         self._joint_optimizer_started = False
+        self._start_warmup_optimizer()
 
     @property
     def device(self) -> torch.device:
         """Returns the model device."""
-        return self.model.design_low.device
+        return next(self.model.parameters()).device
+
+    def _start_warmup_optimizer(self) -> None:
+        # Warm-up uses one learning rate and decay over the full training horizon.
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.cfg.optimizer.lr,
+            weight_decay=self.cfg.optimizer.weight_decay,
+        )
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=self.cfg.n_train_iter
+        )
+
+    def _start_joint_optimizer(self) -> None:
+        # Restart AdamW state and cosine decay at the phase boundary, as in the
+        # reference. Only the acquisition head retains the full learning rate.
+        acquisition = list(self.model.acquisition_head.parameters())
+        acquisition_ids = {id(p) for p in acquisition}
+        shared = [p for p in self.model.parameters() if id(p) not in acquisition_ids]
+        base_lr = self.cfg.optimizer.lr
+        self.optimizer = torch.optim.AdamW(
+            [
+                {"params": shared, "lr": base_lr / 5},
+                {"params": acquisition, "lr": base_lr},
+            ],
+            lr=base_lr,
+            weight_decay=self.cfg.optimizer.weight_decay,
+        )
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=max(1, self.cfg.n_train_iter - self.cfg.n_warmup_iter),
+        )
+        self._joint_optimizer_started = True
 
     def train_step(self, step: int = 0) -> dict[str, float]:
         """Takes one warm-up or joint ALINE training step."""
@@ -99,34 +122,9 @@ class Trainer:
                 self.model.parameters(), self.cfg.grad_clip, norm_type=float("inf")
             )
         if not warmup and not self._joint_optimizer_started:
-            # The reference restarts AdamW and cosine decay at the boundary;
-            # only the acquisition predictor retains the full learning rate.
-            base_lr = self.optimizer.defaults["lr"]
-            acquisition = list(self.model.acquisition_head.parameters())
-            acquisition_ids = {id(p) for p in acquisition}
-            shared = [
-                p for p in self.model.parameters() if id(p) not in acquisition_ids
-            ]
-            self.optimizer = type(self.optimizer)(
-                [
-                    {"params": shared, "lr": base_lr / 5},
-                    {"params": acquisition, "lr": base_lr},
-                ],
-                **{
-                    key: value
-                    for key, value in self.optimizer.defaults.items()
-                    if key in inspect.signature(type(self.optimizer)).parameters
-                },
-            )
-            if self.scheduler is not None:
-                self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                    self.optimizer,
-                    T_max=max(1, self.cfg.n_train_iter - self.cfg.n_warmup_iter),
-                )
-            self._joint_optimizer_started = True
+            self._start_joint_optimizer()
         self.optimizer.step()
-        if self.scheduler is not None:
-            self.scheduler.step()
+        self.scheduler.step()
 
         return {
             "loss": loss.item(),
@@ -187,7 +185,7 @@ class Trainer:
             return
         self.best_metric = metric
         torch.save(
-            {"model": self.model.state_dict(), "step": step, "metric": metric},
+            {"design_net": self.model.state_dict(), "step": step, "metric": metric},
             self.manager.path("best.pt"),
         )
         self.manager.event_logger.info(
@@ -213,56 +211,22 @@ class Trainer:
 
         if self.manager is not None:
             torch.save(
-                {"model": self.model.state_dict(), "step": self.cfg.n_train_iter - 1},
+                {
+                    "design_net": self.model.state_dict(),
+                    "step": self.cfg.n_train_iter - 1,
+                },
                 self.manager.path("final_step.pt"),
             )
             if self.manager.metric_logger is not None:
                 self.manager.metric_logger.close()
 
 
-def build_design_space(cfg, task) -> BoxDesignSpace:
-    """Builds the fixed candidate-pool design space."""
-    if not isinstance(task.design_space, BoxDesignSpace):
-        raise ValueError("ALINE requires a finite BoxDesignSpace on task.design_space.")
-    return task.design_space
-
-
-def build_model(cfg, task, design_space: BoxDesignSpace) -> AlineModel:
-    """Builds the ALINE neural architecture."""
-    return AlineModel(
-        event_shape_y=task.event_shape_y,
-        event_shape_theta=task.event_shape_theta,
-        event_shape_design=task.event_shape_design,
-        design_low=design_space.low,
-        design_high=design_space.high,
-        embedding_dim=cfg.model.embedding_dim,
-        feedforward_dim=cfg.model.feedforward_dim,
-        n_heads=cfg.model.n_heads,
-        n_layers=cfg.model.n_layers,
-        dropout=cfg.model.dropout,
-        n_components=cfg.model.n_components,
-        min_scale=cfg.model.min_scale,
-        design_center=cfg.model.get("design_center", 0.0),
-        design_scale=cfg.model.get("design_scale", 1.0),
-        outcome_center=cfg.model.outcome_center,
-        outcome_scale=cfg.model.outcome_scale,
-        canonicalize_theta=cfg.model.canonicalize_theta,
-    )
-
-
-def validate_config(task, cfg, design_space: BoxDesignSpace) -> None:
+def validate_config(task, cfg) -> None:
     """Rejects unsupported tasks and invalid ALINE settings."""
     if task.discrete_theta:
         raise ValueError(
             "ALINE's Gaussian-mixture posterior requires continuous theta."
         )
-    if design_space.event_shape != task.event_shape_design:
-        raise ValueError("The design-space event shape must match the task.")
-    if not torch.all(torch.isfinite(design_space.low)) or not torch.all(
-        torch.isfinite(design_space.high)
-    ):
-        raise ValueError("The design-space bounds must be finite.")
-
     positive = {
         "T": cfg.T,
         "pool_size": cfg.pool_size,
@@ -301,26 +265,8 @@ def main(cfg) -> None:
     """Runs ALINE training from a Hydra recipe."""
     torch.manual_seed(cfg.seed)
     manager, task = setup(cfg)
-    design_space = build_design_space(cfg, task)
-    validate_config(task, cfg, design_space)
-    model = build_model(cfg, task, design_space).to(cfg.device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=cfg.optimizer.lr,
-        weight_decay=cfg.optimizer.weight_decay,
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=cfg.n_train_iter
-    )
-    trainer = Trainer(
-        task,
-        model,
-        design_space,
-        optimizer,
-        cfg,
-        manager=manager,
-        scheduler=scheduler,
-    )
+    model = instantiate_design_net(cfg.design_net, task).to(cfg.device)
+    trainer = Trainer(task, model, cfg, manager=manager)
     trainer.train()
 
 
