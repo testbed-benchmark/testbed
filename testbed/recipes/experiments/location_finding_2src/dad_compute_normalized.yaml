@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - dad
+  - override /method: dad_compute_normalized
+  - override /net@design_net: attentive_policy
+  - _self_
+
+wandb:
+  group: dad_compute_normalized
+
+# Keep evaluation resolution identical across all training inner-sample counts.
+final_eval:
+  checkpoint: final_step.pt

@@ -1,0 +1,19 @@
+# Example grid: replace the sample counts with those in the original sweep.
+name: location_finding_2src-dad-compute-normalized
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: location_finding_2src
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+  objective.n_inner:
+    values: [16, 64, 256, 1024, 4096]
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/location_finding_2src/dad_compute_normalized
+  - ${args_no_hyphens}
