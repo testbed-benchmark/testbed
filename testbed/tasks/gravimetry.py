@@ -47,7 +47,7 @@ class GravimetryPrior(Distribution):
         r_max (float, optional):
             Maximum anomaly radius (default: 4.0).
         density_contrast (float, optional):
-            Density contrast :math:`\Delta\rho` in kg/m^3; negative for a void
+            Density contrast :math:`\Delta\rho`; negative for a void
             (default: -2200.0, an air-filled void in rock).
         gravitational_const (float, optional):
             Newton's constant :math:`G` (default: 6.674e-11).
@@ -78,7 +78,7 @@ class GravimetryPrior(Distribution):
         self.density_contrast = density_contrast
         self.gravitational_const = gravitational_const
 
-        # kappa = kappa_coeff * R**3, the mass anomaly rescaled to microGal
+        # kappa = kappa_coeff * R**3
         self.kappa_coeff = (
             gravitational_const * (4 / 3) * math.pi * density_contrast / 1e-8
         )
