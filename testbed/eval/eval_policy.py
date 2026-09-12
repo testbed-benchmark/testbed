@@ -67,7 +67,14 @@ def evaluate_checkpoint(
     design_net.load_state_dict(state[key])
     design_net.eval()
 
-    designer_config = cfg.final_eval.designer
+    designer_config = OmegaConf.select(cfg, "final_eval.designer")
+    if designer_config is None:
+        # Run configs saved before final_eval.designer became configurable used
+        # PolicyDesigner unconditionally. Preserve that behavior so finished
+        # checkpoints remain re-evaluable with newer versions of TestBED.
+        designer_config = OmegaConf.create(
+            {"_target_": "testbed.designers.PolicyDesigner"}
+        )
     designer_kwargs = {}
     if issubclass(get_class(designer_config._target_), PolicyDesigner):
         # Policy checkpoints preserve the coordinates used during training.
