@@ -1,6 +1,6 @@
 """Stochastic pendulum task."""
 
-import math
+from collections.abc import Iterable
 
 import torch
 from torch import Tensor
@@ -104,8 +104,14 @@ class StochasticPendulum(Task):
             Step size in the Euler-Maruyama discretization (default: 0.05).
         damping (float):
             Damping coefficient (default: 0.1).
-        noise_scale (float):
-            Observation noise scale (default: 0.1).
+        noise_scale (float or sequence):
+            Diffusion scale, broadcast over the observation (default: 0.1). Pass a
+            length-2 sequence for a per-coordinate diffusion.
+        noise_jitter (float):
+            Added to the observation variance, so outcomes have standard deviation
+            ``sqrt(dt * noise_scale**2 + noise_jitter)`` (default: 0.0). Needed only
+            to regularize a singular diffusion, where some ``noise_scale`` entry is
+            zero and the observation density would otherwise be degenerate.
     """
 
     @property
@@ -120,7 +126,8 @@ class StochasticPendulum(Task):
         reparameterize_outcomes: bool | None = None,
         dt: float = 0.05,
         damping: float = 0.1,
-        noise_scale: float = 0.1,
+        noise_scale: float | Iterable[float] = 0.1,
+        noise_jitter: float = 0.0,
     ) -> None:
         """Initializes the stochastic pendulum task."""
         if prior is None:
@@ -142,14 +149,23 @@ class StochasticPendulum(Task):
         self.dt = dt
         self.g = 9.81
         self.damping = damping
-        self.noise_scale = noise_scale
+        scale = torch.as_tensor(noise_scale, dtype=torch.get_default_dtype())
+        self.noise_scale = scale.broadcast_to(self.event_shape_y)
+        self.noise_jitter = noise_jitter
+
+    @property
+    def obs_std(self) -> Tensor:
+        """Per-coordinate observation standard deviation."""
+        return torch.sqrt(self.dt * self.noise_scale**2 + self.noise_jitter)
 
     def __repr__(self) -> str:
         """Returns a compact representation."""
+        scale = [round(v, 8) for v in self.noise_scale.tolist()]
         return (
             f"StochasticPendulum(dt={self.dt}, "
             f"damping={self.damping}, "
-            f"noise_scale={self.noise_scale})"
+            f"noise_scale={scale}, "
+            f"noise_jitter={self.noise_jitter})"
         )
 
     def drift_func(self, y: Tensor, theta: Tensor, design: Tensor) -> Tensor:
@@ -214,8 +230,7 @@ class StochasticPendulum(Task):
                 Log probability per batch element, shape ``[b]``.
         """
         loc = self.make_mean(theta, design, y_history)
-        std = math.sqrt(self.dt) * self.noise_scale
-        logp = normal_log_prob(y, loc, std)
+        logp = normal_log_prob(y, loc, self.obs_std)
         return logp.sum(dim=-1)
 
     def _sample_outcome(
@@ -243,5 +258,4 @@ class StochasticPendulum(Task):
         """
         # euler-maruyama SDE step
         mean = self.make_mean(theta, design, y_history)
-        noise = math.sqrt(self.dt) * self.noise_scale * torch.randn_like(mean)
-        return mean + noise
+        return mean + self.obs_std * torch.randn_like(mean)

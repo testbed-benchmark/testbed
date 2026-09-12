@@ -28,6 +28,8 @@ def test_subpackage_accessible_after_bare_import(name):
 
 TASKS = [
     "CES",
+    "CartPole",
+    "DoubleLink",
     "HyperbolicTemporalDiscounting",
     "LinearRegression",
     "LocationFinding",
