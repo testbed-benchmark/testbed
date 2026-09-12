@@ -211,7 +211,7 @@ class PharmacoKinetic(Task):
             y (Tensor):
                 Observations of shape ``[b, 1]``.
             theta (Tensor):
-                Parameter tensor of shape ``[b, n_sources, 3]``.
+                Parameter tensor of shape ``[b, 3]``.
             design (Tensor):
                 Design tensor of shape ``[b, 1]``.
             y_history (Tensor, optional):

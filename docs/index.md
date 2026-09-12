@@ -36,11 +36,14 @@ TestBED was designed to allow you to implement your own task easily. For some po
 
 | `testbed.tasks.X` | Description | API |
 |---|---|---|
+| `CartPole` | Stochastic cart-pole with unknown masses/length (note: non-memoryless likelihood) | [API](autoapi/testbed/tasks/cart_pole/index) |
 | `CES` | Constant elasticity of substitution | [API](autoapi/testbed/tasks/constant_elasticity_of_substitution/index) |
+| `DoubleLink` | Stochastic double-link with unknown masses/lengths (note: non-memoryless likelihood) | [API](autoapi/testbed/tasks/double_link/index) |
 | `HyperbolicTemporalDiscounting` | Hyperbolic temporal discounting (note: discrete outcomes) | [API](autoapi/testbed/tasks/hyperbolic_temporal_discounting/index) |
 | `LinearRegression` | Linear regression | [API](autoapi/testbed/tasks/linear_regression/index) |
 | `LocationFinding` | Source location finding | [API](autoapi/testbed/tasks/location_finding/index) |
 | `MichaelisMenten` | Michaelis-Menten| [API](autoapi/testbed/tasks/michaelis_menten/index) |
+| `PharmacoKinetic` | Drug concentration over time (note: concentration-dependent noise) | [API](autoapi/testbed/tasks/pharmacokinetic/index) |
 | `PreyPopulation` | Predator-prey population (note: discrete designs and outcomes) | [API](autoapi/testbed/tasks/prey_population/index) |
 | `StochasticPendulum` | Stochastic pendulum with unknown mass/length (note: non-memoryless likelihood) | [API](autoapi/testbed/tasks/stochastic_pendulum/index) |
 

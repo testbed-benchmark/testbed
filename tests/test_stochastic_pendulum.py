@@ -207,3 +207,16 @@ def test_noise_jitter_defaults_off_and_regularizes_a_singular_diffusion():
     logp = task.outcome_logp(task.sample_outcome(theta, design), theta, design)
 
     assert torch.isfinite(logp).all()
+
+
+def test_noise_scale_is_a_buffer_that_round_trips_through_state_dict():
+    task = StochasticPendulum()
+
+    assert "noise_scale" in task.state_dict()
+    # a broadcast view would be stride-0, which load_state_dict cannot copy into
+    assert task.noise_scale.is_contiguous()
+
+    other = StochasticPendulum(noise_scale=[0.2, 0.3])
+    other.load_state_dict(task.state_dict())
+
+    assert torch.equal(other.noise_scale, task.noise_scale)

@@ -1,4 +1,9 @@
-"""Cart pole task."""
+"""Cart pole task.
+
+References:
+    1. https://arxiv.org/abs/2402.07868
+    2. https://arxiv.org/abs/2607.08335
+"""
 
 from collections.abc import Iterable
 
@@ -163,7 +168,9 @@ class CartPole(Task):
         self.damping_c = damping_c
         self.damping_p = damping_p
         scale = torch.as_tensor(noise_scale, dtype=torch.get_default_dtype())
-        self.noise_scale = scale.broadcast_to(self.event_shape_y)
+        self.register_buffer(
+            "noise_scale", scale.broadcast_to(self.event_shape_y).clone()
+        )
         self.noise_jitter = noise_jitter
 
     @property
