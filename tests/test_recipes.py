@@ -162,21 +162,28 @@ def test_two_source_actionbed_preserves_grad_clip_default():
     assert "encoder_dim_h" not in cfg.action_net
 
 
-@pytest.mark.parametrize("architecture", ["deepset", "attention"])
-def test_rlboed_architecture_override(architecture):
+@pytest.mark.parametrize("actor_architecture", ["deepset", "attention"])
+@pytest.mark.parametrize("critic_architecture", ["deepset", "attention"])
+def test_rlboed_architecture_overrides(actor_architecture, critic_architecture):
     from testbed.core.setup import instantiate_design_net
     from testbed.design_nets import AttentiveEncoder, DeepSetEncoder
 
     with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
         cfg = compose(
             config_name="experiments/location_finding_2src/rlboed",
-            overrides=[f"architecture={architecture}"],
+            overrides=[
+                f"actor_architecture={actor_architecture}",
+                f"critic_architecture={critic_architecture}",
+            ],
         )
     task = instantiate(cfg.task)
     policy = instantiate_design_net(cfg.design_net, task)
-    encoder_type = AttentiveEncoder if architecture == "attention" else DeepSetEncoder
+    encoder_type = (
+        AttentiveEncoder if actor_architecture == "attention" else DeepSetEncoder
+    )
     assert isinstance(policy.actor.encoder, encoder_type)
-    assert cfg.design_net.architecture == architecture
+    assert cfg.design_net.architecture == actor_architecture
+    assert cfg.critic_architecture == critic_architecture
     assert cfg.design_net.attention.max_T == cfg.T
 
 
@@ -188,7 +195,7 @@ def test_rlboed_rejects_unknown_architecture():
     with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
         cfg = compose(
             config_name="experiments/location_finding/rlboed",
-            overrides=["architecture=unknown"],
+            overrides=["actor_architecture=unknown"],
         )
     with pytest.raises(InstantiationException, match="architecture must be"):
         instantiate_design_net(cfg.design_net, instantiate(cfg.task))

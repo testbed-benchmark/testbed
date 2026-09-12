@@ -11,12 +11,14 @@ defaults:
 # system (device/save_dir come from the system group)
 seed: 0
 torch_deterministic: true
-# One architecture for the actor and both critics: deepset or attention.
-architecture: deepset
+# Independently selectable history encoders for the actor and critics.
+# Each may be either deepset or attention.
+actor_architecture: deepset
+critic_architecture: deepset
 # complete deployable policy
 design_net:
   _target_: testbed.design_nets.make_stochastic_policy
-  architecture: ${architecture}
+  architecture: ${actor_architecture}
   attention:
     num_heads: 4
     num_blocks: 2

@@ -411,6 +411,7 @@ def _tiny_cfg(**sac_overrides):
             },
             "design_space": {"low": -2.0, "high": 3.0},
             "reward": {"n_contrastive": 2, "outcome_low": -3.0, "outcome_high": 10.0},
+            "critic_architecture": "deepset",
             "design_net": {
                 "_target_": "testbed.design_nets.make_stochastic_policy",
                 "architecture": "deepset",
@@ -689,20 +690,31 @@ def test_rlboed_fixed_alpha_disables_temperature_optimizer(alpha):
 
 
 @pytest.mark.parametrize(
-    "architecture,encoder_type",
+    "actor_architecture,actor_encoder_type",
+    [
+        ("deepset", DeepSetEncoder),
+        ("attention", AttentiveEncoder),
+    ],
+)
+@pytest.mark.parametrize(
+    "critic_architecture,critic_encoder_type",
     [
         ("deepset", DeepSetEncoder),
         ("attention", AttentiveEncoder),
     ],
 )
 @pytest.mark.parametrize("design_kind", ["box", "finite", "unconstrained"])
-def test_shared_architecture_trains_and_reloads(
-    architecture, encoder_type, design_kind
+def test_independent_architectures_train_and_reload(
+    actor_architecture,
+    actor_encoder_type,
+    critic_architecture,
+    critic_encoder_type,
+    design_kind,
 ):
     cfg = _tiny_cfg()
     cfg.design_net._target_ = "testbed.design_nets.make_stochastic_policy"
-    cfg.architecture = architecture
-    cfg.design_net.architecture = "${architecture}"
+    cfg.design_net.architecture = actor_architecture
+    cfg.critic_architecture = critic_architecture
     cfg.design_net.dim_h = [16, 16]
     cfg.design_net.dim_emb = 16
     cfg.design_net.attention = {"num_heads": 2, "num_blocks": 1, "max_T": cfg.T}
@@ -722,14 +734,16 @@ def test_shared_architecture_trains_and_reloads(
         CategoricalPolicyActor if design_kind == "finite" else GaussianPolicyActor
     )
     assert type(nets.actor.actor) is actor_type
-    encoders = [
-        nets.actor.actor.encoder,
+    actor_encoder = nets.actor.actor.encoder
+    critic_encoders = [
         nets.qf1.encoder,
         nets.qf2.encoder,
         nets.qf1_target.encoder,
         nets.qf2_target.encoder,
     ]
-    assert all(isinstance(encoder, encoder_type) for encoder in encoders)
+    assert isinstance(actor_encoder, actor_encoder_type)
+    assert all(isinstance(encoder, critic_encoder_type) for encoder in critic_encoders)
+    encoders = [actor_encoder, *critic_encoders]
     parameter_ids = [{id(p) for p in encoder.parameters()} for encoder in encoders]
     for i, ids in enumerate(parameter_ids):
         assert all(ids.isdisjoint(other) for other in parameter_ids[i + 1 :])

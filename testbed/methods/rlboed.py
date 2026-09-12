@@ -412,7 +412,7 @@ def make_networks(
         encoder = make_history_encoder(
             event_shape_y=(dim_y,),
             event_shape_design=(dim_design,),
-            architecture=cfg.design_net.architecture,
+            architecture=cfg.critic_architecture,
             dim_h=cfg.design_net.dim_h,
             dim_emb=cfg.design_net.dim_emb,
             attention=cfg.design_net.get("attention"),
