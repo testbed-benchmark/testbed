@@ -9,85 +9,35 @@ from collections.abc import Iterable
 
 import torch
 from torch import Tensor
-from torch.distributions import MultivariateNormal, TransformedDistribution
-from torch.distributions.transforms import ExpTransform
 
 from ..core.design_spaces import BoxDesignSpace, DesignSpace
-from ..core.distributions import Distribution
+from ..core.distributions import LogNormal
 from ..core.util import normal_log_prob
 from .base import Task
 
 
-class CartPolePrior(Distribution):
+class CartPolePrior(LogNormal):
     r"""Log-normal prior for theta = (mp, mc, l).
 
     The default prior is:
 
     .. math::
-        p(\theta) = \mathcal{N}\left(0, 0.01 I_3 \right)
+        \log \theta \sim \mathcal{N}(0, 0.01 I_3)
 
     Args:
         theta_loc (Tensor, optional):
-            Prior mean (default: None). Shape ``[3,]``.
+            Mean of the underlying normal (default: None). Shape ``[3,]``.
         theta_covmat (Tensor, optional):
-            Prior covariance (default: None). Shape ``[3, 3]``.
+            Covariance of the underlying normal (default: None). Shape ``[3, 3]``.
     """
 
-    def __init__(
-        self,
-        theta_loc=None,
-        theta_covmat=None,
-    ) -> None:
+    def __init__(self, theta_loc=None, theta_covmat=None) -> None:
         """Initializes prior parameters."""
-        super().__init__()
-
         if theta_loc is None:
-            theta_loc = torch.zeros((3,))
+            theta_loc = torch.zeros(3)
         if theta_covmat is None:
             theta_covmat = 0.01 * torch.eye(3)
-
-        self.register_buffer("loc", theta_loc)
-        self.register_buffer("cov", theta_covmat)
-        self.dim = 3
-
-    @property
-    def theta_lognormal(self) -> torch.distributions.Distribution:
-        """Distribution for theta.
-
-        Note that torch does not natively support a multivariate LogNormal.
-        """
-        mvn = MultivariateNormal(self.loc, covariance_matrix=self.cov)
-        multivariate_lognormal = TransformedDistribution(mvn, [ExpTransform()])
-        return multivariate_lognormal
-
-    def sample(self, n_samples: int) -> Tensor:
-        """Draws samples of parameters from the prior.
-
-        Args:
-            n_samples (int):
-                How many samples to draw.
-
-        Returns:
-            Tensor:
-                Samples, shape ``[n_samples, 3]``
-        """
-        dist = self.theta_lognormal
-        samples = dist.sample((n_samples,))
-        return samples.reshape(-1, 3)
-
-    def log_prob(self, theta: Tensor) -> Tensor:
-        """Evaluates prior log probabilities.
-
-        Args:
-            theta (Tensor):
-                Points at which to evaluate the log-probability. Shape ``[..., 3]``.
-
-        Returns:
-            Tensor:
-                Log probs, shape ``[...,]``
-        """
-        dist = self.theta_lognormal
-        return dist.log_prob(theta)
+        super().__init__(theta_loc, theta_covmat)
 
 
 class CartPole(Task):
