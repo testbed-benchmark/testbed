@@ -80,9 +80,7 @@ def test_actionbed_recipe_wires_design_and_action_nets():
 def test_rlboed_method_recipe_requires_environment_outcome_bounds():
     cfg = _compose("method/rlboed")
     assert cfg.task.n_sources == 1
-    assert (
-        cfg.design_net._target_ == "testbed.design_nets.make_deepset_stochastic_policy"
-    )
+    assert cfg.design_net._target_ == "testbed.design_nets.make_stochastic_policy"
     assert cfg.design_net.dim_h == [128, 128]
     assert cfg.design_net.dim_emb == 64
     assert cfg.design_net.log_std_min == -20.0
@@ -162,3 +160,35 @@ def test_two_source_actionbed_preserves_grad_clip_default():
     assert cfg.n_outer_eval == 2_048
     assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
     assert "encoder_dim_h" not in cfg.action_net
+
+
+@pytest.mark.parametrize("architecture", ["deepset", "attention"])
+def test_rlboed_architecture_override(architecture):
+    from testbed.core.setup import instantiate_design_net
+    from testbed.design_nets import AttentiveEncoder, DeepSetEncoder
+
+    with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
+        cfg = compose(
+            config_name="experiments/location_finding_2src/rlboed",
+            overrides=[f"architecture={architecture}"],
+        )
+    task = instantiate(cfg.task)
+    policy = instantiate_design_net(cfg.design_net, task)
+    encoder_type = AttentiveEncoder if architecture == "attention" else DeepSetEncoder
+    assert isinstance(policy.actor.encoder, encoder_type)
+    assert cfg.design_net.architecture == architecture
+    assert cfg.design_net.attention.max_T == cfg.T
+
+
+def test_rlboed_rejects_unknown_architecture():
+    from hydra.errors import InstantiationException
+
+    from testbed.core.setup import instantiate_design_net
+
+    with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
+        cfg = compose(
+            config_name="experiments/location_finding/rlboed",
+            overrides=["architecture=unknown"],
+        )
+    with pytest.raises(InstantiationException, match="architecture must be"):
+        instantiate_design_net(cfg.design_net, instantiate(cfg.task))

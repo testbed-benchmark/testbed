@@ -12,10 +12,13 @@ from torch import nn
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.core.manager import Manager
 from testbed.design_nets import (
+    AttentiveEncoder,
+    CategoricalHead,
+    CategoricalPolicyActor,
     CategoricalPolicyNet,
-    DeepSetCategoricalActor,
     DeepSetEncoder,
-    DeepSetGaussianActor,
+    GaussianHead,
+    GaussianPolicyActor,
     GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
@@ -49,8 +52,8 @@ SoftQNetwork = RLBOEDQNetwork
 
 
 def test_actor_initializes_requested_standard_deviation():
-    actor = DeepSetGaussianActor(
-        event_shape_y=(1,), event_shape_design=(2,), init_std=0.4
+    actor = GaussianPolicyActor(
+        DeepSetEncoder((1,), (2,)), GaussianHead(64, 2, init_std=0.4)
     )
     y_history = torch.randn(3, 4, 1)
     design_history = torch.randn(3, 4, 2)
@@ -65,9 +68,7 @@ def test_actor_initializes_requested_standard_deviation():
 @pytest.mark.parametrize("init_std", [0.0, -0.1, 1.0, 1e-10])
 def test_actor_rejects_initial_std_outside_log_std_bounds(init_std):
     with pytest.raises(ValueError, match="init_std"):
-        DeepSetGaussianActor(
-            event_shape_y=(1,), event_shape_design=(2,), init_std=init_std
-        )
+        GaussianHead(64, 2, init_std=init_std)
 
 
 def test_soft_q_network_is_permutation_invariant():
@@ -180,7 +181,7 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
 
 def test_gaussian_policy_maps_physical_history_to_raw_proposal():
     design_space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
-    actor = DeepSetGaussianActor(event_shape_y=(1,), event_shape_design=(2,))
+    actor = GaussianPolicyActor(DeepSetEncoder((1,), (2,)), GaussianHead(64, 2))
     policy = GaussianPolicyNet(
         design_space,
         actor=actor,
@@ -204,9 +205,7 @@ def test_gaussian_policy_maps_physical_history_to_raw_proposal():
 
 def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
     design_space = FiniteDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
-    actor = DeepSetCategoricalActor(
-        event_shape_y=(1,), event_shape_design=(1,), n_designs=3
-    )
+    actor = CategoricalPolicyActor(DeepSetEncoder((1,), (1,)), CategoricalHead(64, 3))
     policy = CategoricalPolicyNet(
         design_space,
         actor=actor,
@@ -413,7 +412,8 @@ def _tiny_cfg(**sac_overrides):
             "design_space": {"low": -2.0, "high": 3.0},
             "reward": {"n_contrastive": 2, "outcome_low": -3.0, "outcome_high": 10.0},
             "design_net": {
-                "_target_": "testbed.design_nets.make_deepset_stochastic_policy",
+                "_target_": "testbed.design_nets.make_stochastic_policy",
+                "architecture": "deepset",
                 "dim_h": [128, 128],
                 "dim_emb": 64,
                 "log_std_min": -20.0,
@@ -686,3 +686,157 @@ def test_rlboed_fixed_alpha_disables_temperature_optimizer(alpha):
     checkpoint = trainer.build_checkpoint()
     assert checkpoint["alpha"].item() == pytest.approx(alpha)
     assert checkpoint["alpha_optimizer"] is None
+
+
+@pytest.mark.parametrize(
+    "architecture,encoder_type",
+    [
+        ("deepset", DeepSetEncoder),
+        ("attention", AttentiveEncoder),
+    ],
+)
+@pytest.mark.parametrize("design_kind", ["box", "finite", "unconstrained"])
+def test_shared_architecture_trains_and_reloads(
+    architecture, encoder_type, design_kind
+):
+    cfg = _tiny_cfg()
+    cfg.design_net._target_ = "testbed.design_nets.make_stochastic_policy"
+    cfg.architecture = architecture
+    cfg.design_net.architecture = "${architecture}"
+    cfg.design_net.dim_h = [16, 16]
+    cfg.design_net.dim_emb = 16
+    cfg.design_net.attention = {"num_heads": 2, "num_blocks": 1, "max_T": cfg.T}
+    if design_kind == "finite":
+        cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
+        cfg.reward.outcome_low = 0.0
+        cfg.reward.outcome_high = 300.0
+    elif design_kind == "unconstrained":
+        del cfg.task.design_space
+    if design_kind == "unconstrained":
+        with pytest.warns(RuntimeWarning, match="unconstrained"):
+            trainer = _build_trainer(cfg)
+    else:
+        trainer = _build_trainer(cfg)
+    nets = trainer.nets
+    actor_type = (
+        CategoricalPolicyActor if design_kind == "finite" else GaussianPolicyActor
+    )
+    assert type(nets.actor.actor) is actor_type
+    encoders = [
+        nets.actor.actor.encoder,
+        nets.qf1.encoder,
+        nets.qf2.encoder,
+        nets.qf1_target.encoder,
+        nets.qf2_target.encoder,
+    ]
+    assert all(isinstance(encoder, encoder_type) for encoder in encoders)
+    parameter_ids = [{id(p) for p in encoder.parameters()} for encoder in encoders]
+    for i, ids in enumerate(parameter_ids):
+        assert all(ids.isdisjoint(other) for other in parameter_ids[i + 1 :])
+    before = [
+        [p.detach().clone() for p in encoder.parameters()] for encoder in encoders[:3]
+    ]
+    trainer.train_step()
+    assert torch.isfinite(trainer._actor_loss)
+    assert torch.isfinite(trainer._qf_loss)
+    for old, encoder in zip(before, encoders):
+        assert any(not torch.equal(a, b) for a, b in zip(old, encoder.parameters()))
+        assert all(torch.isfinite(p).all() for p in encoder.parameters())
+    checkpoint = trainer.build_checkpoint()
+    saved_cfg = OmegaConf.create(checkpoint["config"])
+    restored = reconstruct_design_net(saved_cfg, trainer.task)
+    restored.load_state_dict(checkpoint["design_net"])
+    observation = History.empty(
+        batch_shape=(2,),
+        max_episode_length=cfg.T,
+        event_shape_design=trainer.task.event_shape_design,
+        event_shape_y=trainer.task.event_shape_y,
+        device=trainer.task.device,
+    )
+    torch.testing.assert_close(
+        restored(observation.outcomes, observation.designs, mask=observation.mask),
+        nets.actor(observation.outcomes, observation.designs, mask=observation.mask),
+    )
+
+
+@pytest.mark.parametrize("use_time_embedding", [False, True])
+def test_attentive_padding_matches_compact_histories_and_has_finite_gradients(
+    use_time_embedding,
+):
+    encoder = AttentiveEncoder(
+        (1,),
+        (2,),
+        dim_emb=16,
+        num_heads=2,
+        num_blocks=2,
+        max_T=3,
+        use_time_embedding=use_time_embedding,
+    )
+    y = torch.randn(3, 5, 1)
+    designs = torch.randn(3, 5, 2)
+    mask = torch.tensor(
+        [
+            [False, False, False, False, False],
+            [True, True, False, False, False],
+            [True, True, True, False, False],
+        ]
+    )
+    # The physical buffer may be longer than max_T when its valid histories fit.
+    y[~mask] = float("nan")
+    designs[~mask] = float("inf")
+    y.requires_grad_()
+    designs.requires_grad_()
+    actual = encoder(y, designs, mask=mask)
+    expected = torch.cat(
+        [encoder(y[i : i + 1, mask[i]], designs[i : i + 1, mask[i]]) for i in range(3)]
+    )
+    torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-5)
+    actual.square().sum().backward()
+    assert torch.isfinite(y.grad).all()
+    assert torch.isfinite(designs.grad).all()
+    assert torch.count_nonzero(y.grad[~mask]) == 0
+    assert torch.count_nonzero(designs.grad[~mask]) == 0
+    assert all(
+        p.grad is None or torch.isfinite(p.grad).all() for p in encoder.parameters()
+    )
+
+
+def test_attentive_history_limit_reports_clear_error():
+    encoder = AttentiveEncoder((1,), (2,), max_T=2)
+    with pytest.raises(ValueError, match="max_T=2"):
+        encoder(torch.zeros(1, 3, 1), torch.zeros(1, 3, 2))
+
+
+@pytest.mark.parametrize("encoder_type", [DeepSetEncoder, AttentiveEncoder])
+@pytest.mark.parametrize("discrete", [False, True])
+def test_critics_accept_independent_encoder_and_head(encoder_type, discrete):
+    encoder = encoder_type((1,), (2,), dim_emb=8)
+    head = nn.Linear(8 if discrete else 10, 3 if discrete else 1)
+    original_weights = head.weight.detach().clone()
+    kwargs = {
+        "dim_y": 1,
+        "dim_design": 2,
+        "design_low": -1.0,
+        "design_high": 1.0,
+        "outcome_low": 0.0,
+        "outcome_high": 1.0,
+        "encoder": encoder,
+        "head": head,
+    }
+    critic = (
+        RLBOEDDiscreteQNetwork(n_designs=3, **kwargs)
+        if discrete
+        else RLBOEDQNetwork(**kwargs)
+    )
+    assert critic.encoder is encoder
+    assert critic.emitter_net is head
+    torch.testing.assert_close(head.weight, original_weights)
+    observation = History.empty((2,), 3, (2,), (1,))
+    observation.write(0, torch.zeros(2, 2), torch.ones(2, 1))
+    output = critic(observation) if discrete else critic(observation, torch.zeros(2, 2))
+    assert output.shape == (2, 3 if discrete else 1)
+    output.square().sum().backward()
+    assert torch.isfinite(head.weight.grad).all()
+    assert any(
+        p.grad is not None and p.grad.abs().sum() > 0 for p in encoder.parameters()
+    )

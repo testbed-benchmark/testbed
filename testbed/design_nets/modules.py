@@ -94,13 +94,15 @@ class TransformerEncoderBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
-        """Applies the encoder block."""
+    def forward(self, x, key_padding_mask=None):
+        """Applies attention, ignoring keys marked in ``key_padding_mask``."""
         # x: [b, T, dim]
         # out: [b, T, dim]
 
         h = self.ln1(x)
-        attn_out, _ = self.attn(h, h, h, need_weights=False)
+        attn_out, _ = self.attn(
+            h, h, h, key_padding_mask=key_padding_mask, need_weights=False
+        )
         x = x + self.dropout(attn_out)
 
         h = self.ln2(x)

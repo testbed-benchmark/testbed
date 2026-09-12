@@ -4,8 +4,10 @@ import torch
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets import (
     CategoricalPolicyNet,
-    DeepSetGaussianActor,
+    DeepSetEncoder,
     DesignProposal,
+    GaussianHead,
+    GaussianPolicyActor,
     GaussianPolicyNet,
 )
 from testbed.envs import BEDEnv, ZeroReward
@@ -151,7 +153,7 @@ def test_tanh_gaussian_policy_transformed_designs_follow_box_scale_and_shift():
 
 
 def test_tanh_gaussian_policy_normalizes_physical_histories_for_actor():
-    actor = DeepSetGaussianActor(event_shape_y=(1,), event_shape_design=(2,))
+    actor = GaussianPolicyActor(DeepSetEncoder((1,), (2,)), GaussianHead(64, 2))
     encoder_inputs = {}
     actor.encoder.encoder_net.register_forward_pre_hook(
         lambda _module, args: encoder_inputs.setdefault(
@@ -276,7 +278,9 @@ def test_tanh_gaussian_policy_allows_gradient_flow():
 def test_tanh_gaussian_policy_uses_deepset_actor_by_default():
     policy = make_policy()
 
-    assert isinstance(policy.actor, DeepSetGaussianActor)
+    assert type(policy.actor) is GaussianPolicyActor
+    assert isinstance(policy.actor.encoder, DeepSetEncoder)
+    assert isinstance(policy.actor.head, GaussianHead)
     assert not hasattr(policy, "encoder_net")
     assert not hasattr(policy, "actor_net")
     assert not hasattr(policy, "mean_head")

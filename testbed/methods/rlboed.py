@@ -30,6 +30,7 @@ from testbed.design_nets import (
     RLBOEDQNetwork,
     StochasticDesignNet,
 )
+from testbed.design_nets.encoder import make_history_encoder
 from testbed.designers import PolicyDesigner
 from testbed.envs import BEDEnv
 from testbed.envs.history import History
@@ -383,45 +384,42 @@ def make_networks(
     if not isinstance(actor, StochasticDesignNet):
         raise TypeError("cfg.design_net must construct a StochasticDesignNet.")
 
+    critic_type = RLBOEDQNetwork
+    critic_kwargs = {
+        "dim_y": dim_y,
+        "dim_design": dim_design,
+        "dim_h": cfg.design_net.dim_h,
+        "outcome_low": cfg.reward.outcome_low,
+        "outcome_high": cfg.reward.outcome_high,
+    }
     if isinstance(design_space, BoxDesignSpace):
-        critic_kwargs = {
-            "dim_y": dim_y,
-            "dim_design": dim_design,
-            "design_low": design_space.low.to(device),
-            "design_high": design_space.high.to(device),
-            "outcome_low": cfg.reward.outcome_low,
-            "outcome_high": cfg.reward.outcome_high,
-        }
-        qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
+        design_low, design_high = design_space.low, design_space.high
     elif isinstance(design_space, DefaultDesignSpace):
         if not isinstance(actor, GaussianPolicyNet):
             raise TypeError(
                 "Unconstrained RLBOED design spaces require a GaussianPolicyNet."
             )
-        critic_kwargs = {
-            "dim_y": dim_y,
-            "dim_design": dim_design,
-            "design_low": actor.design_low.detach().clone(),
-            "design_high": actor.design_high.detach().clone(),
-            "outcome_low": cfg.reward.outcome_low,
-            "outcome_high": cfg.reward.outcome_high,
-        }
-        qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
+        design_low, design_high = actor.design_low, actor.design_high
     else:
         values = design_space.values.reshape(design_space.n_designs, dim_design)
-        critic_kwargs = {
-            "dim_y": dim_y,
-            "dim_design": dim_design,
-            "n_designs": design_space.n_designs,
-            "design_low": values.amin(dim=0).to(device),
-            "design_high": values.amax(dim=0).to(device),
-            "outcome_low": cfg.reward.outcome_low,
-            "outcome_high": cfg.reward.outcome_high,
-        }
-        qf1 = RLBOEDDiscreteQNetwork(**critic_kwargs).to(device)
-        qf2 = RLBOEDDiscreteQNetwork(**critic_kwargs).to(device)
+        design_low, design_high = values.amin(dim=0), values.amax(dim=0)
+        critic_type = RLBOEDDiscreteQNetwork
+        critic_kwargs["n_designs"] = design_space.n_designs
+    critic_kwargs.update(design_low=design_low, design_high=design_high)
+
+    def make_critic():
+        # Each network owns fresh parameters, constructed from the same encoder settings.
+        encoder = make_history_encoder(
+            event_shape_y=(dim_y,),
+            event_shape_design=(dim_design,),
+            architecture=cfg.design_net.architecture,
+            dim_h=cfg.design_net.dim_h,
+            dim_emb=cfg.design_net.dim_emb,
+            attention=cfg.design_net.get("attention"),
+        )
+        return critic_type(encoder=encoder, **critic_kwargs).to(device)
+
+    qf1, qf2 = make_critic(), make_critic()
     qf1_target = copy.deepcopy(qf1)
     qf2_target = copy.deepcopy(qf2)
 
