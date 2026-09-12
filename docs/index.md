@@ -39,6 +39,7 @@ TestBED was designed to allow you to implement your own task easily. For some po
 | `CartPole` | Stochastic cart-pole with unknown masses/length (note: non-memoryless likelihood) | [API](autoapi/testbed/tasks/cart_pole/index) |
 | `CES` | Constant elasticity of substitution | [API](autoapi/testbed/tasks/constant_elasticity_of_substitution/index) |
 | `DoubleLink` | Stochastic double-link with unknown masses/lengths (note: non-memoryless likelihood) | [API](autoapi/testbed/tasks/double_link/index) |
+| `Gravimetry` | Buried void detection from surface gravity readings | [API](autoapi/testbed/tasks/gravimetry/index) |
 | `HyperbolicTemporalDiscounting` | Hyperbolic temporal discounting (note: discrete outcomes) | [API](autoapi/testbed/tasks/hyperbolic_temporal_discounting/index) |
 | `LinearRegression` | Linear regression | [API](autoapi/testbed/tasks/linear_regression/index) |
 | `LocationFinding` | Source location finding | [API](autoapi/testbed/tasks/location_finding/index) |

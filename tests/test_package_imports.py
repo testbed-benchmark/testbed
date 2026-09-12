@@ -30,6 +30,7 @@ TASKS = [
     "CES",
     "CartPole",
     "DoubleLink",
+    "Gravimetry",
     "HyperbolicTemporalDiscounting",
     "LinearRegression",
     "LocationFinding",
