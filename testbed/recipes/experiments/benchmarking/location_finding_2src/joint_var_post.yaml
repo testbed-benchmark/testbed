@@ -57,4 +57,4 @@ posterior_net:
 
 wandb:
   project: benchmarking_location_finding_2src  # the sweep pins the same value
-  group: joint_var_post
+  group: joint_var_post_attention

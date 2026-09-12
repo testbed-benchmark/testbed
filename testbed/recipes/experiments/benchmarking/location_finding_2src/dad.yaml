@@ -23,4 +23,4 @@ eval_every: 0  #  the final_eval block handles it
 
 wandb:
   project: benchmarking_location_finding_2src  # the sweep pins the same value
-  group: dad
+  group: dad_attention
