@@ -1,0 +1,29 @@
+# Seed sweep for experiments/benchmarking/location_finding_2src/dad.
+#
+# Part of the benchmarking suite: every recipe under
+# experiments/benchmarking shares one configuration (the default
+# AttentivePolicyNet, 200k gradient steps, a pathwise gradient where the
+# outcomes admit one), so the task is the only thing that varies.
+#
+# wandb sweep sweeps/benchmarking/location_finding_2src_dad.yaml
+
+name: benchmarking-location_finding_2src-dad-seeds
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: benchmarking_location_finding_2src
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+  # Pinned here as well as in the recipe: the sweep's own project field only
+  # controls where the agent registers the sweep, not where the run logs.
+  wandb.project:
+    value: benchmarking_location_finding_2src
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/benchmarking/location_finding_2src/dad
+  - ${args_no_hyphens}

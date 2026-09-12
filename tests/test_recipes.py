@@ -31,7 +31,16 @@ ENTRY_POINT_RECIPES = [
     "experiments/constant_elasticity_of_substitution/dad",
     "experiments/constant_elasticity_of_substitution/joint_var_post",
     "experiments/constant_elasticity_of_substitution/actionbed",
+    "experiments/benchmarking/location_finding_2src/dad",
+    "experiments/benchmarking/location_finding_2src/joint_var_post",
+    "experiments/benchmarking/temporal_discounting/dad",
+    "experiments/benchmarking/temporal_discounting/joint_var_post",
+    "experiments/benchmarking/constant_elasticity_of_substitution/dad",
+    "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post",
 ]
+
+
+BENCHMARK_RECIPES = [r for r in ENTRY_POINT_RECIPES if "/benchmarking/" in r]
 
 
 def _compose(recipe):
@@ -55,6 +64,7 @@ def test_recipe_composes(recipe):
         "testbed.tasks.LocationFinding",
         "testbed.tasks.PreyPopulation",
         "testbed.tasks.CES",
+        "testbed.tasks.HyperbolicTemporalDiscounting",
     }
     assert cfg.wandb.enabled is False
 
@@ -227,12 +237,29 @@ def test_var_post_recipes_actually_instantiate_their_posterior_net():
         "experiments/temporal_discounting/var_post",
         "experiments/temporal_discounting/joint_var_post",
         "experiments/location_finding_2src/joint_var_post",
+        *[r for r in BENCHMARK_RECIPES if r.endswith("/joint_var_post")],
     ]
     for recipe in recipes:
         cfg = _compose(recipe)
         task = instantiate(cfg.task)
         net = build_posterior_net(cfg, task)
         assert sum(p.numel() for p in net.parameters()) > 0, recipe
+
+
+@pytest.mark.parametrize("recipe", BENCHMARK_RECIPES)
+def test_benchmark_recipes_share_one_configuration(recipe):
+    """The benchmarking suite varies the task and the method, nothing else.
+
+    Its whole point is that a table built from it compares methods rather than
+    architectures or budgets, which holds only while these agree.
+    """
+    cfg = _compose(recipe)
+
+    assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
+    assert cfg.n_train_iter == 200_000
+    assert cfg.n_outer == 2_048
+    task = recipe.split("/")[-2]
+    assert cfg.wandb.project == f"benchmarking_{task}"
 
 
 def test_ces_posterior_transform_matches_the_task_theta_width():
