@@ -1,5 +1,6 @@
 """Policy network exports."""
 
+from .aline import AlineModel, AlineOutput
 from .base import DesignNet, DesignProposal
 from .deterministic import (
     AttentivePolicyNet,
