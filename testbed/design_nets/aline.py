@@ -14,8 +14,26 @@ from torch.distributions import Categorical, MixtureSameFamily, Normal
 
 
 class _AlineEncoderLayer(nn.TransformerEncoderLayer):
-    # Avoid the eval-only native fast path: fully masked zero-context target
-    # rows need SDPA's zero attention output, not softmax(-inf) -> NaN.
+    """A transformer encoder layer that also works before any observations exist.
+
+    ALINE's target tokens represent the parameters we want to estimate. They
+    may attend only to observations, so before the first observation their
+    attention mask blocks every position (the entire row is ``-inf``).
+    PyTorch's default ``TransformerEncoderLayer.forward()`` can select an
+    optimized path during evaluation with gradients disabled that produces
+    NaNs for these fully masked rows.
+
+    We override ``forward()`` to run the usual attention, residual additions,
+    feedforward network, and normalization steps explicitly, bypassing that
+    optimized encoder path. With ALINE's floating-point mask, the attention
+    block then uses scaled dot-product attention (SDPA), which returns zero
+    for fully masked rows. The residual connection preserves the target
+    token's own representation even when there are no observations to read.
+
+    This implementation assumes ``norm_first=False`` (the default): each
+    normalization follows its residual addition.
+    """
+
     def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False):
         x = self.norm1(
             src
