@@ -79,10 +79,56 @@ design_net:
     _target_: torch.nn.Softplus
     _partial_: true
 
-# posterior network: the shared attentive Gaussian-mixture readout over
-# theta = (k, alpha). No canonicalisation: the two coordinates are not
-# exchangeable.
+# posterior network: attentive Gaussian-mixture readout over (log k, alpha).
+#
+# k is transformed: log k ~ Normal(-4.25, 1.5) exactly, so the mixture becomes
+# Gaussian in the coordinate the prior already is
+#
+# alpha is not. alpha ~ HalfNormal(2) has its mode at zero, so log alpha has a
+# tail decaying like e^z that no Gaussian covers; a draw near zero lands ~13
+# spreads out and its gradient (~1/scale^2) overflows. Left alone, alpha leaks 
+# 0.3% of its mass below zero, costing 0.006 nats of tightness on a ~3.4-nat gain, 
+# and the bound stays valid.
+#
+# No canonicalisation: the two coordinates are not exchangeable (and the
+# constrained net rejects the combination anyway).
+posterior_net:
+  _target_: testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet
+  n_components: 10
+  encoder_dim_h: 256
+  dim_emb: 128
+  num_heads: 4
+  num_blocks: 3
+  trunk_dim_h: null  # use dim_emb
+  trunk_activation:
+    _target_: torch.nn.GELU
+    _partial_: true
+  log_scale_min: -7.0
+  log_scale_max: 3.0
+  init_scale: 1.0
+  theta_loc: null
+  theta_scale: null
+  canonicalize_theta: false
+  # (z_k, alpha) -> (k, alpha): exp on k, identity on alpha. The alpha block
+  # contributes nothing to the Jacobian, so the pushforward integrates to 1 over
+  # the prior's support; test_htd_posterior_pushforward_normalises checks it.
+  transform:
+    _target_: testbed.design_nets.BlockTransform
+    raw_sizes: [1, 1]
+    theta_sizes: [1, 1]
+    transforms:
+      - _target_: torch.distributions.transforms.ExpTransform
+      - _target_: torch.distributions.transforms.AffineTransform
+        loc: 0.0
+        scale: 1.0
 
 wandb:
   project: temporal_discounting  # one project per task; methods separate by group
-  group: joint_var_post
+  # One group per posterior family, so a table grouped by method never averages
+  # across them: theta modelled in R^2 directly (valid, loose), then exp on both
+  # coordinates (sweep 3tu0ab2h, NaN'd), now exp on k alone.
+  #
+  # The group belongs here rather than in the sweep's parameters:
+  # generate_seed_sweeps.py reads it from the recipe to decide which seeds are
+  # already done, and rewrites the sweep YAML from scratch.
+  group: joint_var_post_constrained_k

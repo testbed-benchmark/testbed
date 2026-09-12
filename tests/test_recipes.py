@@ -29,6 +29,7 @@ ENTRY_POINT_RECIPES = [
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
     "experiments/constant_elasticity_of_substitution/dad",
+    "experiments/constant_elasticity_of_substitution/joint_var_post",
     "experiments/constant_elasticity_of_substitution/actionbed",
 ]
 
@@ -162,3 +163,89 @@ def test_two_source_actionbed_preserves_grad_clip_default():
     assert cfg.n_outer_eval == 2_048
     assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
     assert "encoder_dim_h" not in cfg.action_net
+
+
+def test_ces_joint_var_post_recipe_uses_a_constrained_posterior():
+    cfg = _compose("experiments/constant_elasticity_of_substitution/joint_var_post")
+
+    assert cfg.task._target_ == "testbed.tasks.CES"
+    assert (
+        cfg.posterior_net._target_
+        == "testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet"
+    )
+    # 4 unconstrained coordinates -> (rho, alpha_1, alpha_2, alpha_3, u).
+    assert cfg.posterior_net.transform.raw_sizes == [1, 2, 1]
+    assert cfg.posterior_net.transform.theta_sizes == [1, 3, 1]
+    assert cfg.posterior_net.canonicalize_theta is False
+
+
+def test_htd_joint_var_post_recipe_uses_a_constrained_posterior():
+    cfg = _compose("experiments/temporal_discounting/joint_var_post")
+
+    assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
+    assert (
+        cfg.posterior_net._target_
+        == "testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet"
+    )
+    # Two width-1 blocks: exp on k, identity on alpha. alpha must NOT go
+    # through a log; that is what NaN'd sweep 3tu0ab2h.
+    assert cfg.posterior_net.transform.raw_sizes == [1, 1]
+    assert cfg.posterior_net.transform.theta_sizes == [1, 1]
+    targets = [t._target_ for t in cfg.posterior_net.transform.transforms]
+    assert targets == [
+        "torch.distributions.transforms.ExpTransform",
+        "torch.distributions.transforms.AffineTransform",
+    ]
+    assert cfg.posterior_net.canonicalize_theta is False
+
+
+def test_htd_posterior_transform_matches_the_task_theta_width():
+    from testbed.methods.var_post import build_posterior_net
+
+    cfg = _compose("experiments/temporal_discounting/joint_var_post")
+    task = instantiate(cfg.task)
+    net = build_posterior_net(cfg, task)
+
+    assert net.transform.dim_theta == task.event_shape_theta.numel() == 2
+    assert net.transform.dim_raw == net.dim_latent == 2
+    assert net.loc_head.out_features == cfg.posterior_net.n_components * 2
+
+
+def test_var_post_recipes_actually_instantiate_their_posterior_net():
+    """Builds the nets, rather than only asserting on `_target_` strings.
+
+    Every other test here checks the composed config without instantiating, so a
+    posterior_net block with a misspelled kwarg composes cleanly and passes. This
+    is the only thing that catches it.
+    """
+    from testbed.methods.var_post import build_posterior_net
+
+    recipes = [
+        "method/var_post",
+        "method/joint_var_post",
+        "experiments/constant_elasticity_of_substitution/joint_var_post",
+        "experiments/temporal_discounting/var_post",
+        "experiments/temporal_discounting/joint_var_post",
+        "experiments/location_finding_2src/joint_var_post",
+    ]
+    for recipe in recipes:
+        cfg = _compose(recipe)
+        task = instantiate(cfg.task)
+        net = build_posterior_net(cfg, task)
+        assert sum(p.numel() for p in net.parameters()) > 0, recipe
+
+
+def test_ces_posterior_transform_matches_the_task_theta_width():
+    """The recipe's transform must emit exactly CES's 5 theta coordinates.
+
+    Instantiating the net is what enforces it; the constructor raises otherwise.
+    """
+    from testbed.methods.var_post import build_posterior_net
+
+    cfg = _compose("experiments/constant_elasticity_of_substitution/joint_var_post")
+    task = instantiate(cfg.task)
+    net = build_posterior_net(cfg, task)
+
+    assert net.transform.dim_theta == task.event_shape_theta.numel() == 5
+    assert net.transform.dim_raw == net.dim_latent == 4
+    assert net.loc_head.out_features == cfg.posterior_net.n_components * 4
