@@ -151,10 +151,12 @@ def test_store_posterior_history_tracks_one_per_step():
     rollout = designer.rollout(task.sample_prior(1))
 
     history = rollout.extra["posterior_history"]
-    assert len(history) == T
-    # The last entry in the history is the same posterior surfaced as
+    # Keyed by how many steps each posterior conditions on, so a consumer
+    # scoring a subset of steps can ask for the one it needs by step.
+    assert sorted(history) == list(range(1, T + 1))
+    # The posterior for the whole history is the one surfaced as
     # extra["posterior"] (the final task.current_prior).
-    assert history[-1] is rollout.extra["posterior"]
+    assert history[T] is rollout.extra["posterior"]
 
 
 def test_store_posterior_history_requires_update_posterior():

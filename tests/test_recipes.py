@@ -23,6 +23,14 @@ ENTRY_POINT_RECIPES = [
     "method/rlboed",
     "method/var_post",
     "method/joint_var_post",
+    "method/stepdad",
+    "method/greedy_pce",
+    "experiments/location_finding/stepdad",
+    "experiments/location_finding/greedy_pce",
+    "experiments/location_finding_2src/stepdad",
+    "experiments/location_finding_2src/greedy_pce",
+    "experiments/temporal_discounting/stepdad",
+    "experiments/temporal_discounting/greedy_pce",
     "experiments/location_finding/rlboed",
     "experiments/location_finding_2src/actionbed",
     "experiments/location_finding_2src/dad",
@@ -53,6 +61,7 @@ def test_recipe_composes(recipe):
     # Shared task/wandb groups land under their expected keys.
     assert cfg.task._target_ in {
         "testbed.tasks.LocationFinding",
+        "testbed.tasks.HyperbolicTemporalDiscounting",
         "testbed.tasks.PreyPopulation",
         "testbed.tasks.CES",
     }

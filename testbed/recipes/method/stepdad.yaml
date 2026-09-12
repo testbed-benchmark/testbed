@@ -1,0 +1,85 @@
+# @package _global_
+
+defaults:
+  - /system: default
+  - /task: location_finding
+  - /net@design_net: attentive_policy
+  - /wandb: default
+  - /final_eval: default
+  - /hydra_run: default
+  - _self_
+
+# Step-DAD (Hedman et al., ICML 2025): pretrain a DAD policy, then at deployment
+# infer the posterior from the real history and fine-tune the policy on the
+# remaining horizon under it.
+
+seed: 0
+use_raw_history: false
+
+# Pretraining. Same keys as method/dad.
+objective:
+  name: spce  # spce | snmc | reinforce
+  n_inner: 1_024
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false  # overwritten at runtime from the designer
+n_train_iter: 25_000
+n_outer: 2_048
+lr: 1e-4
+betas: [0.9, 0.999]
+grad_clip: 1.0
+lr_anneal_every: null
+lr_gamma: null
+eval_every: 0
+n_outer_eval: 2_048
+n_inner_eval: 100_000
+
+# Deployment
+# Step counts to refine after, 1-indexed, so [5] refines once five steps are in.
+# A list: the paper's schedule is an explicit set of points, and a single one is
+# the common case. The default is tau = T/2, half the default task's T of 10;
+# an experiment recipe overriding T must set this to match.
+refine_at: [5]
+n_posterior_samples: 20_000
+# Independent experiments, each refining its own copy of the policy. Sets both
+# the standard error and the wall clock, since each one costs a fine-tune.
+n_thetas: 16
+
+refine:
+  n_steps_opt: 2_500
+  lr: 1e-4
+  batch_size: 1_024
+  grad_clip: 1.0
+  log_every: 500
+
+# Keep every posterior the refinements infer on the rollout, rather than only
+# the ESS summary of it. Anything reading the particles themselves needs this,
+# plot_posteriors included. 
+store_posterior_history: true
+
+# One figure per trajectory under figures/, each panel a refinement's posterior
+# over the source locations against the true ones. Location finding only; other
+# tasks log that they were skipped. Cheap in itself, since it subsamples the
+# particle set, but it reads what store_posterior_history kept.
+plot_posteriors: true
+
+# Scoring is done by the method itself, so the post-hoc pass sweep_run.py runs
+# is switched off: it would score the pretrained checkpoint, which is the
+# dad_unrefined row again, and overwrite this run's eval.json with it. The sizes
+# in the final_eval block are still what everything below is measured at.
+final_eval:
+  enabled: false
+
+# The pretrained policy's own full-horizon EIG is always reported: it
+# is the baseline the rest is read against. The two totals for the refined
+# policy answer different questions, so both are on by default.
+#
+# The chain-rule sum of per-segment conditional EIGs, as the paper reports it.
+# Each segment is scored inside the refinement that produced it, and against the
+# un-refined no_finetune arm, which is what isolates the effect of refining.
+per_segment_eig: true
+# One full-T sPCE over the refined trajectories stacked together: an alternative
+# total, directly comparable to the dad_unrefined row. Note its precision is set
+# by n_thetas rather than final_eval.n_outer, since each trajectory contributes a
+# single outer sample, so it is far noisier than the other rows at these sizes.
+end_to_end_eig: true

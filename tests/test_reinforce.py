@@ -21,7 +21,7 @@ class _ValueFnReinforce(Reinforce):
         super().__init__(task, stochastic_design_policy, baseline)
         self._value_fn = value_fn
 
-    def calculate_value(self, rollout):
+    def calculate_value(self, rollout, y_context=None, design_context=None):
         return self._value_fn(rollout)
 
 

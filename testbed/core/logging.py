@@ -15,6 +15,9 @@ class BaseLogger:
     def log_dict(self, d: dict, step: int):
         """Logs multiple metrics."""
 
+    def log_images(self, images: dict):
+        """Logs ``{key: image path}``. A no-op for loggers with nowhere to put them."""
+
     def close(self):
         """Closes logger resources."""
 
@@ -91,6 +94,9 @@ class JSONLLogger:
         self.close_retries = close_retries
         self.close_retry_delay = close_retry_delay
         self.pending_flush = False
+
+    def log_images(self, images: dict):
+        """No-op: the figures should already be on disk beside this log."""
 
     def log(self, metrics: dict):
         """Appends one metrics record."""
@@ -180,6 +186,12 @@ class WandbLogger(BaseLogger):
         step = payload.pop("step", None)
         self.run.log(payload, step=step)
 
+    def log_images(self, images: dict):
+        """Uploads figures by path, as a summary panel rather than a time series."""
+        import wandb
+
+        self.run.log({key: wandb.Image(str(path)) for key, path in images.items()})
+
     def close(self):
         """Finishes the wandb run."""
         self.run.finish()
@@ -197,6 +209,11 @@ class MultiLogger(BaseLogger):
         for logger in self.loggers:
             logger.log(dict(metrics))
 
+    def log_images(self, images: dict):
+        """Forwards the figures to each child logger that can take them."""
+        for logger in self.loggers:
+            logger.log_images(dict(images))
+
     def close(self):
         """Closes every child logger."""
         for logger in self.loggers:
@@ -212,6 +229,17 @@ def _to_python(metrics: dict) -> dict:
         else:
             out[k] = v
     return out
+
+
+def flatten_metrics(results, prefix="eval"):
+    """Flattens the nested results into the scalar keys a metric logger takes."""
+    flat = {}
+    for key, value in results.items():
+        if isinstance(value, dict):
+            flat.update(flatten_metrics(value, prefix=f"{prefix}/{key}"))
+        elif isinstance(value, (int, float)):
+            flat[f"{prefix}/{key}"] = value
+    return flat
 
 
 def config_to_dict(cfg):

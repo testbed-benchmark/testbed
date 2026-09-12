@@ -1,0 +1,55 @@
+# @package _global_
+
+defaults:
+  - /system: default
+  - /task: location_finding
+  - /wandb: default
+  - /final_eval: default
+  - /hydra_run: default
+  - _self_
+
+# Greedy (myopic) PCE: infer the posterior after every step and maximize the
+# one-step EIG under it. No policy, so nothing to train; this method evaluates.
+
+seed: 0
+
+pce:
+  n_outer: 512      # outer (theta, y) draws per gain estimate
+  n_inner: 511      # contrastive draws per outer draw
+  lr: 0.05          # Adam lr for the per-step design ascent
+  n_step_opt: 100   # Adam steps per design
+  init_design_dist: null  # null -> N(0, I); or "current_prior"
+
+n_posterior_samples: 20_000
+
+# The chain-rule sum of per-step conditional EIGs: each design is scored as it
+# is chosen, under the posterior it was chosen against, at the final_eval sizes
+# below. The steps tile the horizon one apiece, so unlike stepdad's per-segment
+# total there is no separate opening term; the first step's eval is taken under
+# the original prior.
+#
+per_step_eig: true
+
+# Keep every step's posterior on the rollout rather than only the last. Off by
+# default because greedy infers one after every step: this is T particle sets
+# per trajectory, all held until the run ends. The final posterior is on the
+# rollout regardless, so the plot has something to draw either way.
+store_posterior_history: false
+
+# One figure per trajectory under figures/. Location finding only; other tasks
+# log that they were skipped. With store_posterior_history off this is a single
+# panel, the posterior given the whole horizon.
+plot_posteriors: true
+
+# This method scores itself and writes its own eval.json, so the post-hoc pass
+# sweep_run.py runs is switched off. It would look for the trained checkpoint
+# that a method with no policy never saves. The sizes below it still apply.
+final_eval:
+  enabled: false
+
+# SequentialDesigner is batch-1 only (each step runs its own Adam loop), so the
+# cost is n_thetas * T * n_step_opt objective evaluations, and this is nowhere
+# near the 2048 that eval_spce_snmc uses for an amortized policy. It sets the
+# standard error, so raise it as far as the compute allows. 16 matches
+# method/stepdad, which is what this baseline is read against.
+n_thetas: 16

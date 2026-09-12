@@ -7,7 +7,7 @@ from .design_spaces import (
     DesignSpace,
     FiniteDesignSpace,
 )
-from .hooks import ActionHook, PosteriorUpdateHook, RolloutHook
+from .hooks import ActionHook, PosteriorUpdateHook, RefinementHook, RolloutHook
 from .rollout import Rollout, RolloutState
 
 __all__ = [
@@ -17,6 +17,7 @@ __all__ = [
     "DesignSpace",
     "FiniteDesignSpace",
     "PosteriorUpdateHook",
+    "RefinementHook",
     "RandomScaleGaussianDesignDistribution",
     "Rollout",
     "RolloutHook",

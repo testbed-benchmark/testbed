@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - /method: greedy_pce
+  - override /task: location_finding_2src
+  - _self_
+
+
+seed: 0
+
+
+# Do not raise this past 2^24: EmpiricalDistribution.sample goes through
+# torch.multinomial, which refuses more categories than that.
+n_posterior_samples: 10_000_000
+
+wandb:
+  project: location_finding_2src  # one project per task; methods separate by group
+  group: greedy_pce

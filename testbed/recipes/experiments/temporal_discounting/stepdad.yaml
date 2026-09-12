@@ -1,0 +1,44 @@
+# @package _global_
+
+defaults:
+  - /method: stepdad
+  - override /task: temporal_discounting
+  - override /net@design_net: gated_deepset_policy
+  - _self_
+
+# Step-DAD on hyperbolic temporal discounting. Outcomes are binary and not
+# reparameterized, so both the pretraining and the refinement go through
+# REINFORCE (DAD paper Eq. 16) rather than a pathwise gradient.
+#
+# Condition on the unconstrained (x_d, x_r) the policy emits, as the DAD paper's
+# HTD encoder does, rather than on (D_1, R_0).
+#
+# Pretraining reproduces experiments/temporal_discounting/dad exactly, so the
+# only difference between the two rows is the refinement.
+
+seed: 0
+use_raw_history: true
+
+objective:
+  name: reinforce
+  n_inner: 1_023  # L, so the sPCE bound caps at log(1024)
+
+n_train_iter: 100_000
+n_outer: 1_024
+lr: 1e-4
+grad_clip: null
+lr_anneal_every: 1_000
+lr_gamma: 0.96
+n_outer_eval: 1_024
+
+# The runner defaults to 6 and the README uses 10; 10 is the reported setting.
+refine_at: [10]
+n_thetas: 16
+refine:
+  n_steps_opt: 1_000
+  lr: 5e-5
+  batch_size: 1_024
+
+wandb:
+  project: temporal_discounting
+  group: stepdad
