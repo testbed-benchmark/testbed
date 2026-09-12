@@ -1,0 +1,53 @@
+# @package _global_
+
+defaults:
+  - /method: dad
+  - override /task: constant_elasticity_of_substitution
+  - _self_
+
+# Benchmark run of DAD on the CES model.
+#
+# Same shared configuration as the other benchmarking recipes: the default
+# AttentivePolicyNet and 200k gradient steps, rather than the DeepSets net of
+# experiments/constant_elasticity_of_substitution/dad.
+#
+# The outcome is a censored sigmoid of a Gaussian, so it is formally
+# reparameterizable, but the pathwise gradient is not usable: much of the mass
+# sits on the two censoring atoms, where _outcome_logp switches branches and the
+# sPCE value jumps. Reparameterizing through that discontinuity drops the
+# d(censoring probability)/d(design) term, which is the signal telling the
+# policy to leave the saturated region. Hence REINFORCE.
+
+seed: 0
+task:
+  reparameterize_outcomes: false
+# designer
+# Condition on the unconstrained designs the policy emits rather than on the
+# baskets in [0, 100]^6. The tanh squash makes the two bijective, and the raw
+# values are O(1), so the encoder needs no input normalization.
+use_raw_history: true
+# objective
+objective:
+  name: reinforce
+  n_inner: 1_023  # contrastive samples for the sPCE reward
+  reparameterize_policy: false
+  baseline: leave_one_out  # the score term carries the gradient; keep its variance down
+  requires_policy_log_probs: false
+# training
+n_train_iter: 200_000
+n_outer: 2_048
+
+# optimizer: as in experiments/constant_elasticity_of_substitution/dad, with the
+# decay stretched over the longer run (0.9886 ** 200 ~= 0.1, i.e. 1e-4 -> 1e-5).
+lr: 1e-4
+betas: [0.9, 0.999]
+grad_clip: 1.0
+lr_anneal_every: 1_000
+lr_gamma: 0.9886
+
+# eval
+eval_every: 0  # eval is expensive here; the final_eval block handles it
+
+wandb:
+  project: benchmarking_constant_elasticity_of_substitution  # the sweep pins the same value
+  group: dad_loo_attention
