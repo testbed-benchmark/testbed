@@ -176,6 +176,18 @@ class BarberAgakov(RolloutObjective):
             theta, rollout.y_history, rollout.design_history
         )
         prior = self.task.current_prior if self.use_current_prior else self.task.prior
+        # This subtraction is only valid if log_q and prior.log_prob(theta) are
+        # densities with respect to the same underlying measure. Otherwise it is not
+        # log(q(theta) / p(theta)), and the resulting objective is not a valid bound.
+        #
+        # This matters for constrained theta. For example, in CES theta is stored in
+        # R^5 but has only 4 free degrees of freedom because alpha lies on a simplex.
+        # An ordinary Gaussian mixture over R^5 therefore defines density per unit 5D
+        # volume, while the prior defines density on the 4D constrained space.
+        #
+        # ConstrainedGaussianMixtureVariationalPosteriorNet avoids this mismatch by
+        # defining q in unconstrained R^4 coordinates and pushing it forward onto the
+        # same constrained space as the prior. Thus no correction is needed here.
         return log_q - prior.log_prob(theta)
 
     def estimate_gain(self, rollout: Rollout) -> Tensor:

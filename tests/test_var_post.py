@@ -4,7 +4,14 @@ from functools import partial
 
 import pytest
 import torch
-from torch.distributions import Independent, MultivariateNormal, Normal
+from torch.distributions import HalfNormal, Independent, MultivariateNormal, Normal
+from torch.distributions.transforms import (
+    AffineTransform,
+    ComposeTransform,
+    ExpTransform,
+    SigmoidTransform,
+    StickBreakingTransform,
+)
 
 from testbed.core import RandomScaleGaussianDesignDistribution
 from testbed.core.design_spaces import BoxDesignSpace
@@ -12,6 +19,8 @@ from testbed.core.hooks import RolloutHook
 from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets import (
     AttentiveVariationalPosteriorNet,
+    BlockTransform,
+    ConstrainedAttentiveVariationalPosteriorNet,
     DeepSetPolicyNet,
     DeepSetVariationalPosteriorNet,
     GaussianPolicyNet,
@@ -34,6 +43,7 @@ from testbed.designers import (
     SequentialDesigner,
 )
 from testbed.tasks import (
+    CES,
     HyperbolicTemporalDiscounting,
     LinearRegression,
     LocationFinding,
@@ -916,3 +926,418 @@ def test_myopic_objective_drives_a_sequential_designer():
 
     assert rollout.design_history.shape == (1, 2, *task.event_shape_design)
     assert torch.isfinite(rollout.design_history).all()
+
+
+# ============================================================================
+# Constrained (reparametrised) posteriors
+# ============================================================================
+
+
+def _ces_transform():
+    """The CES map: 4 unconstrained coordinates -> (rho, alpha_1..3, u).
+
+    Mirrors the transform in experiments/constant_elasticity_of_substitution/
+    joint_var_post.yaml, including the 0.01 rho floor that matches
+    CESPrior.sample's squash.
+    """
+    return BlockTransform(
+        transforms=[
+            ComposeTransform(
+                [SigmoidTransform(), AffineTransform(loc=0.01, scale=0.99)]
+            ),
+            StickBreakingTransform(),
+            ExpTransform(),
+        ],
+        raw_sizes=[1, 2, 1],
+        theta_sizes=[1, 3, 1],
+    )
+
+
+def _make_ces_posterior(task, n_components=3):
+    return ConstrainedAttentiveVariationalPosteriorNet(
+        event_shape_y=task.event_shape_y,
+        event_shape_design=task.event_shape_design,
+        event_shape_theta=task.event_shape_theta,
+        transform=_ces_transform(),
+        n_components=n_components,
+        encoder_dim_h=[16],
+        dim_emb=16,
+        num_heads=2,
+        num_blocks=1,
+        trunk_dim_h=16,
+    )
+
+
+def _ces_history(task, b=16, T=3):
+    return torch.rand(b, T, 1), torch.rand(b, T, 6) * 100
+
+
+def test_block_transform_round_trips_on_real_prior_draws():
+    torch.manual_seed(0)
+    transform = _ces_transform()
+
+    raw = torch.randn(64, 4)
+    assert torch.allclose(transform.inv(transform(raw)), raw, atol=1e-5)
+
+    theta = CES().sample_prior(2_000)
+    assert torch.allclose(transform(transform.inv(theta)), theta, atol=1e-5)
+    assert torch.isfinite(transform.inv(theta)).all()
+
+
+def test_block_transform_output_satisfies_the_ces_constraints():
+    torch.manual_seed(0)
+    theta = _ces_transform()(torch.randn(128, 4))
+
+    assert ((theta[:, 0] > 0.01) & (theta[:, 0] < 1.0)).all()
+    assert torch.allclose(theta[:, 1:4].sum(-1), torch.ones(128), atol=1e-6)
+    assert (theta[:, 1:4] > 0).all()
+    assert (theta[:, 4] > 0).all()
+
+
+def test_block_transform_log_det_matches_the_square_jacobian():
+    # The reference is the Jacobian with alpha's redundant third coordinate
+    # dropped, which is the simplex's coordinate measure d(alpha_1) d(alpha_2)
+    # and the convention Dirichlet.log_prob uses. NOT the Gram determinant
+    # 0.5 * logdet(J^T J) of the full [5, 4] Jacobian: that is the embedded
+    # simplex's 2-dim Hausdorff measure and is larger by exactly log(sqrt(3)).
+    torch.manual_seed(0)
+    transform = _ces_transform()
+    keep = [0, 1, 2, 4]  # rho, alpha_1, alpha_2, u
+
+    for _ in range(4):
+        raw = torch.randn(4, dtype=torch.float64)
+        jacobian = torch.autograd.functional.jacobian(
+            lambda value: transform(value)[keep], raw
+        )
+        expected = torch.linalg.slogdet(jacobian)[1]
+        actual = transform.log_abs_det_jacobian(
+            raw.unsqueeze(0), transform(raw).unsqueeze(0)
+        )[0]
+        torch.testing.assert_close(actual, expected, atol=1e-9, rtol=0)
+
+
+def test_block_transform_log_det_keeps_the_batch_shape():
+    transform = _ces_transform()
+    for batch_shape in [(4,), (3, 5), (2, 3, 7)]:
+        raw = torch.randn(*batch_shape, 4)
+        assert transform(raw).shape == (*batch_shape, 5)
+        assert transform.log_abs_det_jacobian(raw, transform(raw)).shape == batch_shape
+
+
+def test_block_transform_rejects_inconsistent_sizes():
+    with pytest.raises(ValueError, match="equal length"):
+        BlockTransform([ExpTransform()], raw_sizes=[1, 1], theta_sizes=[1])
+    with pytest.raises(ValueError, match="positive"):
+        BlockTransform([ExpTransform()], raw_sizes=[0], theta_sizes=[1])
+
+
+def test_block_transform_rejects_a_wrong_trailing_size():
+    transform = _ces_transform()
+    with pytest.raises(ValueError, match="trailing size 4"):
+        transform(torch.randn(3, 5))
+    with pytest.raises(ValueError, match="trailing size 5"):
+        transform.inv(torch.randn(3, 4))
+
+
+def test_ces_posterior_mixture_is_built_over_the_raw_coordinates():
+    task = CES()
+    net = _make_ces_posterior(task, n_components=3)
+
+    assert net.dim_theta == 5
+    assert net.dim_latent == 4
+    assert net.loc_head.out_features == 3 * 4
+    assert net.log_scale_head.out_features == 3 * 4
+    assert net.theta_loc.shape == (4,)
+
+
+def test_ces_posterior_log_prob_shape_and_scale():
+    # The plain mixture reaches ~-4e6 on these same draws, since u exceeds any
+    # scale a component can express. This is the regression test for that.
+    torch.manual_seed(0)
+    task = CES()
+    net = _make_ces_posterior(task)
+    y_history, design_history = _ces_history(task, b=512)
+    theta = task.sample_prior(512)
+
+    log_q = net.log_prob(theta, y_history, design_history)
+
+    assert log_q.shape == (512,)
+    assert torch.isfinite(log_q).all()
+    assert log_q.min() > -1e3
+
+
+def test_ces_posterior_rejects_wrong_theta_shape():
+    # Must stay a ValueError from the shape check, not an IndexError from
+    # slicing inside the transform.
+    task = CES()
+    net = _make_ces_posterior(task)
+    y_history, design_history = _ces_history(task, b=4)
+
+    with pytest.raises(ValueError, match="trailing shape"):
+        net.log_prob(task.sample_prior(4)[:, :4], y_history, design_history)
+
+
+def test_ces_posterior_samples_satisfy_the_constraints():
+    torch.manual_seed(0)
+    task = CES()
+    net = _make_ces_posterior(task)
+    y_history, design_history = _ces_history(task, b=8)
+
+    theta = net.sample(y_history, design_history, n_samples=3)
+
+    assert theta.shape == (3, 8, 5)
+    assert ((theta[..., 0] > 0.01) & (theta[..., 0] < 1.0)).all()
+    assert torch.allclose(
+        theta[..., 1:4].sum(-1), torch.ones_like(theta[..., 0]), atol=1e-5
+    )
+    assert (theta[..., 4] > 0).all()
+
+
+def test_ces_posterior_has_no_distribution_object_over_theta():
+    task = CES()
+    net = _make_ces_posterior(task)
+    y_history, design_history = _ces_history(task, b=4)
+
+    assert net.raw_distribution(y_history, design_history).log_prob(
+        torch.randn(4, 4)
+    ).shape == (4,)
+    with pytest.raises(NotImplementedError, match="raw_distribution"):
+        net.distribution(y_history, design_history)
+
+
+def test_constrained_posterior_rejects_canonicalize_theta():
+    task = LocationFinding(n_sources=2, dim_theta=2)
+    with pytest.raises(ValueError, match="canonicalize_theta"):
+        ConstrainedAttentiveVariationalPosteriorNet(
+            event_shape_y=task.event_shape_y,
+            event_shape_design=task.event_shape_design,
+            event_shape_theta=(4,),
+            transform=BlockTransform([ExpTransform()], raw_sizes=[4], theta_sizes=[4]),
+            canonicalize_theta=True,
+        )
+
+
+def test_constrained_posterior_rejects_a_transform_of_the_wrong_width():
+    task = CES()
+    with pytest.raises(ValueError, match="as many coordinates as theta"):
+        ConstrainedAttentiveVariationalPosteriorNet(
+            event_shape_y=task.event_shape_y,
+            event_shape_design=task.event_shape_design,
+            event_shape_theta=task.event_shape_theta,
+            transform=BlockTransform([ExpTransform()], raw_sizes=[4], theta_sizes=[4]),
+        )
+
+
+def test_ces_barber_agakov_gain_is_bounded_for_an_untrained_posterior():
+    # Direct regression test for the observed training gains of -2e3 to -3.7e6.
+    torch.manual_seed(0)
+    task = CES()
+    objective = BarberAgakov(task, _make_ces_posterior(task))
+    y_history, design_history = _ces_history(task, b=512)
+    rollout = Rollout(
+        theta=task.sample_prior(512),
+        y_history=y_history,
+        design_history=design_history,
+    )
+
+    gain = objective.per_sample_gain(rollout)
+
+    assert torch.isfinite(gain).all()
+    assert gain.abs().max() < 1e3
+
+
+def test_ces_posterior_pushforward_normalises():
+    """The measure claim the whole design rests on, made falsifiable.
+
+    Integrates the CES prior over the raw coordinates by importance sampling. It
+    comes to 0.99 rather than 1 because CESPrior.log_prob does not account for
+    its own `rho = 0.01 + 0.99 * rho` squash, which makes the reported bound
+    conservative by log(0.99) = 0.01 nats. Also the drift guard on the recipe's
+    0.01 rho floor: change it in one place only and this fails.
+    """
+    torch.manual_seed(0)
+    task = CES()
+    transform = _ces_transform()
+
+    raw = transform.inv(task.sample_prior(20_000))
+    proposal = Independent(Normal(raw.mean(0), 2.0 * raw.std(0)), 1)
+    z = proposal.sample((200_000,))
+    log_weights = (
+        task.prior.log_prob(transform(z))
+        + transform.log_abs_det_jacobian(z, transform(z))
+        - proposal.log_prob(z)
+    )
+
+    assert log_weights.exp().mean().item() == pytest.approx(0.99, rel=0.05)
+
+
+def test_ces_posterior_gradients_reach_the_posterior_parameters():
+    torch.manual_seed(0)
+    task = CES()
+    net = _make_ces_posterior(task)
+    y_history, design_history = _ces_history(task, b=32)
+    rollout = Rollout(
+        theta=task.sample_prior(32),
+        y_history=y_history,
+        design_history=design_history,
+    )
+
+    BarberAgakov(task, net).estimate_gain(rollout).backward()
+
+    trainable = [p for n, p in net.named_parameters() if n != "encoder.null_enc"]
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in trainable)
+    assert all(p.grad is None or torch.isfinite(p.grad).all() for p in trainable)
+
+
+def test_log_det_correction_does_not_change_the_posterior_gradient():
+    """The log-det is a function of theta alone, which carries no graph.
+
+    So correcting the density shifts the reported bound without touching any
+    gradient. That is what makes the correction safe to apply inside the net.
+    """
+    torch.manual_seed(0)
+    task = CES()
+    net = _make_ces_posterior(task)
+    y_history, design_history = _ces_history(task, b=32)
+    theta = task.sample_prior(32)
+
+    def grads(loss):
+        net.zero_grad()
+        loss.backward()
+        return torch.cat(
+            [p.grad.flatten() for p in net.parameters() if p.grad is not None]
+        )
+
+    corrected = grads(net.log_prob(theta, y_history, design_history).sum())
+    raw_only = grads(
+        net.raw_distribution(y_history, design_history)
+        .log_prob(net.transform.inv(theta))
+        .sum()
+    )
+
+    torch.testing.assert_close(corrected, raw_only)
+
+
+def _htd_transform():
+    """The HTD map: (z_k, alpha) -> (k, alpha). exp on k, identity on alpha.
+
+    Mirrors the transform in experiments/temporal_discounting/joint_var_post.yaml.
+    """
+    return BlockTransform(
+        transforms=[ExpTransform(), AffineTransform(loc=0.0, scale=1.0)],
+        raw_sizes=[1, 1],
+        theta_sizes=[1, 1],
+    )
+
+
+def _make_htd_posterior(task, n_components=3):
+    return ConstrainedAttentiveVariationalPosteriorNet(
+        event_shape_y=task.event_shape_y,
+        event_shape_design=task.event_shape_design,
+        event_shape_theta=task.event_shape_theta,
+        transform=_htd_transform(),
+        n_components=n_components,
+        encoder_dim_h=[16],
+        dim_emb=16,
+        num_heads=2,
+        num_blocks=1,
+        trunk_dim_h=16,
+    )
+
+
+def _htd_history(task, b=16, T=3):
+    return torch.randint(0, 2, (b, T, 1)).float(), torch.rand(b, T, 2) * 100
+
+
+def test_htd_transform_round_trips_on_real_prior_draws():
+    torch.manual_seed(0)
+    transform = _htd_transform()
+
+    raw = torch.randn(64, 2)
+    assert torch.allclose(transform.inv(transform(raw)), raw, atol=1e-5)
+
+    theta = HyperbolicTemporalDiscounting().sample_prior(2_000)
+    assert torch.allclose(transform(transform.inv(theta)), theta, atol=1e-5)
+    assert torch.isfinite(transform.inv(theta)).all()
+
+
+def test_htd_posterior_pushforward_normalises():
+    """The measure claim, for HTD.
+
+    Only k is transformed, so the Jacobian is log k alone. This integrates to
+    exactly 1 over the prior's support: the alpha proposal is kept positive
+    because HalfNormal.log_prob rejects negatives outright.
+    """
+    torch.manual_seed(0)
+    task = HyperbolicTemporalDiscounting()
+    transform = _htd_transform()
+
+    raw = transform.inv(task.sample_prior(20_000))
+    z_k = Normal(raw[:, 0].mean(), 2.0 * raw[:, 0].std())
+    z_alpha = HalfNormal(4.0)
+    z = torch.stack([z_k.sample((200_000,)), z_alpha.sample((200_000,))], dim=-1)
+    log_weights = (
+        task.prior.log_prob(transform(z))
+        + transform.log_abs_det_jacobian(z, transform(z))
+        - z_k.log_prob(z[:, 0])
+        - z_alpha.log_prob(z[:, 1])
+    )
+
+    assert log_weights.exp().mean().item() == pytest.approx(1.0, rel=0.05)
+
+
+def test_htd_constrained_posterior_keeps_k_positive():
+    """k is the transformed coordinate, so only it is positive by construction.
+
+    alpha is modelled in its own coordinates and may leak below zero; that leak
+    is the accepted cost of not putting alpha through a log.
+    """
+    torch.manual_seed(0)
+    task = HyperbolicTemporalDiscounting()
+    net = _make_htd_posterior(task)
+    y_history, design_history = _htd_history(task, b=8)
+
+    theta = net.sample(y_history, design_history, n_samples=64)
+
+    assert theta.shape == (64, 8, 2)
+    assert (theta[..., 0] > 0).all()
+
+
+def test_htd_log_prob_is_tame_for_a_near_zero_alpha():
+    """Regression test for the NaN that killed sweep 3tu0ab2h.
+
+    alpha ~ HalfNormal(2) has its mode at zero, so draws near zero are routine.
+    Under exp on both coordinates such a draw landed ~13 spreads into a tail no
+    Gaussian covers, and the gradient chasing it overflowed. Untransformed it is
+    an ordinary point, so log_prob must stay close to that of a central alpha.
+    """
+    torch.manual_seed(0)
+    task = HyperbolicTemporalDiscounting()
+    net = _make_htd_posterior(task)
+    y_history, design_history = _htd_history(task, b=2)
+
+    k = task.sample_prior(2)[0, 0]
+    theta = torch.stack(
+        [torch.tensor([k, 2.6e-7]), torch.tensor([k, 1.6])]  # tail alpha, central
+    )
+    log_q = net.log_prob(theta, y_history, design_history)
+
+    assert torch.isfinite(log_q).all()
+    assert (log_q[0] - log_q[1]).abs() < 5.0
+
+
+def test_htd_barber_agakov_gain_is_finite_for_an_untrained_posterior():
+    torch.manual_seed(0)
+    task = HyperbolicTemporalDiscounting()
+    objective = BarberAgakov(task, _make_htd_posterior(task))
+    y_history, design_history = _htd_history(task, b=512)
+    rollout = Rollout(
+        theta=task.sample_prior(512),
+        y_history=y_history,
+        design_history=design_history,
+    )
+
+    gain = objective.per_sample_gain(rollout)
+
+    assert torch.isfinite(gain).all()
+    assert gain.abs().max() < 1e3
