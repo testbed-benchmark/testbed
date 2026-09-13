@@ -1,0 +1,16 @@
+# @package _global_
+
+# Task defaults, from https://arxiv.org/abs/2402.07868
+# (the nonlinear formulation, theta = (m, l)).
+T: 50
+
+task:
+  _target_: testbed.tasks.StochasticPendulum
+  dt: 0.05  # Euler-Maruyama step
+  damping: 0.1  # d
+  # L = [0, 0.1]: the SDE drives the angular velocity only.
+  noise_scale: [0.0, 0.1]
+  noise_jitter: 1.0e-6  # not in the paper; keeps the angle density non-degenerate
+  prior: null  # use the standard log-normal prior on (m, l)
+  design_space: null  # derive the standard torque range, -1 to 1
+  reparameterize_outcomes: true  # Gaussian noise on a differentiable drift
