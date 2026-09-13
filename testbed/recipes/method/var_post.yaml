@@ -20,6 +20,7 @@ objective:
   baseline: null
   requires_policy_log_probs: false
   use_current_prior: false
+  fused: true
 # posterior pretraining
 n_posterior_pretrain_iter: 5_000
 n_posterior_outer: 1_024

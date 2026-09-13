@@ -8,3 +8,7 @@ n_contrastive: 1_000_000
 outer_batch_size: 256
 contrastive_chunk_size: 200_000
 use_raw_weights: false  # prefer design_net_ema when the checkpoint has one
+# One compiled call per chunk rather than a loop over the T steps. Same bounds
+# to float roundoff; worth ~30x at these sizes. Ignored for a task whose steps
+# aren't independent.
+fused: true
