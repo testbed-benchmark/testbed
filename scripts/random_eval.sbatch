@@ -6,7 +6,7 @@
 #   sbatch scripts/random_eval.sbatch
 #
 # The array size must cover len(TASKS) * len(SEEDS); --array below is sized for
-# the 8 tasks x 5 seeds set below, and the job fails fast if the grid outgrows
+# the 9 tasks x 5 seeds set below, and the job fails fast if the grid outgrows
 # it. To evaluate a subset, override the grid at submission:
 #
 #   TASKS=location_finding_2src sbatch --array=0-4 scripts/random_eval.sbatch
@@ -16,7 +16,7 @@
 #SBATCH --nodes=1
 #SBATCH --gpus=1
 #SBATCH --time=04:00:00
-#SBATCH --array=0-39
+#SBATCH --array=0-44
 
 set -euo pipefail
 
@@ -44,6 +44,7 @@ TASKS=(${TASKS:-
   stochastic_pendulum
   double_link
   cart_pole
+  gravimetry
 })
 
 i="${SLURM_ARRAY_TASK_ID:?Submit as an array job}"

@@ -1,0 +1,11 @@
+# @package _global_
+
+# Task defaults
+T: 20
+
+task:
+  _target_: testbed.tasks.Gravimetry
+  noise_scale: 1.0
+  prior: null  # use the standard prior
+  design_space: null  # unconstrained
+  reparameterize_outcomes: true

@@ -1,0 +1,12 @@
+# @package _global_
+
+# Task defaults
+T: 10
+
+task:
+  _target_: testbed.tasks.MichaelisMenten
+  noise_scale: 2.5
+  exponent: 1.0
+  prior: null  # use the standard uniform prior over kinetic parameters
+  design_space: null  # use the standard substrate-concentration box [0, 400]
+  reparameterize_outcomes: true
