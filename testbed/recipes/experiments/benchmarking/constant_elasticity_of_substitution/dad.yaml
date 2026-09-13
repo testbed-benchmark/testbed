@@ -29,7 +29,7 @@ use_raw_history: true
 # objective
 objective:
   name: reinforce
-  n_inner: 1_023  # contrastive samples for the sPCE reward
+  n_inner: 2_000  # contrastive samples for the sPCE reward
   reparameterize_policy: false
   baseline: leave_one_out  # the score term carries the gradient; keep its variance down
   requires_policy_log_probs: false
@@ -50,4 +50,4 @@ eval_every: 0  # eval is expensive here; the final_eval block handles it
 
 wandb:
   project: benchmarking_constant_elasticity_of_substitution  # the sweep pins the same value
-  group: dad_loo_attention
+  group: dad_loo_attention_2000
