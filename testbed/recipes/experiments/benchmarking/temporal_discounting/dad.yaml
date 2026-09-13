@@ -23,7 +23,7 @@ use_raw_history: true
 # objective
 objective:
   name: reinforce
-  n_inner: 1_023  # contrastive samples for the sPCE reward
+  n_inner: 2_000  # contrastive samples for the sPCE reward
   reparameterize_policy: false
   baseline: leave_one_out  # leave_one_out for variance reduction
   requires_policy_log_probs: false
@@ -43,4 +43,4 @@ eval_every: 0  # the final_eval block handles it
 
 wandb:
   project: benchmarking_temporal_discounting  # 
-  group: dad_loo_attention
+  group: dad_loo_attention_2000

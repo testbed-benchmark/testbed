@@ -7,7 +7,7 @@
 #
 # wandb sweep sweeps/benchmarking/constant_elasticity_of_substitution_dad.yaml
 
-name: benchmarking-constant_elasticity_of_substitution-dad-seeds
+name: benchmarking-constant_elasticity_of_substitution-dad-seeds_2000
 program: scripts/sweep_run.py
 method: grid
 entity: rainml-testbed

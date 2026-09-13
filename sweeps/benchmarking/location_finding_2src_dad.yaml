@@ -7,7 +7,7 @@
 #
 # wandb sweep sweeps/benchmarking/location_finding_2src_dad.yaml
 
-name: benchmarking-location_finding_2src-dad-seeds
+name: benchmarking-location_finding_2src-dad-seeds_2000
 program: scripts/sweep_run.py
 method: grid
 entity: rainml-testbed
