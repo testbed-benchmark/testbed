@@ -164,6 +164,47 @@ def test_action_hook_every_step_shape_and_causality():
     assert rollout.extra["action_history"].shape[:2] == (2, 3)
 
 
+def test_action_hook_conditions_on_raw_designs_when_asked():
+    task = _make_task()
+
+    seen = []
+
+    def action_net(y_history, design_history):
+        seen.append(design_history)
+        return y_history.sum(dim=1)
+
+    # _RawCountingDesigner's raw design is the physical one negated, so the two
+    # histories are trivially distinguishable.
+    class _RawCountingDesigner(_CountingDesigner):
+        def _step_design(self, state):
+            design, _, _ = super()._step_design(state)
+            return design, -design, None
+
+    designer = _RawCountingDesigner(
+        task, T=3, hooks=[ActionHook(action_net, use_raw_history=True)]
+    )
+    rollout = designer.rollout(task.sample_prior(2))
+
+    torch.testing.assert_close(seen[-1], rollout.extra["raw_design_history"])
+    torch.testing.assert_close(seen[-1], -rollout.design_history)
+
+
+def test_action_hook_raises_when_raw_history_is_requested_but_absent():
+    # A silent fallback to physical designs would feed the action net two
+    # different coordinate systems within one run, and report nothing.
+    task = _make_task()
+
+    def action_net(y_history, design_history):
+        return y_history.sum(dim=1)
+
+    designer = _CountingDesigner(
+        task, T=2, hooks=[ActionHook(action_net, use_raw_history=True)]
+    )
+
+    with pytest.raises(ValueError, match="raw design history"):
+        designer.rollout(task.sample_prior(2))
+
+
 def test_hook_instance_reused_across_differently_batched_rollouts():
     task = _make_task()
 

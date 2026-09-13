@@ -1,5 +1,6 @@
 """Policy network exports."""
 
+from .aline import AlineModel, AlineOutput
 from .base import DesignNet, DesignProposal
 from .deterministic import (
     AttentivePolicyNet,
@@ -14,7 +15,7 @@ from .encoder import (
     HistoryEncoder,
 )
 from .history import PreparedHistory, prepare_history
-from .modules import affine_rescale
+from .modules import BlockTransform, affine_rescale
 from .rlboed import RLBOEDDiscreteQNetwork, RLBOEDQNetwork
 from .stochastic import (
     CategoricalHead,
@@ -30,6 +31,8 @@ from .stochastic import (
 )
 from .variational_posterior import (
     AttentiveVariationalPosteriorNet,
+    ConstrainedAttentiveVariationalPosteriorNet,
+    ConstrainedGaussianMixtureVariationalPosteriorNet,
     DeepSetVariationalPosteriorNet,
     GaussianMixtureVariationalPosteriorNet,
     VariationalPosteriorNet,

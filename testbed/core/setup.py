@@ -18,6 +18,7 @@ def instantiate_design_net(config, task):
     parameters = inspect.signature(target).parameters
     task_arguments = {
         "event_shape_y": task.event_shape_y,
+        "event_shape_theta": task.event_shape_theta,
         "event_shape_design": task.event_shape_design,
         "event_shape_out": task.event_shape_design,
         "design_space": task.design_space,
