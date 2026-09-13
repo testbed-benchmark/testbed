@@ -5,6 +5,8 @@ from typing import Any
 
 import torch
 from torch import Tensor, nn
+from torch.distributions import MultivariateNormal, TransformedDistribution
+from torch.distributions.transforms import ExpTransform
 
 
 class Distribution(ABC, nn.Module):
@@ -90,6 +92,62 @@ class TorchDistribution(Distribution):
         """Evaluates log probabilities under the wrapped distribution."""
         log_prob = self.dist.log_prob(theta.to(_wrapped_device(self.dist)))
         return log_prob.to(self.device)
+
+
+class LogNormal(Distribution):
+    r"""Multivariate log-normal distribution.
+
+    The distribution of :math:`\exp(z)` for :math:`z \sim \mathcal{N}(\mu, \Sigma)`,
+    for parameters constrained to be positive. Torch has no native multivariate
+    log-normal, so this wraps a ``MultivariateNormal`` in an ``ExpTransform``.
+
+    Args:
+        loc (Tensor):
+            Mean :math:`\mu` of the underlying normal. Shape ``[d]``.
+        cov (Tensor):
+            Covariance :math:`\Sigma` of the underlying normal. Shape ``[d, d]``.
+    """
+
+    def __init__(self, loc: Tensor, cov: Tensor) -> None:
+        """Initializes the underlying normal's parameters."""
+        super().__init__()
+
+        loc = torch.as_tensor(loc)
+        self.register_buffer("loc", loc)
+        self.register_buffer("cov", torch.as_tensor(cov))
+        self.dim = loc.shape[-1]
+
+    @property
+    def lognormal(self) -> torch.distributions.Distribution:
+        """The distribution as an exp-transformed ``MultivariateNormal``."""
+        mvn = MultivariateNormal(self.loc, covariance_matrix=self.cov)
+        return TransformedDistribution(mvn, [ExpTransform()])
+
+    def sample(self, n_samples: int = 1) -> Tensor:
+        """Draws samples.
+
+        Args:
+            n_samples (int):
+                How many samples to draw (default: 1).
+
+        Returns:
+            Tensor:
+                Samples, shape ``[n_samples, d]``.
+        """
+        return self.lognormal.sample((n_samples,))
+
+    def log_prob(self, theta: Tensor) -> Tensor:
+        """Evaluates log probabilities.
+
+        Args:
+            theta (Tensor):
+                Points at which to evaluate the log-probability. Shape ``[..., d]``.
+
+        Returns:
+            Tensor:
+                Log probs, shape ``[...,]``.
+        """
+        return self.lognormal.log_prob(theta)
 
 
 class EmpiricalDistribution(Distribution):

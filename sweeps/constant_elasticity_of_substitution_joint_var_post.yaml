@@ -14,6 +14,10 @@ project: constant_elasticity_of_substitution
 parameters:
   seed:
     values: [0, 1, 2, 3, 4]
+  # Separate group from the pre-52774b3 runs, which modelled theta in R^5 and
+  # reported eval sPCE of 1.45 to 1.97 against a meaningless bound. 
+  wandb.group:
+    value: joint_var_post_constrained
 
 command:
   - ${interpreter}

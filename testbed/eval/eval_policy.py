@@ -1,7 +1,8 @@
 """Standalone sPCE/sNMC evaluation for any trained BED policy checkpoint.
 
-General-purpose: only needs `cfg.task`, `cfg.design_net`, `cfg.T` in the run's
-saved config and a `"design_net"` key in the checkpoint.
+The saved `cfg.design_net` constructs the network, and `cfg.final_eval.designer`
+selects the rollout implementation and its evaluation settings. Network weights
+are stored under `"design_net"`.
 
 If the checkpoint has a `"design_net_ema"` key (currently only
 `methods.var_post.Trainer` saves one), it's preferred over the raw
@@ -28,7 +29,7 @@ import sys
 from pathlib import Path
 
 import torch
-from hydra.utils import instantiate
+from hydra.utils import get_class, instantiate
 from omegaconf import OmegaConf
 
 from testbed.core.setup import instantiate_design_net
@@ -57,9 +58,8 @@ def evaluate_checkpoint(
     cfg = OmegaConf.load(run_dir / ".hydra" / "config.yaml")
 
     task = instantiate(cfg.task).to(device)
-    design_net = build_design_net(cfg, task).to(device)
-
     state = torch.load(run_dir / checkpoint, map_location=device, weights_only=False)
+    design_net = build_design_net(cfg, task).to(device)
     key = (
         "design_net"
         if use_raw_weights or "design_net_ema" not in state
@@ -68,15 +68,21 @@ def evaluate_checkpoint(
     design_net.load_state_dict(state[key])
     design_net.eval()
 
-    use_raw_history = state.get(
-        "use_raw_history", not design_net.produces_policy_log_probs
-    )
-    designer = PolicyDesigner(
-        task,
-        cfg.T,
-        design_net,
-        use_raw_history=use_raw_history,
-    )
+    designer_config = OmegaConf.select(cfg, "final_eval.designer")
+    if designer_config is None:
+        # Run configs saved before final_eval.designer became configurable used
+        # PolicyDesigner unconditionally. Preserve that behavior so finished
+        # checkpoints remain re-evaluable with newer versions of TestBED.
+        designer_config = OmegaConf.create(
+            {"_target_": "testbed.designers.PolicyDesigner"}
+        )
+    designer_kwargs = {}
+    if issubclass(get_class(designer_config._target_), PolicyDesigner):
+        # Policy checkpoints preserve the coordinates used during training.
+        designer_kwargs["use_raw_history"] = state.get(
+            "use_raw_history", not design_net.produces_policy_log_probs
+        )
+    designer = instantiate(designer_config, task, cfg.T, design_net, **designer_kwargs)
 
     out = eval_spce_snmc(
         task,

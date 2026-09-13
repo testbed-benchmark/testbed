@@ -11,6 +11,7 @@ from .loss import (
     PermutationInvariantMSELoss,
     SortedLogMSELoss,
     SortedMSELoss,
+    TrueLogMSELoss,
 )
 from .reinforce import BarberAgakovReinforce, LossReinforce, Reinforce, SPCEReinforce
 from .snmc import NMC, SNMC
@@ -36,5 +37,6 @@ __all__ = [
     "SPCEReinforce",
     "SortedLogMSELoss",
     "SortedMSELoss",
+    "TrueLogMSELoss",
     "posterior_nll",
 ]
