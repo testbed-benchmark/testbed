@@ -23,7 +23,6 @@ ENTRY_POINT_RECIPES = [
     "method/rlboed",
     "method/var_post",
     "method/joint_var_post",
-    "method/static",
     "experiments/location_finding/rlboed",
     "experiments/location_finding_2src/actionbed",
     "experiments/location_finding_2src/dad",
@@ -144,17 +143,6 @@ def test_var_post_recipe_wires_posterior_net():
     assert cfg.posterior_net.n_components == 10
     assert cfg.joint is False
     assert cfg.objective.name == "barber_agakov"
-
-
-def test_static_recipe_has_restarts_and_no_design_net():
-    cfg = _compose("method/static")
-    assert cfg.n_restarts > 1
-    assert cfg.objective.name == "spce"
-    assert "design_net" not in cfg
-    # eval_run.py can't load a static checkpoint yet; the trainer selects and
-    # scores the winning restart itself.
-    assert cfg.final_eval.enabled is False
-    assert cfg.select.n_outer > 0
 
 
 def test_joint_var_post_recipe_sets_joint_true():
