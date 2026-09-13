@@ -18,7 +18,7 @@ class Objective(ABC):
         the T steps. See ``Task.history_logp``.
         """
         self.task = task
-        self.fused = bool(fused) and task.memoryless
+        self.fused = bool(fused)
 
 
 class DesignObjective(Objective):

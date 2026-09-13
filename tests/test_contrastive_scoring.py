@@ -1,13 +1,16 @@
 """Tests that the contrastive scoring paths agree with the per-step loop.
 
-Two changes are under test here, and they carry different guarantees:
+Three changes are under test here, and they carry different guarantees:
 
 - Broadcasting the histories over the contrastive axis, rather than
   replicating them to ``[b * L, T, ...]`` up front, feeds ``_outcome_logp``
   the same flat tensor it saw before, element for element. That is required
   to be **bitwise** identical.
-- Scoring the steps in one fused call sums over T in a different order than
-  the loop does, so it is required only to agree to float roundoff.
+- Scoring a memoryless task's steps in one fused call sums over T in a
+  different order than the loop does, so it is required only to agree to
+  float roundoff.
+- Scoring a history-dependent task with fused=True compiles the loop itself,
+  whose fused kernels are likewise required only to agree to float roundoff.
 """
 
 import pytest
@@ -15,7 +18,7 @@ import torch
 
 from testbed.core.rollout import Rollout
 from testbed.design_objectives.contrastive import contrastive_logsumexps
-from testbed.tasks import CES, LocationFinding
+from testbed.tasks import CES, LocationFinding, StochasticPendulum
 from testbed.tasks.hyperbolic_temporal_discounting import HyperbolicTemporalDiscounting
 
 MEMORYLESS_TASKS = {
@@ -23,6 +26,12 @@ MEMORYLESS_TASKS = {
     "ces": CES,
     "htd": HyperbolicTemporalDiscounting,
 }
+
+# The compiled loop is task-agnostic and compiling it dominates test time, so
+# one cheap history-dependent task is enough.
+DEPENDENT_TASKS = {"stochastic_pendulum": StochasticPendulum}
+
+ALL_TASKS = {**MEMORYLESS_TASKS, **DEPENDENT_TASKS}
 
 
 def _rollout(task, b, T):
@@ -63,9 +72,9 @@ def test_broadcasting_the_histories_is_bitwise_identical(name):
     assert torch.equal(chunks.squeeze(1), torch.logsumexp(expected, dim=1))
 
 
-@pytest.mark.parametrize("name", sorted(MEMORYLESS_TASKS))
+@pytest.mark.parametrize("name", sorted(ALL_TASKS))
 def test_fused_scoring_matches_the_per_step_loop(name):
-    task = MEMORYLESS_TASKS[name]()
+    task = ALL_TASKS[name]()
     b, T, L = 3, 4, 16
     torch.manual_seed(1)
     rollout = _rollout(task, b, T)
@@ -78,11 +87,21 @@ def test_fused_scoring_matches_the_per_step_loop(name):
     assert torch.allclose(looped, fused, rtol=1e-5, atol=1e-5)
 
 
-@pytest.mark.parametrize("name", sorted(MEMORYLESS_TASKS))
-def test_fused_scoring_matches_the_loop_on_gradients(name):
+@pytest.fixture
+def float64():
+    """Runs a test in float64, restoring float32 after."""
+    torch.set_default_dtype(torch.float64)
+    yield
+    torch.set_default_dtype(torch.float32)
+
+
+@pytest.mark.parametrize("name", sorted(ALL_TASKS))
+def test_fused_scoring_matches_the_loop_on_gradients(name, float64):
     # Training differentiates through this, so matching values is not enough:
-    # the gradient reaching the policy has to match too.
-    task = MEMORYLESS_TASKS[name]()
+    # the gradient reaching the policy has to match too. In float64, since the
+    # dynamical tasks' gradients reach O(1e2), where fp32 roundoff alone
+    # exceeds any useful atol.
+    task = ALL_TASKS[name]()
     b, T, L = 4, 5, 32
     torch.manual_seed(1)
     base = _rollout(task, b, T)
@@ -133,32 +152,18 @@ def test_fused_scoring_still_chunks_exactly(chunk_size):
     )
 
 
-def test_fused_is_ignored_for_a_task_with_dependent_steps():
-    # eval sweeps every task, so fused=True must degrade rather than raise.
-    from testbed.tasks import StochasticPendulum
-
-    task = StochasticPendulum()
-    assert not task.memoryless
+@pytest.mark.parametrize("name", sorted(DEPENDENT_TASKS))
+def test_fused_history_logp_still_conditions_on_the_context(name):
+    # Unlike the memoryless fold, the compiled loop must not drop the context.
+    task = DEPENDENT_TASKS[name]()
     torch.manual_seed(1)
-    rollout = _rollout(task, b=2, T=3)
+    rollout = _rollout(task, b=3, T=4)
+    context = _rollout(task, b=3, T=2)
+    args = (rollout.y_history, rollout.design_history, rollout.theta)
+    ctx = {"y_context": context.y_history, "design_context": context.design_history}
 
-    torch.manual_seed(0)
-    _, plain = contrastive_logsumexps(task, rollout, 6, chunk_size=6)
-    torch.manual_seed(0)
-    _, asked = contrastive_logsumexps(task, rollout, 6, chunk_size=6, fused=True)
+    looped = task.history_logp(*args, **ctx)
+    fused = task.history_logp(*args, **ctx, fused=True)
 
-    assert torch.equal(plain, asked)
-
-
-def test_history_logp_rejects_fusing_dependent_steps():
-    # The Task-level entry point is explicit, so there it is an error.
-    from testbed.tasks import StochasticPendulum
-
-    task = StochasticPendulum()
-    torch.manual_seed(1)
-    rollout = _rollout(task, b=2, T=3)
-
-    with pytest.raises(ValueError, match="not memoryless"):
-        task.history_logp(
-            rollout.y_history, rollout.design_history, rollout.theta, fused=True
-        )
+    assert torch.allclose(looped, fused, rtol=1e-5, atol=1e-5)
+    assert not torch.allclose(fused, task.history_logp(*args, fused=True))
