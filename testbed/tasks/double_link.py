@@ -129,39 +129,22 @@ class DoubleLink(Task):
         theta: [..., 4]
         design: [..., 2]
         """
-        q1 = y[..., 0]
-        q2 = y[..., 1]
-        q1dot = y[..., 2]
-        q2dot = y[..., 3]
-
-        m1 = theta[..., 0]
-        m2 = theta[..., 1]
-        len1 = theta[..., 2]
-        len2 = theta[..., 3]
+        q1, q2, q1dot, q2dot = y.unbind(-1)
+        m1, m2, len1, len2 = theta.unbind(-1)
 
         g = self.g
 
-        # mass matrix, symmetric so entry 01 == entry 10
+        # mass matrix [[m00, m01], [m01, b]], symmetric so entry 01 == entry 10
         a = m2 * len1 * len2 * torch.cos(q2)
         b = m2 * len2**2
         m00 = (m1 + m2) * len1**2 + b + 2 * a
         m01 = b + a
-        mass_matrix = torch.stack(
-            [torch.stack([m00, m01], dim=-1), torch.stack([m01, b], dim=-1)], dim=-2
-        )
 
-        # coriolis/centrifugal matrix
+        # coriolis/centrifugal matrix [[0, c01], [c10, c11]]
         a = -m2 * len1 * len2 * torch.sin(q2)
         c01 = a * (2 * q1dot + q2dot)
         c10 = -0.5 * c01
         c11 = 0.5 * a * q1dot
-        coriolis_matrix = torch.stack(
-            [
-                torch.stack([torch.zeros_like(c01), c01], dim=-1),
-                torch.stack([c10, c11], dim=-1),
-            ],
-            dim=-2,
-        )
 
         # gravity term ('tau')
         # This has a sign error as written in (Phillips 2026) but implemented correctly in their code
@@ -172,12 +155,15 @@ class DoubleLink(Task):
         term1 = (m1 + m2) * len1 * torch.sin(q1) + term2
         tau = -g * torch.stack([term1, term2], dim=-1)
 
-        # M qddot + C qdot = design + tau
-        qdot = torch.stack([q1dot, q2dot], dim=-1)
-        rhs = design + tau - (coriolis_matrix @ qdot.unsqueeze(-1)).squeeze(-1)
-        qdotdot = torch.linalg.solve(mass_matrix, rhs.unsqueeze(-1)).squeeze(-1)
+        # M qddot + C qdot = design + tau, solved in closed form: torch.compile
+        # can't fuse a batched linalg.solve, which dominated fused scoring.
+        r0 = design[..., 0] + tau[..., 0] - c01 * q2dot
+        r1 = design[..., 1] + tau[..., 1] - (c10 * q1dot + c11 * q2dot)
+        det = m00 * b - m01 * m01
+        q1dotdot = (b * r0 - m01 * r1) / det
+        q2dotdot = (m00 * r1 - m01 * r0) / det
 
-        return torch.cat([qdot, qdotdot], dim=-1)
+        return torch.stack([q1dot, q2dot, q1dotdot, q2dotdot], dim=-1)
 
     def make_mean(
         self, theta: Tensor, design: Tensor, y_history: Tensor | None = None
