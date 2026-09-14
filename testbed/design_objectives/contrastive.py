@@ -48,8 +48,8 @@ def contrastive_logsumexps(
         y_context: Outcomes already absorbed into ``current_prior``, shape
             ``[b or 1, S, *event_shape_y]``. None means no context.
         design_context: The designs alongside them, same leading shape.
-        fused: Score each chunk with one compiled call rather than a loop over
-            the steps. See ``Task.history_logp``. Ignored for a non-memoryless task.
+        fused: Score each chunk with one compiled call rather than the eager
+            per-step loop. See ``Task.history_logp``.
 
     Returns:
         ``(logp_joint, chunk_logsumexps)`` of shapes ``[b]`` and
@@ -63,7 +63,6 @@ def contrastive_logsumexps(
         rollout.theta,
     )
     b = theta_0.shape[0]
-    fused = fused and task.memoryless
 
     logp_joint = task.history_logp(
         y_history,

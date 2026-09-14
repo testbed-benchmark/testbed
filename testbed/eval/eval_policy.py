@@ -120,5 +120,7 @@ if __name__ == "__main__":
             contrastive_chunk_size=settings.contrastive_chunk_size,
             use_raw_weights=settings.use_raw_weights,
             device=cfg.device,
+            # run configs saved before final_eval.fused existed default to fused
+            fused=settings.get("fused", True),
         )
     )
