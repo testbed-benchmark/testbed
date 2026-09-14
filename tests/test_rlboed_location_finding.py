@@ -428,6 +428,8 @@ def _tiny_cfg(**sac_overrides):
             },
             "eval_every": 0,
             "eval_n_contrastive": 4,
+            "train_time_budget_seconds": 60,
+            "checkpoint_every": 0,
             "sac": {
                 "num_training_iterations": 3,
                 "num_envs": 2,
@@ -609,6 +611,7 @@ def test_train_is_reproducible_with_fixed_seed():
 
 def test_train_writes_checkpoints_and_metrics(tmp_path):
     cfg = _tiny_cfg()
+    cfg.checkpoint_every = 1
     manager = Manager(
         cfg, root=str(tmp_path), name="run", timestamp=False, console=False
     )
@@ -622,11 +625,17 @@ def test_train_writes_checkpoints_and_metrics(tmp_path):
     assert "design_net" in final
     assert "designer" not in final
     assert "actor" not in final
-    assert (run_dir / "best.pt").exists()
-    best = torch.load(run_dir / "best.pt", weights_only=True)
-    assert "design_net" in best
-    assert "designer" not in best
-    assert "actor" not in best
+    assert "replay_buffer" in final
+    assert "rng_state" in final
+    assert not (run_dir / "best.pt").exists()
+    for iteration in range(1, 4):
+        policy = torch.load(run_dir / f"step_{iteration:08d}.pt", weights_only=True)
+        assert "design_net" in policy
+        assert "replay_buffer" not in policy
+        assert "actor_optimizer" not in policy
+        assert policy["completed_iterations"] == iteration
+        assert policy["step"] == iteration - 1
+        assert 0 <= policy["elapsed_seconds"] <= final["elapsed_seconds"]
 
     records = [
         json.loads(line)
@@ -647,7 +656,7 @@ def test_trainer_produces_deployable_designer(tmp_path):
     assert trainer.designer.requires_policy_log_probs
     assert trainer.designer.design_net.design_history_bounds == (0.0, 1.0)
 
-    checkpoint = trainer.build_checkpoint(step=cfg.sac.num_training_iterations - 1)
+    checkpoint = trainer.build_checkpoint()
     assert checkpoint["config"]["sac"]["gamma"] == cfg.sac.gamma
     assert checkpoint["alpha"].item() > 0
     assert "log_alpha" in checkpoint

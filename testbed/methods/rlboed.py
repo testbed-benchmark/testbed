@@ -766,13 +766,22 @@ class Trainer:
             if metrics is None:
                 break
             self.completed_iterations = step + 1
-            if self.stop_reason == "time_budget":
-                break
             metrics["step"] = step
             self.metrics.append(metrics)
 
             if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
+
+            interval = self.cfg.checkpoint_every
+            if self.manager is not None and interval and (step + 1) % interval == 0:
+                torch.save(
+                    self.build_policy_checkpoint(),
+                    self.manager.path(f"step_{step + 1:08d}.pt"),
+                )
+
+            # Preserve completed work before stopping, without starting evaluation.
+            if self.stop_reason == "time_budget":
+                break
 
             # evaluation
             if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
@@ -804,13 +813,6 @@ class Trainer:
                         f"actor_loss={step_metrics['actor_loss']:.4f}, "
                         f"alpha={step_metrics['alpha']:.4f}"
                     )
-
-            interval = self.cfg.checkpoint_every
-            if self.manager is not None and interval and (step + 1) % interval == 0:
-                torch.save(
-                    self.build_policy_checkpoint(),
-                    self.manager.path(f"step_{step + 1:08d}.pt"),
-                )
 
         self._synchronize()
         self.training_elapsed_seconds = time.monotonic() - self._start_time
