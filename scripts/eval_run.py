@@ -116,6 +116,8 @@ def main() -> None:
         contrastive_chunk_size=settings.contrastive_chunk_size,
         use_raw_weights=settings.use_raw_weights,
         device=args.device or cfg.device,
+        # run configs saved before final_eval.fused existed default to fused
+        fused=settings.get("fused", True),
     )
     (run_dir / f"{args.prefix}.json").write_text(json.dumps(results, indent=2))
     print(results)

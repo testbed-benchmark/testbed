@@ -85,6 +85,7 @@ class Reinforce(RolloutObjective, ABC):
         task: Task,
         stochastic_design_policy: bool,
         baseline: str | None = None,
+        fused: bool = False,
     ):
         """Initializes.
 
@@ -94,8 +95,11 @@ class Reinforce(RolloutObjective, ABC):
         than a pathwise graph.
 
         baseline: "leave_one_out" or None; a control variate on the score term.
+
+        fused: compile the pathwise branch's log p(h_T | theta_0) term?
+        See ``Task.history_logp``.
         """
-        super().__init__(task)
+        super().__init__(task, fused=fused)
 
         if baseline not in (None, "leave_one_out"):
             raise ValueError(f"Unknown baseline: {baseline}")
@@ -156,7 +160,10 @@ class Reinforce(RolloutObjective, ABC):
                 )
 
             score = self.task.history_logp(
-                rollout.y_history, rollout.design_history, rollout.theta
+                rollout.y_history,
+                rollout.design_history,
+                rollout.theta,
+                fused=self.fused,
             )  # [b]
 
         return _add_score_gradient(value, score, self._apply_baseline(value)).mean()
@@ -181,9 +188,10 @@ class LossReinforce(Reinforce):
         loss_fn,
         stochastic_design_policy: bool,
         baseline: str | None = None,
+        fused: bool = False,
     ):
         """Initializes."""
-        super().__init__(task, stochastic_design_policy, baseline)
+        super().__init__(task, stochastic_design_policy, baseline, fused=fused)
 
         self.loss_fn = loss_fn
 
@@ -201,10 +209,11 @@ class SPCEReinforce(Reinforce):
         n_contrastive: int,
         stochastic_design_policy: bool,
         baseline: str | None = None,
+        fused: bool = False,
     ):
         """Initializes."""
-        super().__init__(task, stochastic_design_policy, baseline)
-        self.spce = SPCE(task, n_contrastive)
+        super().__init__(task, stochastic_design_policy, baseline, fused=fused)
+        self.spce = SPCE(task, n_contrastive, fused=fused)
 
     def calculate_value(self, rollout: Rollout) -> Tensor:
         """Computes the per-sample SPCE gain."""
@@ -221,9 +230,10 @@ class BarberAgakovReinforce(Reinforce):
         stochastic_design_policy: bool,
         baseline: str | None = None,
         use_current_prior: bool = False,
+        fused: bool = False,
     ):
         """Initializes."""
-        super().__init__(task, stochastic_design_policy, baseline)
+        super().__init__(task, stochastic_design_policy, baseline, fused=fused)
         self.barber_agakov = BarberAgakov(
             task,
             posterior_net,

@@ -164,15 +164,17 @@ def build_objective(cfg, task):
     SNMC/SPCE need the task to construct, so it can't be a pure instantiate.
     """
     n_inner = cfg.objective.n_inner
+    fused = cfg.objective.fused
 
     objectives = {
-        "snmc": lambda: SNMC(task, n_contrastive=n_inner),
-        "spce": lambda: SPCE(task, n_contrastive=n_inner),
+        "snmc": lambda: SNMC(task, n_contrastive=n_inner, fused=fused),
+        "spce": lambda: SPCE(task, n_contrastive=n_inner, fused=fused),
         "reinforce": lambda: SPCEReinforce(
             task,
             n_contrastive=n_inner,
             stochastic_design_policy=cfg.objective.requires_policy_log_probs,
             baseline=cfg.objective.baseline,
+            fused=fused,
         ),
     }
     name = cfg.objective.name

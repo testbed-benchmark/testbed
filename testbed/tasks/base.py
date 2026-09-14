@@ -401,6 +401,19 @@ class Task(ABC, nn.Module):
         )
         return logp_flat.reshape(batch_shape)
 
+    def _compiled(self, name):
+        """Returns the method ``name`` compiled, compiling on first use.
+
+        Cached on the task: a fresh ``torch.compile`` wrapper per call would
+        recompile every time.
+        """
+        key = f"_compiled_{name}"
+        fn = self.__dict__.get(key)
+        if fn is None:
+            fn = torch.compile(getattr(self, name), dynamic=False)
+            self.__dict__[key] = fn
+        return fn
+
     def history_logp(
         self,
         y_history,
@@ -408,6 +421,7 @@ class Task(ABC, nn.Module):
         theta,
         y_context=None,
         design_context=None,
+        fused=False,
     ):
         r"""Computes log probabilities for a sequence of observations and designs.
 
@@ -446,20 +460,73 @@ class Task(ABC, nn.Module):
             design_context (Tensor, optional):
                 The designs alongside them, shape
                 ``[*batch_shape_context, S, *event_shape_design]`` (default: None).
+            fused (bool):
+                Score the steps with compiled kernels instead of the eager loop.
+                A memoryless task folds T into the batch via
+                :meth:`_memoryless_history_logp`, ignoring the context.
+                A history-dependent task compiles the T loop itself via :meth:`_sequential_history_logp` (default: False).
 
         Returns:
             Tensor:
                 Log probabilities, shape ``[*broadcast_batch_shape]``.
         """
-        # Both histories are the data being scored here, not context for it, so
-        # neither may be dropped: the per-step product needs a design per outcome.
-        if y_history is None or design_history is None:
-            raise ValueError(
-                "history_logp scores a full trajectory, so both histories are "
-                f"required. Got y_history={type(y_history).__name__}, "
-                f"design_history={type(design_history).__name__}."
-            )
         y_history, design_history = self._check_history(y_history, design_history)
+
+        if not fused:
+            # both memoryless and non-memoryless tasks loop over T when not fused
+            # speedups for using _memoryless_history_logp are small but cost
+            # T times as much memory
+            return self._sequential_history_logp(
+                y_history, design_history, theta, y_context, design_context
+            )
+        if self.memoryless:
+            return self._compiled("_memoryless_history_logp")(
+                y_history, design_history, theta
+            )
+        return self._compiled("_sequential_history_logp")(
+            y_history, design_history, theta, y_context, design_context
+        )
+
+    def _memoryless_history_logp(self, y_history, design_history, theta):
+        r"""Computes logprob for a rollout with T folded into the batch.
+
+        For efficient calculation on memoryless tasks: one ``_outcome_logp``
+        call over ``[*batch_shape * T, ...]`` replaces the per-step loop.
+
+        Reached through ``history_logp(..., fused=True)``, which compiles it.
+        Only worth calling compiled. Without compilation, materializes all
+        ``[b_flat * T, ...]`` entries at once, yielding negligible speedups
+        for large memory costs.
+        """
+        T = y_history.shape[-(len(self.event_shape_y) + 1)]
+        batch_shape = torch.broadcast_shapes(
+            y_history.shape[: y_history.ndim - 1 - len(self.event_shape_y)],
+            design_history.shape[
+                : design_history.ndim - 1 - len(self.event_shape_design)
+            ],
+            theta.shape[: theta.ndim - len(self.event_shape_theta)],
+        )
+        step_shape = (*batch_shape, T)
+
+        def flat(x, event_shape):
+            """Broadcasts x, which already carries a T axis, over the steps."""
+            return x.expand(*step_shape, *event_shape).reshape(-1, *event_shape)
+
+        # theta is shared across steps; give a T axis to broadcast along
+        theta = theta.unsqueeze(theta.ndim - len(self.event_shape_theta))
+        logp = self._outcome_logp(
+            flat(y_history, self.event_shape_y),
+            flat(theta, self.event_shape_theta),
+            flat(design_history, self.event_shape_design),
+            y_history=None,
+            design_history=None,
+        )
+        return logp.reshape(step_shape).sum(-1)
+
+    def _sequential_history_logp(
+        self, y_history, design_history, theta, y_context, design_context
+    ):
+        """Scores the steps one at a time, each conditioned on its full prefix."""
         # Context becomes null for memoryless tasks
         y_context, design_context = self._context_history(y_context, design_context)
 

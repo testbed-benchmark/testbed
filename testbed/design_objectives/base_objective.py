@@ -11,9 +11,14 @@ from ..tasks.base import Task
 class Objective(ABC):
     """Shared base for design objectives."""
 
-    def __init__(self, task: Task):
-        """Initializes."""
+    def __init__(self, task: Task, fused: bool = False):
+        """Initializes.
+
+        fused scores a trajectory in one compiled call rather than looping over
+        the T steps. See ``Task.history_logp``.
+        """
         self.task = task
+        self.fused = bool(fused)
 
 
 class DesignObjective(Objective):
