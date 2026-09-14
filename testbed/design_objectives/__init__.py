@@ -8,6 +8,7 @@ from .base_objective import DesignObjective, Objective, RolloutObjective
 from .log_loss import LogLoss
 from .loss import (
     LogMSELoss,
+    PermutationInvariantLogMSELoss,
     PermutationInvariantMSELoss,
     SortedLogMSELoss,
     SortedMSELoss,
