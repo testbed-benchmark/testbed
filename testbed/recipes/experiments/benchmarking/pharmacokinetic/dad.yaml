@@ -1,0 +1,33 @@
+# @package _global_
+
+defaults:
+  - /method: dad
+  - override /task: pharmacokinetic
+  - _self_
+
+# Benchmark run of DAD on the pharmacokinetic model (T = 10 sampling times).
+#
+
+seed: 0
+# designer
+# Condition on the unconstrained designs the policy emits rather than on the
+# sampling times in [0, 24]. The tanh squash makes the two bijective, and the
+# raw values are O(1), so the encoder needs no input normalization.
+use_raw_history: true
+# objective
+objective:
+  name: spce
+  n_inner: 2_000  # contrastive samples for sPCE
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false
+# training
+n_train_iter: 200_000
+n_outer: 2_048
+
+# eval
+eval_every: 0  # the final_eval block handles it
+
+wandb:
+  project: benchmarking_pharmacokinetic  # the sweep pins the same value
+  group: dad_attention_2000
