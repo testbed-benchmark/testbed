@@ -18,7 +18,7 @@ urls = {Homepage = 'https://github.com/testbed-benchmark/testbed'}
 
 dependencies = [
     'numpy>=1.24',
-    "torch>=2.1",
+    "torch>=2.5",
     'pyyaml',
     'hydra-core',
     'tqdm',
@@ -48,6 +48,11 @@ include = ["testbed*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # Raised inside torch: torch.compile imports torch.utils.mkldnn, which still
+    # uses the deprecated torch.jit.script_method.
+    "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning:torch.jit._script",
+]
 
 [tool.ruff]
 extend-exclude = ["testbed/notebooks/**/*.ipynb"]

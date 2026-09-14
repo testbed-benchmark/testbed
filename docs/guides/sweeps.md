@@ -96,8 +96,36 @@ final_eval:
 
  Add `final_eval.n_outer=32` to a sweep's `command` block when the defaults do not fit the
 time available, and `final_eval.enabled=false` to skip evaluation for that recipe.
-These are not wrapper flags: the values are read back from the run's saved config, which
-is also how `python -m testbed.eval.eval_policy <run_dir>` sizes itself.
+These are the values a run is evaluated with in its own job: they are read back from the
+run's saved config, which is also how `python -m testbed.eval.eval_policy <run_dir>`
+sizes itself. `eval_run.py` takes `--n-outer` and `--n-contrastive` on top of them, for
+re-scoring a finished checkpoint at a size the recipe did not ask for.
+
+## Re-evaluating a finished sweep
+
+An sPCE lower bound cannot exceed `log(L+1)`, so a strong policy evaluated at too small
+an `n_contrastive` reports the ceiling rather than its gain. Re-scoring at a larger L
+tells the two apart. `scripts/sweep_reeval.py` takes a sweep id, resolves each run to
+its run directory, and calls `eval_run.py` on it:
+
+```sh
+python scripts/sweep_reeval.py <sweep_id> --project location_finding_2src --list
+python scripts/sweep_reeval.py <sweep_id> --project location_finding_2src \
+    --n-contrastive 100000000 --n-outer 512 --prefix eval_L1e8
+```
+
+`--prefix` namespaces both the metric keys and the JSON file, so the new bounds land
+beside the original `eval/*` columns on the same W&B run instead of overwriting them.
+`scripts/reeval.sbatch` runs one array task per run, as `agent.sbatch` does for training:
+
+```sh
+sbatch --array=0-4 scripts/reeval.sbatch <entity>/<project>/<sweep_id> \
+    --n-contrastive 100000000 --n-outer 512 --prefix eval_L1e8
+```
+
+Cost scales as `n_outer x n_contrastive x T`, while the ceiling only grows as `log(L+1)`,
+so buy L with a smaller `n_outer`: the lower bound's standard error is well under 0.05 at
+`n_outer=512`, far finer than the nats a larger L adds.
 
 ## Picking up after crashes
 

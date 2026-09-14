@@ -29,8 +29,18 @@ ENTRY_POINT_RECIPES = [
     "experiments/location_finding_2src/rlboed",
     "experiments/prey_population/rlboed",
     "experiments/constant_elasticity_of_substitution/dad",
+    "experiments/constant_elasticity_of_substitution/joint_var_post",
     "experiments/constant_elasticity_of_substitution/actionbed",
+    "experiments/benchmarking/location_finding_2src/dad",
+    "experiments/benchmarking/location_finding_2src/joint_var_post",
+    "experiments/benchmarking/temporal_discounting/dad",
+    "experiments/benchmarking/temporal_discounting/joint_var_post",
+    "experiments/benchmarking/constant_elasticity_of_substitution/dad",
+    "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post",
 ]
+
+
+BENCHMARK_RECIPES = [r for r in ENTRY_POINT_RECIPES if "/benchmarking/" in r]
 
 
 def _compose(recipe):
@@ -54,6 +64,7 @@ def test_recipe_composes(recipe):
         "testbed.tasks.LocationFinding",
         "testbed.tasks.PreyPopulation",
         "testbed.tasks.CES",
+        "testbed.tasks.HyperbolicTemporalDiscounting",
     }
     assert cfg.wandb.enabled is False
 
@@ -199,3 +210,106 @@ def test_rlboed_rejects_unknown_architecture():
         )
     with pytest.raises(InstantiationException, match="architecture must be"):
         instantiate_design_net(cfg.design_net, instantiate(cfg.task))
+
+
+def test_ces_joint_var_post_recipe_uses_a_constrained_posterior():
+    cfg = _compose("experiments/constant_elasticity_of_substitution/joint_var_post")
+
+    assert cfg.task._target_ == "testbed.tasks.CES"
+    assert (
+        cfg.posterior_net._target_
+        == "testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet"
+    )
+    # 4 unconstrained coordinates -> (rho, alpha_1, alpha_2, alpha_3, u).
+    assert cfg.posterior_net.transform.raw_sizes == [1, 2, 1]
+    assert cfg.posterior_net.transform.theta_sizes == [1, 3, 1]
+    assert cfg.posterior_net.canonicalize_theta is False
+
+
+def test_htd_joint_var_post_recipe_uses_a_constrained_posterior():
+    cfg = _compose("experiments/temporal_discounting/joint_var_post")
+
+    assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
+    assert (
+        cfg.posterior_net._target_
+        == "testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet"
+    )
+    # Two width-1 blocks: exp on k, identity on alpha. alpha must NOT go
+    # through a log; that is what NaN'd sweep 3tu0ab2h.
+    assert cfg.posterior_net.transform.raw_sizes == [1, 1]
+    assert cfg.posterior_net.transform.theta_sizes == [1, 1]
+    targets = [t._target_ for t in cfg.posterior_net.transform.transforms]
+    assert targets == [
+        "torch.distributions.transforms.ExpTransform",
+        "torch.distributions.transforms.AffineTransform",
+    ]
+    assert cfg.posterior_net.canonicalize_theta is False
+
+
+def test_htd_posterior_transform_matches_the_task_theta_width():
+    from testbed.methods.var_post import build_posterior_net
+
+    cfg = _compose("experiments/temporal_discounting/joint_var_post")
+    task = instantiate(cfg.task)
+    net = build_posterior_net(cfg, task)
+
+    assert net.transform.dim_theta == task.event_shape_theta.numel() == 2
+    assert net.transform.dim_raw == net.dim_latent == 2
+    assert net.loc_head.out_features == cfg.posterior_net.n_components * 2
+
+
+def test_var_post_recipes_actually_instantiate_their_posterior_net():
+    """Builds the nets, rather than only asserting on `_target_` strings.
+
+    Every other test here checks the composed config without instantiating, so a
+    posterior_net block with a misspelled kwarg composes cleanly and passes. This
+    is the only thing that catches it.
+    """
+    from testbed.methods.var_post import build_posterior_net
+
+    recipes = [
+        "method/var_post",
+        "method/joint_var_post",
+        "experiments/constant_elasticity_of_substitution/joint_var_post",
+        "experiments/temporal_discounting/var_post",
+        "experiments/temporal_discounting/joint_var_post",
+        "experiments/location_finding_2src/joint_var_post",
+        *[r for r in BENCHMARK_RECIPES if r.endswith("/joint_var_post")],
+    ]
+    for recipe in recipes:
+        cfg = _compose(recipe)
+        task = instantiate(cfg.task)
+        net = build_posterior_net(cfg, task)
+        assert sum(p.numel() for p in net.parameters()) > 0, recipe
+
+
+@pytest.mark.parametrize("recipe", BENCHMARK_RECIPES)
+def test_benchmark_recipes_share_one_configuration(recipe):
+    """The benchmarking suite varies the task and the method, nothing else.
+
+    Its whole point is that a table built from it compares methods rather than
+    architectures or budgets, which holds only while these agree.
+    """
+    cfg = _compose(recipe)
+
+    assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
+    assert cfg.n_train_iter == 200_000
+    assert cfg.n_outer == 2_048
+    task = recipe.split("/")[-2]
+    assert cfg.wandb.project == f"benchmarking_{task}"
+
+
+def test_ces_posterior_transform_matches_the_task_theta_width():
+    """The recipe's transform must emit exactly CES's 5 theta coordinates.
+
+    Instantiating the net is what enforces it; the constructor raises otherwise.
+    """
+    from testbed.methods.var_post import build_posterior_net
+
+    cfg = _compose("experiments/constant_elasticity_of_substitution/joint_var_post")
+    task = instantiate(cfg.task)
+    net = build_posterior_net(cfg, task)
+
+    assert net.transform.dim_theta == task.event_shape_theta.numel() == 5
+    assert net.transform.dim_raw == net.dim_latent == 4
+    assert net.loc_head.out_features == cfg.posterior_net.n_components * 4

@@ -9,14 +9,14 @@ from testbed.design_objectives import SNMC, SPCE
 from testbed.design_objectives.contrastive import contrastive_logsumexps
 
 
-def chunked_spce_snmc(task, rollout, n_contrastive, chunk_size):
+def chunked_spce_snmc(task, rollout, n_contrastive, chunk_size, fused=True):
     """SPCE (lower) and SNMC (upper) per-sample gains, chunked over n_contrastive.
 
     Both bounds come from one set of contrastive draws, so the expensive
     sampling is paid for once rather than per bound.
     """
     logp_joint, chunk_logsumexps = contrastive_logsumexps(
-        task, rollout, n_contrastive, chunk_size
+        task, rollout, n_contrastive, chunk_size, fused=fused
     )
     lower = SPCE.gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive)
     upper = SNMC.gain_from_logsumexps(logp_joint, chunk_logsumexps, n_contrastive)
@@ -31,6 +31,7 @@ def eval_spce_snmc(
     outer_batch_size: int = 256,
     contrastive_chunk_size: int = 2_000,
     verbose: bool = True,
+    fused: bool = True,
 ):
     """Evaluates the SPCE/SNMC bounds on the EIG.
 
@@ -39,6 +40,11 @@ def eval_spce_snmc(
     If verbose, shows a progress bar over the outer batches. `disable=None`
     lets tqdm silence itself when stderr is not a terminal, so batch jobs
     don't flood their logs.
+
+    `fused` compiles the contrastive scoring into one call per chunk instead
+    of a loop over the T steps, which is worth one-off compilation at eval
+    sizes. It is ignored for tasks whose steps are not independent. Pass
+    False to fall back to the per-step loop.
     """
     lower_gains, upper_gains = [], []
     remaining = n_outer
@@ -56,7 +62,7 @@ def eval_spce_snmc(
             theta0 = task.sample_prior(b)
             rollout = designer.rollout(theta0)
             lower, upper = chunked_spce_snmc(
-                task, rollout, n_contrastive, contrastive_chunk_size
+                task, rollout, n_contrastive, contrastive_chunk_size, fused=fused
             )
             lower_gains.append(lower)
             upper_gains.append(upper)

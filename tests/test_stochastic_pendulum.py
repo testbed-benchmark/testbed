@@ -95,6 +95,23 @@ def test_outcome_logp_matches_analytic_gaussian_density():
     assert torch.allclose(logp, expected, atol=1e-5)
 
 
+def test_noise_scale_defaults_to_isotropic_and_accepts_per_coordinate():
+    torch.manual_seed(0)
+    assert torch.equal(StochasticPendulum().noise_scale, torch.full((2,), 0.1))
+
+    # the diffusion of Iqbal et al. (2024), noise on the angular velocity only
+    scale = [1e-3, 0.2]
+    task = StochasticPendulum(noise_scale=scale)
+    theta = torch.ones(20_000, 2)
+    design = torch.zeros(20_000, 1)
+
+    samples = task.sample_outcome(theta, design)
+    expected_std = math.sqrt(task.dt) * torch.tensor(scale)
+
+    assert torch.allclose(task.noise_scale, torch.tensor(scale))
+    assert torch.allclose(samples.std(dim=0), expected_std, rtol=0.05)
+
+
 def test_sample_outcome_is_reparametrized():
     task = StochasticPendulum()
     theta = task.sample_prior(8)
@@ -169,3 +186,37 @@ def test_static_designer_rollout_end_to_end():
     assert rollout.y_history.shape == (4, 5, 2)
     logp = task.history_logp(rollout.y_history, rollout.design_history, rollout.theta)
     assert torch.isfinite(logp).all()
+
+
+def test_noise_jitter_defaults_off_and_regularizes_a_singular_diffusion():
+    task = StochasticPendulum()
+
+    assert task.noise_jitter == 0.0
+    assert torch.allclose(task.obs_std, math.sqrt(task.dt) * task.noise_scale)
+
+    # the literal diffusion of Iqbal et al. (2024), regularized as their code does
+    # (covar = L**2 * dt + 1e-8) rather than left singular
+    task = StochasticPendulum(noise_scale=[0.0, 0.1], noise_jitter=1e-8)
+    expected = torch.sqrt(task.dt * task.noise_scale**2 + 1e-8)
+
+    assert torch.allclose(task.obs_std, expected)
+    assert (task.obs_std > 0).all()
+
+    theta = task.sample_prior(4)
+    design = task.design_space.sample((4,))
+    logp = task.outcome_logp(task.sample_outcome(theta, design), theta, design)
+
+    assert torch.isfinite(logp).all()
+
+
+def test_noise_scale_is_a_buffer_that_round_trips_through_state_dict():
+    task = StochasticPendulum()
+
+    assert "noise_scale" in task.state_dict()
+    # a broadcast view would be stride-0, which load_state_dict cannot copy into
+    assert task.noise_scale.is_contiguous()
+
+    other = StochasticPendulum(noise_scale=[0.2, 0.3])
+    other.load_state_dict(task.state_dict())
+
+    assert torch.equal(other.noise_scale, task.noise_scale)

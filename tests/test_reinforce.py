@@ -72,7 +72,11 @@ def test_build_objective_creates_reinforce():
     task = _make_task()
     cfg = SimpleNamespace(
         objective=SimpleNamespace(
-            name="reinforce", n_inner=4, baseline=None, requires_policy_log_probs=False
+            name="reinforce",
+            n_inner=4,
+            baseline=None,
+            requires_policy_log_probs=False,
+            fused=False,
         )
     )
 
@@ -369,6 +373,7 @@ def test_train_step_with_reinforce(net_factory, requires_policy_log_probs):
             n_inner=4,
             baseline=None,
             requires_policy_log_probs=requires_policy_log_probs,
+            fused=False,
         ),
     )
     objective = build_objective(cfg, task)

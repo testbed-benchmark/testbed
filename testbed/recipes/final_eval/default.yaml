@@ -4,7 +4,11 @@
 enabled: true
 checkpoint: final_step.pt
 n_outer: 2_048
-n_contrastive: 1_000_000
+n_contrastive: 1_000_000_000
 outer_batch_size: 256
 contrastive_chunk_size: 200_000
 use_raw_weights: false  # prefer design_net_ema when the checkpoint has one
+fused: true
+
+designer:
+  _target_: testbed.designers.PolicyDesigner

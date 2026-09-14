@@ -191,6 +191,7 @@ AGENTS.md
 CLAUDE.md
 misc/
 uv.lock
+.tokensave
 
 temp/
 tmp/

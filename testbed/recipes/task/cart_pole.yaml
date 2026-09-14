@@ -1,0 +1,18 @@
+# @package _global_
+
+# Task defaults, from https://arxiv.org/abs/2402.07868.
+T: 50
+
+task:
+  _target_: testbed.tasks.CartPole
+  dt: 0.05  # Euler-Maruyama step
+  stiffness_c: 0.01  # k1
+  stiffness_p: 0.01  # k2
+  damping_c: 0.01  # d1
+  damping_p: 0.01  # d2
+  # L = [0, 0, 0.1, 0]: the SDE drives the cart velocity only.
+  noise_scale: [0.0, 0.0, 0.1, 0.0]
+  noise_jitter: 1.0e-6  # not in the paper; keeps the other three coordinates non-degenerate
+  prior: null  # use the standard log-normal prior on (mp, mc, l)
+  design_space: null  # derive the standard force range, -5 to 5
+  reparameterize_outcomes: true  # Gaussian noise on a differentiable drift

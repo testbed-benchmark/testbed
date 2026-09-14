@@ -79,21 +79,27 @@ def test_evaluate_returns_placeholder_metrics():
 
 def test_build_objective_creates_snmc():
     task = _make_task()
-    cfg = SimpleNamespace(objective=SimpleNamespace(name="snmc", n_inner=4))
+    cfg = SimpleNamespace(
+        objective=SimpleNamespace(name="snmc", n_inner=4, fused=False)
+    )
     obj = build_objective(cfg, task)
     assert isinstance(obj, SNMC)
 
 
 def test_build_objective_creates_spce():
     task = _make_task()
-    cfg = SimpleNamespace(objective=SimpleNamespace(name="spce", n_inner=4))
+    cfg = SimpleNamespace(
+        objective=SimpleNamespace(name="spce", n_inner=4, fused=False)
+    )
     obj = build_objective(cfg, task)
     assert isinstance(obj, SPCE)
 
 
 def test_build_objective_rejects_unknown_name():
     task = _make_task()
-    cfg = SimpleNamespace(objective=SimpleNamespace(name="unknown", n_inner=4))
+    cfg = SimpleNamespace(
+        objective=SimpleNamespace(name="unknown", n_inner=4, fused=False)
+    )
     with pytest.raises(KeyError):
         build_objective(cfg, task)
 
