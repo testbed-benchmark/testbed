@@ -427,5 +427,6 @@ def make_history_encoder(
     if architecture == "deepset":
         return DeepSetEncoder(**kwargs)
     if architecture == "attention":
-        return AttentiveEncoder(**kwargs, **dict(attention or {}))
+        kwargs.update(dict(attention or {}))
+        return AttentiveEncoder(**kwargs)
     raise ValueError("architecture must be 'deepset' or 'attention'.")

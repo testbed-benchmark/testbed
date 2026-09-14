@@ -1,0 +1,10 @@
+# @package _global_
+
+# Original benchmark schedule: 200,000 updates.
+sac:
+  num_training_iterations: 3_125
+  gradient_steps_per_iteration: 64
+  entropy_anneal_rate: 7.142857142857143e-05
+
+wandb:
+  group: rlboed_attention_deepset_updates64
