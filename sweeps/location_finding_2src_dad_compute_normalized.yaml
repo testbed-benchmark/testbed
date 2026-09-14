@@ -9,7 +9,7 @@ parameters:
   seed:
     values: [0, 1, 2, 3, 4]
   objective.n_inner:
-    values: [16, 64, 256, 1024, 4096]
+    values: [256, 512, 1024, 2048, 4096, 8192, 16384]
 
 command:
   - ${interpreter}
