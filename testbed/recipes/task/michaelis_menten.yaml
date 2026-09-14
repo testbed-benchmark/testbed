@@ -1,0 +1,11 @@
+# @package _global_
+
+# Task defaults
+T: 20
+
+task:
+  _target_: testbed.tasks.MichaelisMenten
+  noise_scale: 2.5
+  exponent: 1.0
+  prior: null  # use the standard prior
+  reparameterize_outcomes: true  # set false to train with REINFORCE

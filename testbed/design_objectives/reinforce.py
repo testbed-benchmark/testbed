@@ -133,6 +133,13 @@ class Reinforce(RolloutObjective, ABC):
 
         returns: scalar whose value is mean(V) and whose gradient is the estimate.
         """
+        return self.per_sample_gain(rollout).mean()
+
+    def per_sample_gain(self, rollout: Rollout):
+        """Per-sample REINFORCE surrogate; values are V, gradients the estimate.
+
+        returns: [b]
+        """
         value = self.calculate_value(rollout)  # [b]
 
         # Stochastic policy: standard REINFORCE.
@@ -166,7 +173,7 @@ class Reinforce(RolloutObjective, ABC):
                 fused=self.fused,
             )  # [b]
 
-        return _add_score_gradient(value, score, self._apply_baseline(value)).mean()
+        return _add_score_gradient(value, score, self._apply_baseline(value))
 
     def _apply_baseline(self, value: Tensor):
         """Leave-one-out control variate on the score term, or 0.0 if disabled."""
@@ -210,10 +217,11 @@ class SPCEReinforce(Reinforce):
         stochastic_design_policy: bool,
         baseline: str | None = None,
         fused: bool = False,
+        chunk_size: int | None = None,
     ):
         """Initializes."""
         super().__init__(task, stochastic_design_policy, baseline, fused=fused)
-        self.spce = SPCE(task, n_contrastive, fused=fused)
+        self.spce = SPCE(task, n_contrastive, chunk_size=chunk_size, fused=fused)
 
     def calculate_value(self, rollout: Rollout) -> Tensor:
         """Computes the per-sample SPCE gain."""

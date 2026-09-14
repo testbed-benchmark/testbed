@@ -1,0 +1,22 @@
+# @package _global_
+
+defaults:
+  - /method: static
+  - override /task: constant_elasticity_of_substitution
+  - _self_
+
+# The censored outcome's pathwise gradient drops the censoring-probability term
+# and degrades the designs, so hold outcomes fixed and add the score term.
+task:
+  reparameterize_outcomes: false
+
+objective:
+  name: reinforce
+  baseline: leave_one_out
+  n_inner: 8_192  # CES designs score near log(4097), where the sPCE bound saturates
+
+eval_every: 0  # no need to eval during training
+
+wandb:
+  project: benchmarking_constant_elasticity_of_substitution  # task
+  group: static # method

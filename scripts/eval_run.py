@@ -34,9 +34,11 @@ import json
 import sys
 from pathlib import Path
 
+from hydra.utils import get_class
 from omegaconf import OmegaConf
 
-from testbed.eval import evaluate_checkpoint
+from testbed.designers import StaticDesigner
+from testbed.eval import evaluate_checkpoint, evaluate_static_checkpoint
 
 
 def log_to_wandb(run_dir: Path, run_id: str, results: dict, prefix: str) -> None:
@@ -107,18 +109,23 @@ def main() -> None:
         print("final_eval.enabled is false; skipping")
         return
 
-    results = evaluate_checkpoint(
-        str(run_dir),
-        checkpoint=settings.checkpoint,
-        n_outer=args.n_outer or settings.n_outer,
-        n_contrastive=args.n_contrastive or settings.n_contrastive,
-        outer_batch_size=settings.outer_batch_size,
-        contrastive_chunk_size=settings.contrastive_chunk_size,
-        use_raw_weights=settings.use_raw_weights,
-        device=args.device or cfg.device,
+    kwargs = {
+        "checkpoint": settings.checkpoint,
+        "n_outer": args.n_outer or settings.n_outer,
+        "n_contrastive": args.n_contrastive or settings.n_contrastive,
+        "outer_batch_size": settings.outer_batch_size,
+        "contrastive_chunk_size": settings.contrastive_chunk_size,
+        "device": args.device or cfg.device,
         # run configs saved before final_eval.fused existed default to fused
-        fused=settings.get("fused", True),
-    )
+        "fused": settings.get("fused", True),
+    }
+    designer = OmegaConf.select(settings, "designer._target_")
+    if designer and issubclass(get_class(designer), StaticDesigner):
+        results = evaluate_static_checkpoint(str(run_dir), **kwargs)
+    else:
+        results = evaluate_checkpoint(
+            str(run_dir), use_raw_weights=settings.use_raw_weights, **kwargs
+        )
     (run_dir / f"{args.prefix}.json").write_text(json.dumps(results, indent=2))
     print(results)
 

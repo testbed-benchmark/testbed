@@ -6,7 +6,7 @@ from torch import nn
 
 from testbed.core.rollout import Rollout
 from testbed.core.setup import setup
-from testbed.design_objectives import SNMC, SPCE
+from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import StaticDesigner
 from testbed.eval import eval_spce_snmc
 
@@ -162,13 +162,14 @@ class Trainer:
     def _checkpoint(self, best, step, gain, gain_per_restart=None):
         # The winner's raw design is what evaluation reloads; the others ride
         # along so a finished run can be re-ranked without retraining.
+        designs = torch.stack([d.design.detach().cpu() for d in self.designers])
         state = {
             "raw_design": self.designers[best].raw_design.detach().cpu(),
             "raw_designs": torch.stack(
                 [d.raw_design.detach().cpu() for d in self.designers]
             ),
-            "design": self.designers[best].design.detach().cpu(),
-            "designs": torch.stack([d.design.detach().cpu() for d in self.designers]),
+            "design": designs[best],
+            "designs": designs,
             "transform_designs": self.designers[best].transform_designs,
             "best_restart": best,
             "step": step,
@@ -215,13 +216,20 @@ class Trainer:
 def build_objective(cfg, task):
     """Instantiates the objective for training static designs.
 
-    Restricted to the bounds that expose a per-sample gain, which is what
-    scores the restarts separately. REINFORCE has no place here: a
-    StaticDesigner is deterministic, so its gain differentiates directly.
+    Restricted to objectives that expose a per-sample gain, which is what
+    scores the restarts separately. A StaticDesigner is deterministic, so
+    "reinforce" is DAD's Eq. 16 estimator: the pathwise sPCE gradient plus the
+    outcome score term, for tasks whose outcomes carry no pathwise gradient.
     """
     objectives = {
         "snmc": SNMC,
         "spce": SPCE,
+        "reinforce": lambda task, **kw: SPCEReinforce(
+            task,
+            stochastic_design_policy=False,
+            baseline=cfg.objective.baseline,
+            **kw,
+        ),
     }
     name = cfg.objective.name
     if name not in objectives:

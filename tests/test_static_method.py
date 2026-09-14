@@ -5,11 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from testbed.eval.eval_static import load_static_designer
+from omegaconf import OmegaConf
 
 from testbed.core.manager import Manager
-from testbed.design_objectives import SNMC, SPCE
+from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import StaticDesigner
+from testbed.eval.eval_static import (
+    evaluate_static_checkpoint,
+    load_static_designer,
+)
 from testbed.methods.static import Trainer, build_objective
 from testbed.tasks import LocationFinding
 
@@ -64,10 +68,19 @@ def test_restart_gains_are_per_restart():
     assert gains.shape == (len(designers),)
 
 
-def test_restarts_do_not_share_gradients():
+@pytest.mark.parametrize("reinforce", [False, True])
+def test_restarts_do_not_share_gradients(reinforce):
     # The whole point of restarts: each design must be optimized as if it were
     # alone, so one restart's gain may not depend on another's parameters.
+    # The leave-one-out baseline pools restarts but is detached, so still holds.
     trainer, designers = _make_trainer(n_restarts=3)
+    if reinforce:
+        trainer.task = LocationFinding(
+            n_sources=1, dim_theta=2, reparameterize_outcomes=False
+        )
+        trainer.objective = SPCEReinforce(
+            trainer.task, 4, stochastic_design_policy=False, baseline="leave_one_out"
+        )
     gains = trainer.restart_gains(4)
 
     grads = torch.autograd.grad(
@@ -122,16 +135,28 @@ def test_build_objective_creates_spce_and_snmc():
         assert isinstance(build_objective(cfg, task), expected)
 
 
-def test_build_objective_rejects_reinforce():
-    # A StaticDesigner is deterministic, so there is no policy to score.
-    task = _make_task()
+def test_build_objective_creates_deterministic_reinforce():
+    task = LocationFinding(n_sources=1, dim_theta=2, reparameterize_outcomes=False)
     cfg = SimpleNamespace(
         objective=SimpleNamespace(
-            name="reinforce", n_inner=4, chunk_size=None, fused=False
+            name="reinforce",
+            n_inner=4,
+            chunk_size=None,
+            fused=False,
+            baseline="leave_one_out",
         )
     )
+    objective = build_objective(cfg, task)
+    assert isinstance(objective, SPCEReinforce)
+    assert not objective.stochastic_design_policy
+
+
+def test_build_objective_rejects_unknown():
+    cfg = SimpleNamespace(
+        objective=SimpleNamespace(name="nmc", n_inner=4, chunk_size=None, fused=False)
+    )
     with pytest.raises(ValueError):
-        build_objective(cfg, task)
+        build_objective(cfg, _make_task())
 
 
 def test_checkpoint_roundtrips_through_load_static_designer():
@@ -141,6 +166,31 @@ def test_checkpoint_roundtrips_through_load_static_designer():
     assert state["raw_designs"].shape == (len(designers), T, 2)
     reloaded = load_static_designer(_make_task(), state, T)
     assert torch.equal(reloaded.raw_design, designers[1].raw_design)
+
+
+def test_evaluate_static_checkpoint_scores_saved_run(tmp_path):
+    trainer, _ = _make_trainer()
+    torch.save(trainer._checkpoint(best=2, step=0, gain=0.0), tmp_path / "final.pt")
+    task_cfg = {
+        "_target_": "testbed.tasks.LocationFinding",
+        "n_sources": 1,
+        "dim_theta": 2,
+    }
+    (tmp_path / ".hydra").mkdir()
+    OmegaConf.save({"T": T, "task": task_cfg}, tmp_path / ".hydra" / "config.yaml")
+
+    out = evaluate_static_checkpoint(
+        str(tmp_path),
+        checkpoint="final.pt",
+        n_outer=8,
+        n_contrastive=16,
+        outer_batch_size=4,
+        contrastive_chunk_size=8,
+        fused=False,
+    )
+
+    assert out["best_restart"] == 2
+    assert out["lower_bound"] <= out["upper_bound"]
 
 
 def test_maybe_save_best_saves_checkpoint_on_improvement(tmp_path):
