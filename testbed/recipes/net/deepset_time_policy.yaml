@@ -1,0 +1,20 @@
+# net/deepset_large_policy with learned time embeddings switched on, for the
+# architecture ablation. Every other value is identical, so the pair isolates
+# what order-awareness contributes to the DeepSets rows, the same way
+# net/attentive_no_time_policy does for the attention rows.
+#
+# The embedding is concatenated onto each token.
+#
+#
+_target_: testbed.design_nets.TimeEmbeddedDeepSetPolicyNet
+encoder_dim_h: [528, 528, 528]
+dim_emb: 128
+dim_time: 128
+max_T: 128
+encoder_activation:
+  _target_: torch.nn.GELU
+  _partial_: true
+decoder_dim_h: [128]
+decoder_activation:
+  _target_: torch.nn.GELU
+  _partial_: true

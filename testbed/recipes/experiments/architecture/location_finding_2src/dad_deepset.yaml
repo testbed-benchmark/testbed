@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - /experiments/benchmarking/location_finding_2src/dad
+  - override /net@design_net: deepset_policy
+  - _self_
+
+wandb:
+  project: architecture_location_finding_2src
+  group: dad_deepset

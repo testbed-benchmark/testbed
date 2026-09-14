@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - /experiments/benchmarking/stochastic_pendulum/dad
+  - override /net@design_net: deepset_large_policy
+  - _self_
+
+wandb:
+  project: architecture_stochastic_pendulum
+  group: dad_deepset_large

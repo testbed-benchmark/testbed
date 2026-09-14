@@ -11,6 +11,7 @@ from testbed.design_nets.encoder import (
     DeepSetEncoder,
     GatedDeepSetEncoder,
     HistoryEncoder,
+    TimeEmbeddedDeepSetEncoder,
 )
 from testbed.design_nets.modules import MLP
 
@@ -114,6 +115,8 @@ class AttentivePolicyNet(DeterministicPolicyNet):
         num_blocks=2,
         decoder_dim_h=None,
         decoder_activation=nn.GELU,
+        use_time_embedding=True,
+        max_T=128,
     ):
         """Initializes the attentive policy preset.
 
@@ -127,6 +130,9 @@ class AttentivePolicyNet(DeterministicPolicyNet):
             num_blocks: Number of Transformer blocks.
             decoder_dim_h: Optional decoder hidden widths.
             decoder_activation: Decoder activation class.
+            use_time_embedding: Whether tokens carry a learned step embedding.
+                False leaves the encoder permutation invariant.
+            max_T: Longest history the embedding table covers.
         """
         encoder = AttentiveEncoder(
             event_shape_y,
@@ -135,6 +141,8 @@ class AttentivePolicyNet(DeterministicPolicyNet):
             dim_emb=dim_emb,
             num_heads=num_heads,
             num_blocks=num_blocks,
+            use_time_embedding=use_time_embedding,
+            max_T=max_T,
         )
 
         super().__init__(
@@ -181,6 +189,58 @@ class DeepSetPolicyNet(DeterministicPolicyNet):
             dim_h=encoder_dim_h,
             dim_emb=dim_emb,
             activation=encoder_activation,
+        )
+        super().__init__(
+            encoder,
+            event_shape_out,
+            dim_h=decoder_dim_h,
+            activation=decoder_activation,
+        )
+
+
+class TimeEmbeddedDeepSetPolicyNet(DeterministicPolicyNet):
+    """Preset: TimeEmbeddedDeepSetEncoder + MLP readout.
+
+    DeepSetPolicyNet with a learned step embedding concatenated onto each
+    token, so the encoder is order-aware rather than permutation invariant.
+    The architecture-ablation counterpart to DeepSetPolicyNet.
+    """
+
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        event_shape_out,
+        encoder_dim_h=(128, 128),
+        dim_emb=64,
+        encoder_activation=nn.ReLU,
+        decoder_dim_h=None,
+        decoder_activation=nn.GELU,
+        dim_time=None,
+        max_T=128,
+    ):
+        """Initializes the time-embedded DeepSets policy preset.
+
+        Args:
+            event_shape_y: Shape of one outcome event.
+            event_shape_design: Shape of one design-history event.
+            event_shape_out: Shape of one proposed design.
+            encoder_dim_h: Hidden widths in the per-token encoder.
+            dim_emb: History embedding width.
+            encoder_activation: Encoder activation class.
+            decoder_dim_h: Optional decoder hidden widths.
+            decoder_activation: Decoder activation class.
+            dim_time: Width of the time embedding (default: dim_emb).
+            max_T: Longest history the embedding table covers.
+        """
+        encoder = TimeEmbeddedDeepSetEncoder(
+            event_shape_y,
+            event_shape_design,
+            dim_h=encoder_dim_h,
+            dim_emb=dim_emb,
+            activation=encoder_activation,
+            dim_time=dim_time,
+            max_T=max_T,
         )
         super().__init__(
             encoder,
