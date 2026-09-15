@@ -41,7 +41,7 @@ sac:
   num_training_iterations: 100_000
   num_envs: 100
   buffer_size: 10_000_000
-  buffer_device: cpu
+  buffer_device: cuda
   gamma: 0.9
   tau: 0.001
   batch_size: 4096

@@ -13,6 +13,7 @@ import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import optim
 
@@ -54,7 +55,7 @@ def _restore_rng(state):
         (name, np.asarray(keys, dtype=np.uint32), pos, has_gauss, cached)
     )
     torch.set_rng_state(state["torch"].cpu())
-    if state["cuda"] is not None:
+    if state["cuda"] is not None and torch.cuda.is_available():
         torch.cuda.set_rng_state_all([value.cpu() for value in state["cuda"]])
 
 
@@ -1050,6 +1051,161 @@ class Trainer:
 # ============================================================================
 # Helper functions
 # ============================================================================
+
+
+def load_checkpoint(
+    path,
+    *,
+    device=None,
+    buffer_device=None,
+    train_time_budget_seconds=None,
+    num_training_iterations=None,
+    manager=None,
+) -> Trainer:
+    """Reconstructs a trainer from a full version-2 checkpoint.
+
+    Restores networks, optimizers, replay data, temperature, counters, losses,
+    partial-iteration progress and random generators. Periodic policy-only
+    checkpoints cannot resume training. The saved configuration is used rather
+    than the current recipe defaults; device overrides explicitly move the
+    model or replay data. Exact continuation requires the same device/RNG setup.
+
+    Time and iteration limits are cumulative, including completed training.
+    For example, pass ``train_time_budget_seconds=24 * 3600`` to continue a run
+    that stopped after 12 hours. Time between saving and loading is excluded;
+    the timer restarts on entry to this function and includes reconstruction.
+    Call ``trainer.train()`` on the returned trainer to continue. Supply a
+    manager to enable logging and automatic checkpoint saving in the new run;
+    without one, use ``torch.save(trainer.build_checkpoint(), output_path)``.
+
+    Args:
+        path: Path to a full checkpoint, typically ``final_step.pt``.
+        device: Optional model/task device, otherwise the saved device.
+        buffer_device: Optional replay device, otherwise the saved device.
+        train_time_budget_seconds: Optional new total training time limit.
+        num_training_iterations: Optional new total iteration limit.
+        manager: Optional output manager, configured for the resumed run.
+
+    Returns:
+        A trainer ready to continue from the saved update.
+
+    Raises:
+        ValueError: If the checkpoint lacks training state or has no budget left.
+    """
+    start_time = time.monotonic()
+    # Keep replay data and RNG bytes on CPU until their destinations are known.
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    required = {
+        "config",
+        "design_net",
+        "use_raw_history",
+        "qf1",
+        "qf2",
+        "qf1_target",
+        "qf2_target",
+        "actor_optimizer",
+        "q_optimizer",
+        "log_alpha",
+        "alpha_optimizer",
+        "target_entropy",
+        "replay_buffer",
+        "rng_state",
+        "completed_iterations",
+        "optimization_step",
+        "completed_episodes",
+        "env_steps",
+        "_first_collect",
+        "iteration_progress",
+        "losses",
+        "elapsed_seconds",
+    }
+    if (
+        not isinstance(state, dict)
+        or state.get("checkpoint_version") != 2
+        or not required.issubset(state)
+    ):
+        raise ValueError(
+            "Resuming requires a full version-2 checkpoint (final_step.pt), "
+            "including optimizer, replay and RNG state; policy-only checkpoints "
+            "cannot resume training."
+        )
+
+    cfg = OmegaConf.create(state["config"])
+    if device is not None:
+        cfg.device = str(device)
+    if buffer_device is not None:
+        cfg.sac.buffer_device = str(buffer_device)
+    if train_time_budget_seconds is not None:
+        cfg.train_time_budget_seconds = train_time_budget_seconds
+    if num_training_iterations is not None:
+        cfg.sac.num_training_iterations = num_training_iterations
+
+    elapsed = state["elapsed_seconds"]
+    if not isfinite(elapsed) or elapsed < 0:
+        raise ValueError("Checkpoint elapsed_seconds must be finite and non-negative.")
+    if cfg.train_time_budget_seconds <= elapsed:
+        raise ValueError(
+            "The saved training time budget is exhausted; pass "
+            "train_time_budget_seconds greater than the checkpoint's "
+            f"elapsed_seconds ({elapsed}). This is a total, not additional, budget."
+        )
+    if cfg.sac.num_training_iterations <= state["completed_iterations"]:
+        raise ValueError(
+            "The saved iteration limit is exhausted; pass num_training_iterations "
+            "greater than the checkpoint's completed_iterations."
+        )
+
+    task = instantiate(cfg.task).to(cfg.device)
+    validate_config(task, cfg, task.design_space)
+    _set_seed(cfg.seed, cfg.torch_deterministic)
+    nets = make_networks(task, cfg, task.device)
+    nets.actor.load_state_dict(state["design_net"])
+    for name in ("qf1", "qf2", "qf1_target", "qf2_target"):
+        getattr(nets, name).load_state_dict(state[name])
+    with torch.no_grad():
+        nets.log_alpha.copy_(state["log_alpha"])
+    for name in ("actor_optimizer", "q_optimizer", "alpha_optimizer"):
+        optimizer = getattr(nets, name)
+        if optimizer is not None:
+            optimizer.load_state_dict(state[name])
+
+    replay = build_replay_buffer(cfg, task)
+    for name in ("designs", "outcomes", "policy_designs", "rewards", "dones"):
+        source = state["replay_buffer"][name]
+        target = getattr(replay, name)
+        if source.shape != target.shape or source.dtype != target.dtype:
+            raise ValueError(f"Checkpoint replay_buffer.{name} does not match config.")
+        target.copy_(source)
+    for name in ("_next_episode", "_episodes_written"):
+        setattr(replay, name, state["replay_buffer"][name])
+
+    trainer = Trainer(
+        task,
+        PolicyDesigner(
+            task, cfg.T, nets.actor, use_raw_history=state["use_raw_history"]
+        ),
+        build_env(cfg, task),
+        replay,
+        nets,
+        cfg,
+        manager=manager,
+        start_time=start_time - elapsed,
+    )
+    for name in (
+        "completed_iterations",
+        "optimization_step",
+        "completed_episodes",
+        "env_steps",
+        "target_entropy",
+        "_first_collect",
+    ):
+        setattr(trainer, name, state[name])
+    trainer._iteration_progress = state["iteration_progress"]
+    for name in ("_qf_loss", "_actor_loss", "_alpha_loss"):
+        setattr(trainer, name, state["losses"][name].to(task.device))
+    # Construction consumes randomness; restore generators only once it is done.
+    _restore_rng(state["rng_state"])
+    return trainer
 
 
 def build_env(cfg, task, *, n_contrastive=None):
