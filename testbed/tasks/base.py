@@ -470,14 +470,6 @@ class Task(ABC, nn.Module):
             Tensor:
                 Log probabilities, shape ``[*broadcast_batch_shape]``.
         """
-        # Both histories are the data being scored here, not context for it, so
-        # neither may be dropped: the per-step product needs a design per outcome.
-        if y_history is None or design_history is None:
-            raise ValueError(
-                "history_logp scores a full trajectory, so both histories are "
-                f"required. Got y_history={type(y_history).__name__}, "
-                f"design_history={type(design_history).__name__}."
-            )
         y_history, design_history = self._check_history(y_history, design_history)
 
         if not fused:
