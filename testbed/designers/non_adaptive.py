@@ -51,6 +51,11 @@ class StaticDesigner(Designer):
         """Returns the design parameter device."""
         return self.raw_design.device
 
+    @property
+    def design(self) -> Tensor:
+        """Returns the physical design."""
+        return self._to_design(self.raw_design)
+
     def _init_design(self) -> Tensor:
         """Initializes the (raw) design as a standard Gaussian.
 
@@ -101,7 +106,7 @@ class StaticDesigner(Designer):
             return super().rollout(theta)
 
         b = theta.shape[0]
-        design = self._to_design(self.raw_design)  # [T, *event_shape_design]
+        design = self.design  # [T, *event_shape_design]
 
         y_history = self.task.sample_outcome(theta.unsqueeze(1), design.unsqueeze(0))
         design_history = design.unsqueeze(0).expand(

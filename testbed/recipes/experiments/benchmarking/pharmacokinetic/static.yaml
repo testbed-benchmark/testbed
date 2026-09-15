@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - /method: static
+  - override /task: pharmacokinetic
+  - _self_
+
+eval_every: 0  # no need to eval during training
+
+wandb:
+  project: benchmarking_pharmacokinetic  # task
+  group: static # method

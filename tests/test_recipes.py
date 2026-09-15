@@ -23,6 +23,7 @@ ENTRY_POINT_RECIPES = [
     "method/rlboed",
     "method/var_post",
     "method/joint_var_post",
+    "method/static",
     "experiments/location_finding/rlboed",
     "experiments/location_finding_2src/actionbed",
     "experiments/location_finding_2src/dad",
@@ -37,10 +38,23 @@ ENTRY_POINT_RECIPES = [
     "experiments/benchmarking/temporal_discounting/joint_var_post",
     "experiments/benchmarking/constant_elasticity_of_substitution/dad",
     "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post",
+    "experiments/benchmarking/location_finding_2src/static",
+    "experiments/benchmarking/temporal_discounting/static",
+    "experiments/benchmarking/constant_elasticity_of_substitution/static",
+    "experiments/benchmarking/cart_pole/static",
+    "experiments/benchmarking/double_link/static",
+    "experiments/benchmarking/pharmacokinetic/static",
+    "experiments/benchmarking/stochastic_pendulum/static",
+    "experiments/benchmarking/michaelis_menten/static",
 ]
 
 
-BENCHMARK_RECIPES = [r for r in ENTRY_POINT_RECIPES if "/benchmarking/" in r]
+# Static designs have no design net and their own training budget.
+BENCHMARK_RECIPES = [
+    r
+    for r in ENTRY_POINT_RECIPES
+    if "/benchmarking/" in r and not r.endswith("/static")
+]
 
 
 def _compose(recipe):
@@ -65,6 +79,11 @@ def test_recipe_composes(recipe):
         "testbed.tasks.PreyPopulation",
         "testbed.tasks.CES",
         "testbed.tasks.HyperbolicTemporalDiscounting",
+        "testbed.tasks.CartPole",
+        "testbed.tasks.DoubleLink",
+        "testbed.tasks.PharmacoKinetic",
+        "testbed.tasks.StochasticPendulum",
+        "testbed.tasks.MichaelisMenten",
     }
     assert cfg.wandb.enabled is False
 
