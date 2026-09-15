@@ -42,5 +42,5 @@ lr_gamma: 0.96
 eval_every: 0  # the final_eval block handles it
 
 wandb:
-  project: benchmarking_temporal_discounting  #
+  project: benchmarking_temporal_discounting  # 
   group: dad_loo_attention_2000

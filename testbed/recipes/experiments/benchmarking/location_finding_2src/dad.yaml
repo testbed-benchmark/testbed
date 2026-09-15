@@ -13,7 +13,7 @@ defaults:
 #
 
 seed: 0
-# objective:
+# objective: 
 objective:
   name: spce
   n_inner: 2_000  # contrastive samples for sPCE
