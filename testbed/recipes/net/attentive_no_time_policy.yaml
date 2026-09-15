@@ -1,0 +1,17 @@
+# net/attentive_policy with the time embeddings switched off, for the
+# architecture ablation. Every other value is identical, so the pair isolates
+# what the step embedding contributes to the attention rows.
+#
+# Without it the encoder is permutation invariant: the CLS token attends over
+# an unordered set of (design, outcome) tokens, with nothing marking when each
+# arrived.
+_target_: testbed.design_nets.AttentivePolicyNet
+encoder_dim_h: 256
+dim_emb: 128
+num_heads: 4
+num_blocks: 3
+use_time_embedding: false
+decoder_dim_h: null  # use dim_emb
+decoder_activation:
+  _target_: torch.nn.GELU
+  _partial_: true

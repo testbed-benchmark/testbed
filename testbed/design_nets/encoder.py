@@ -351,6 +351,72 @@ class DeepSetEncoder(HistoryEncoder):
         return self.sum_pool(self.encoder_net(tokens), mask)
 
 
+class TimeEmbeddedDeepSetEncoder(DeepSetEncoder):
+    """DeepSets encoder whose tokens carry a learned time embedding.
+
+    Deliberately **not** permutation invariant, unlike its parent. That is the
+    point of it: against :class:`DeepSetEncoder` it isolates whether a policy
+    needs to know *when* each observation arrived, and against
+    :class:`AttentiveEncoder`, which uses the same embedding table, it isolates
+    attention from order-awareness.
+
+    The embedding is concatenated onto the token. Concatenating puts the time inside
+    ``phi``'s nonlinearity, where reordering genuinely changes the pooled encoding.
+
+    Use :class:`DeepSetEncoder` when the history genuinely is a set.
+    """
+
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        dim_h=(128, 128),
+        dim_emb=64,
+        activation=nn.ReLU,
+        dim_time=None,
+        max_T: int = 128,
+    ):
+        """dim_h: per-layer hidden widths as a list; an int is a single layer.
+
+        dim_time: width of the time embedding (default: dim_emb).
+        max_T: longest history the embedding table covers.
+        """
+        dim_time = int(dim_emb if dim_time is None else dim_time)
+        if dim_time <= 0:
+            raise ValueError("dim_time must be positive.")
+
+        # Tokens are [y, design, time_emb], so the per-step net is that much
+        # wider at its input than the plain DeepSets one.
+        super().__init__(
+            event_shape_y,
+            event_shape_design,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+            dim_token=prod(torch.Size(event_shape_y))
+            + prod(torch.Size(event_shape_design))
+            + dim_time,
+            activation=activation,
+        )
+
+        self.dim_time = dim_time
+        self.max_T = max_T
+        self.time_emb = nn.Embedding(max_T + 1, dim_time)
+
+    def make_tokens(self, y_flat, design_flat):
+        """Concatenates outcomes, designs and the step's time embedding."""
+        b, T, _ = y_flat.shape
+
+        if T > self.max_T:
+            raise ValueError(
+                f"History of length {T} exceeds max_T={self.max_T}; raise max_T "
+                f"to cover the task's T."
+            )
+
+        time_idx = torch.arange(T, device=y_flat.device).unsqueeze(0).expand(b, T)
+        time = self.time_emb(time_idx).to(y_flat.dtype)  # [b, T, dim_time]
+        return torch.cat([y_flat, design_flat, time], dim=-1)
+
+
 class GatedDeepSetEncoder(DeepSetEncoder):
     """DeepSets encoder whose per-step embedding is gated by a binary outcome.
 

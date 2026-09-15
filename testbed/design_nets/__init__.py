@@ -7,12 +7,14 @@ from .deterministic import (
     DeepSetPolicyNet,
     GatedDeepSetPolicyNet,
     MLPPolicyNet,
+    TimeEmbeddedDeepSetPolicyNet,
 )
 from .encoder import (
     AttentiveEncoder,
     DeepSetEncoder,
     GatedDeepSetEncoder,
     HistoryEncoder,
+    TimeEmbeddedDeepSetEncoder,
     make_history_encoder,
 )
 from .history import PreparedHistory, prepare_history
