@@ -1,6 +1,7 @@
 """Tests for the variational-posterior (Barber-Agakov) EIG estimator."""
 
 from functools import partial
+from pathlib import Path
 
 import pytest
 import torch
@@ -662,6 +663,141 @@ def test_joint_train_step_changes_both_nets():
     assert torch.isfinite(torch.tensor(metrics["gain"]))
     assert _any_changed(design_before, design_net)
     assert _any_changed(posterior_before, posterior)
+
+
+# ============================================================================
+# Two-phase resume
+#
+# The budget and checkpointing machinery itself is ActionBED's. What is new
+# here is that var_post's loop spans two phases with one step counter, and
+# that the posterior freeze lives between them.
+# ============================================================================
+
+
+RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
+
+
+def _budget_cfg(**overrides):
+    from hydra import compose, initialize_config_dir
+
+    with initialize_config_dir(
+        version_base="1.3", config_dir=RECIPES_DIR, job_name="var_post_budget"
+    ):
+        cfg = compose(config_name="method/var_post")
+    cfg.device = "cpu"
+    cfg.task.n_sources = 1
+    cfg.objective.fused = False
+    cfg.n_posterior_pretrain_iter = 2
+    cfg.n_train_iter = 3
+    cfg.n_outer = 8
+    cfg.n_posterior_outer = 8
+    cfg.eval_every = 0
+    cfg.checkpoint_every = 0
+    cfg.ema_decay = 0.99
+    cfg.policy_cosine_alpha = 0.1
+    cfg.posterior_warmup_frac = 0.4
+    for key, value in overrides.items():
+        setattr(cfg, key, value)
+    return cfg
+
+
+def _budget_manager(tmp_path, name):
+    from types import SimpleNamespace
+
+    from testbed.core.manager import Manager
+
+    return Manager(
+        SimpleNamespace(), root=str(tmp_path), name=name, timestamp=False, console=False
+    )
+
+
+def _run(cfg, tmp_path, name, clock=None, monkeypatch=None):
+    from hydra.utils import instantiate
+
+    from testbed.methods import var_post as module
+
+    trainer = module.build_trainer(
+        cfg, instantiate(cfg.task).to("cpu"), _budget_manager(tmp_path, name)
+    )
+    if clock is not None:
+        values = iter(clock)
+        last = [clock[0]]
+
+        def monotonic():
+            last[0] = next(values, last[0])
+            return last[0]
+
+        monkeypatch.setattr(module.time, "monotonic", monotonic)
+    trainer.train()
+    if clock is not None:
+        monkeypatch.undo()
+    return trainer
+
+
+@pytest.mark.parametrize("stop_after", [1, 3])
+def test_resume_across_both_phases_matches_an_uninterrupted_run(
+    tmp_path, monkeypatch, stop_after
+):
+    """Stopping inside pretraining or inside policy training must both resume cleanly."""
+    from testbed.methods.var_post import load_checkpoint
+
+    whole = _run(_budget_cfg(), tmp_path, "whole")
+
+    # One read as train() starts, then one per step check; trip on the last.
+    clock = [0.0] * stop_after + [99.0]
+    stopped = _run(
+        _budget_cfg(train_time_budget_seconds=50.0),
+        tmp_path,
+        "part",
+        clock=clock,
+        monkeypatch=monkeypatch,
+    )
+    assert stopped.step == stop_after - 1
+    assert stopped.stop_reason == "time_budget"
+
+    resumed = load_checkpoint(
+        tmp_path / "part" / "final_step.pt",
+        train_time_budget_seconds=float("inf"),
+        manager=_budget_manager(tmp_path, "rest"),
+    )
+    resumed.train()
+
+    assert resumed.step == whole.step
+    for attr in ("designer.design_net", "posterior_net", "design_net_ema"):
+        target = resumed
+        source = whole
+        for part in attr.split("."):
+            target, source = getattr(target, part), getattr(source, part)
+        expected, actual = source.state_dict(), target.state_dict()
+        assert all(torch.equal(expected[k], actual[k]) for k in expected), attr
+    assert (
+        resumed.policy_scheduler.get_last_lr() == whole.policy_scheduler.get_last_lr()
+    )
+    assert (
+        resumed.posterior_scheduler.get_last_lr()
+        == whole.posterior_scheduler.get_last_lr()
+    )
+
+
+def test_resume_into_the_policy_phase_refreezes_the_posterior(tmp_path, monkeypatch):
+    """requires_grad is in no state dict, so train() has to re-apply the freeze."""
+    from testbed.methods.var_post import load_checkpoint
+
+    cfg = _budget_cfg(joint=False, train_time_budget_seconds=50.0)
+    # Stop on step 2, the first one past the two pretraining steps.
+    _run(cfg, tmp_path, "frozen", clock=[0.0, 0.0, 0.0, 99.0], monkeypatch=monkeypatch)
+
+    resumed = load_checkpoint(
+        tmp_path / "frozen" / "final_step.pt",
+        train_time_budget_seconds=float("inf"),
+        manager=_budget_manager(tmp_path, "frozen_rest"),
+    )
+    posterior_before = _snapshot(resumed.posterior_net)
+    resumed.train()
+
+    assert not resumed.posterior_net.training
+    assert all(not p.requires_grad for p in resumed.posterior_net.parameters())
+    assert not _any_changed(posterior_before, resumed.posterior_net)
 
 
 # ============================================================================

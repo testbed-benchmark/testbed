@@ -9,6 +9,11 @@ defaults:
 #
 
 seed: 0
+
+# budget / checkpointing
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 5_000
+
 # designer
 # Condition on the unconstrained designs the policy emits rather than on the
 # torques, whose two coordinates have different ranges ([-4, 4] and [-2, 2]).
@@ -18,6 +23,7 @@ use_raw_history: true
 # objective
 objective:
   name: spce
+  fused: true  # false falls back to the per-step loop
   n_inner: 2_000  # contrastive samples for sPCE
   reparameterize_policy: false
   baseline: null

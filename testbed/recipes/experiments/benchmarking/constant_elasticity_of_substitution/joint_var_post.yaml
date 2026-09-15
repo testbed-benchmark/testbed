@@ -16,6 +16,11 @@ defaults:
 # the method-level settings carry over.
 
 seed: 0
+
+# budget / checkpointing
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 5_000
+
 joint: true
 task:
   # Same override dad uses. Much of the outcome mass sits on the two censoring
@@ -32,6 +37,7 @@ task:
 # objective: outcomes are held fixed, so the score term carries the gradient.
 objective:
   name: barber_agakov_reinforce
+  fused: true  # false falls back to the per-step loop
   reparameterize_policy: false
   baseline: leave_one_out  # centre the score coefficient to keep its variance down
   requires_policy_log_probs: false

@@ -101,7 +101,7 @@ run's saved config, which is also how `python -m testbed.eval.eval_policy <run_d
 sizes itself. `eval_run.py` takes `--n-outer` and `--n-contrastive` on top of them, for
 re-scoring a finished checkpoint at a size the recipe did not ask for, and
 `--checkpoint` for scoring a different file in the run directory, such as one of the
-periodic `step_*.pt` policies RL-BOED writes when `checkpoint_every` is set. That one
+periodic `step_*.pt` policies a run writes when `checkpoint_every` is set. That one
 namespaces its own output, so a mid-training score cannot overwrite the run's `eval/*`
 columns.
 

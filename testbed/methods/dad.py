@@ -1,10 +1,15 @@
 """Training for DAD (Foster et al., 2021)."""
 
+import time
+from math import inf
+
 import hydra
 import torch
 from hydra.utils import instantiate
+from omegaconf import OmegaConf
 
 from testbed.core.setup import setup
+from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import PolicyDesigner
 
@@ -32,19 +37,30 @@ class Trainer:
         self.scheduler = scheduler
         self.manager = manager
 
-        # checkpointing
+        # checkpointing / progress, restored by load_checkpoint
         self.best_metric = -torch.inf
+        self.step = -1
+        self.elapsed_seconds = 0.0
+        self._start_time = time.monotonic()
 
     def train(self):
         """Full training loop."""
         self.designer.design_net.train()
 
-        for step in range(self.cfg.n_train_iter):
+        budget = self.cfg.train_time_budget_seconds
+        self._budget = inf if budget is None else budget
+        self._start_time = time.monotonic() - self.elapsed_seconds
+        self.stop_reason = "iteration_limit"
+
+        for step in range(self.step + 1, self.cfg.n_train_iter):
             metrics = self.train_step()
             metrics["step"] = step
 
             if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
+
+            if self._checkpoint_or_stop(step):
+                break
 
             # evaluation
             if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
@@ -56,18 +72,51 @@ class Trainer:
 
             self._maybe_save_best(step, metrics, min_step=500)
 
-        save_path = self.manager.path("final_step.pt")
+        self._finish()
+
+    def _checkpoint_or_stop(self, step):
+        """Saves a periodic policy checkpoint; returns True once the time budget is spent."""
+        self.step = step
+        interval = self.cfg.checkpoint_every
+        if interval and (step + 1) % interval == 0:
+            torch.save(
+                self._policy_state(step), self.manager.path(f"step_{step + 1:08d}.pt")
+            )
+        if time.monotonic() - self._start_time >= self._budget:
+            self.stop_reason = "time_budget"
+            return True
+        return False
+
+    def _finish(self):
+        """Saves the full training state, enabling warm-starts."""
+        self.elapsed_seconds = time.monotonic() - self._start_time
+        self.manager.event_logger.info(
+            f"Stopped: {self.stop_reason} after {self.step + 1} steps, "
+            f"{self.elapsed_seconds:.1f}s."
+        )
         torch.save(
             {
-                "design_net": self.designer.design_net.state_dict(),
-                "use_raw_history": self.designer.use_raw_history,
-                "step": step,
+                **self._policy_state(self.step),
+                "optimizer": self.optimizer.state_dict(),
+                "scheduler": self.scheduler and self.scheduler.state_dict(),
+                "best_metric": self.best_metric,
+                "stop_reason": self.stop_reason,
+                "config": OmegaConf.to_container(self.cfg, resolve=True),
+                "rng_state": rng_state(),
             },
-            save_path,
+            self.manager.path("final_step.pt"),
         )
 
         if self.manager.metric_logger is not None:
             self.manager.metric_logger.close()
+
+    def _policy_state(self, step):
+        return {
+            "design_net": self.designer.design_net.state_dict(),
+            "use_raw_history": self.designer.use_raw_history,
+            "step": step,
+            "elapsed_seconds": time.monotonic() - self._start_time,
+        }
 
     def train_step(self):
         """Takes a single training step."""
@@ -123,15 +172,7 @@ class Trainer:
 
             chkpt_path = self.manager.path("best.pt")
 
-            torch.save(
-                {
-                    "design_net": self.designer.design_net.state_dict(),
-                    "use_raw_history": self.designer.use_raw_history,
-                    "step": step,
-                    "metric": metric_val,
-                },
-                chkpt_path,
-            )
+            torch.save({**self._policy_state(step), "metric": metric_val}, chkpt_path)
 
             self.manager.event_logger.info(
                 f"Saving new best checkpoint : gain={metric_val} @ step={step}"
@@ -181,6 +222,84 @@ def build_objective(cfg, task):
     return objectives[name]()
 
 
+def build_trainer(cfg, task, manager=None):
+    """Seeds, then builds a fresh trainer with its network, optimizer and objective."""
+    seed_all(cfg.seed)
+    torch.backends.cudnn.deterministic = cfg.torch_deterministic
+
+    policy_net = build_design_net(cfg, task)
+    policy_net = policy_net.to(cfg.device)
+    designer = PolicyDesigner(
+        task,
+        cfg.T,
+        policy_net,
+        reparameterize_policy=cfg.objective.reparameterize_policy,
+        use_raw_history=cfg.use_raw_history,
+    )
+    # Update config to match the designer's proposal/gradient capability.
+    # build_objective below reads the flag, so this has to come first.
+    cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
+
+    optimizer = torch.optim.Adam(
+        policy_net.parameters(),
+        lr=cfg.lr,
+        betas=tuple(cfg.betas),
+    )
+
+    # Multiply the LR by lr_gamma once every lr_anneal_every steps (DAD paper D.2).
+    scheduler = None
+    if cfg.lr_anneal_every is not None and cfg.lr_gamma is not None:
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=cfg.lr_anneal_every, gamma=cfg.lr_gamma
+        )
+
+    return Trainer(
+        task=task,
+        designer=designer,
+        objective=build_objective(cfg, task),
+        optimizer=optimizer,
+        cfg=cfg,
+        manager=manager,
+        scheduler=scheduler,
+    )
+
+
+def load_checkpoint(
+    path,
+    *,
+    device=None,
+    train_time_budget_seconds=None,
+    n_train_iter=None,
+    manager=None,
+):
+    """Reconstructs a trainer from a ``final_step.pt`` checkpoint to resume training.
+
+    The saved config is used, with optional overrides. Time and iteration limits
+    are totals including completed training, e.g. pass
+    ``train_time_budget_seconds=24 * 3600`` to continue a run stopped at 12 hours
+    (``float("inf")`` removes the limit). ``trainer.train()`` requires a manager.
+    """
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    cfg = OmegaConf.create(state["config"])
+    overrides = {
+        "device": device,
+        "train_time_budget_seconds": train_time_budget_seconds,
+        "n_train_iter": n_train_iter,
+    }
+    cfg.merge_with({k: v for k, v in overrides.items() if v is not None})
+
+    trainer = build_trainer(cfg, instantiate(cfg.task).to(cfg.device), manager)
+    trainer.designer.design_net.load_state_dict(state["design_net"])
+    trainer.optimizer.load_state_dict(state["optimizer"])
+    if trainer.scheduler is not None:
+        trainer.scheduler.load_state_dict(state["scheduler"])
+    for name in ("step", "best_metric", "elapsed_seconds"):
+        setattr(trainer, name, state[name])
+    # Construction consumes randomness, so restore generators last.
+    restore_rng(state["rng_state"])
+    return trainer
+
+
 # ============================================================================
 # Entry point
 # ============================================================================
@@ -195,48 +314,11 @@ def main(cfg):
 
     Run with ``python testbed/methods/dad.py [overrides...]``.
     """
+    start_time = time.monotonic()
     manager, task = setup(cfg)
-
-    # Set seed
-    torch.manual_seed(cfg.seed)
-
-    policy_net = build_design_net(cfg, task)
-    policy_net = policy_net.to(cfg.device)
-    designer = PolicyDesigner(
-        task,
-        cfg.T,
-        policy_net,
-        reparameterize_policy=cfg.objective.reparameterize_policy,
-        use_raw_history=cfg.use_raw_history,
-    )
-    # Update config to match the designer's proposal/gradient capability.
-    cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
-
-    objective = build_objective(cfg, task)
-
-    optimizer = torch.optim.Adam(
-        policy_net.parameters(),
-        lr=cfg.lr,
-        betas=cfg.betas,
-    )
-
-    # Multiply the LR by lr_gamma once every lr_anneal_every steps (DAD paper D.2).
-    scheduler = None
-    if cfg.lr_anneal_every is not None and cfg.lr_gamma is not None:
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=cfg.lr_anneal_every, gamma=cfg.lr_gamma
-        )
-
-    trainer = Trainer(
-        task=task,
-        designer=designer,
-        objective=objective,
-        optimizer=optimizer,
-        cfg=cfg,
-        manager=manager,
-        scheduler=scheduler,
-    )
-
+    trainer = build_trainer(cfg, task, manager)
+    # Setup counts toward the time budget.
+    trainer.elapsed_seconds = time.monotonic() - start_time
     trainer.train()
 
 
