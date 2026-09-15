@@ -875,13 +875,13 @@ def test_evaluation_restores_rng_and_mode(monkeypatch, was_training, fails):
         return build_env(*args, **kwargs)
 
     monkeypatch.setattr(module, "build_env", randomized_env)
-    before = module._rng_state()
+    before = module.rng_state()
     if fails:
         with pytest.raises(RuntimeError, match="evaluation failed"):
             trainer.evaluate()
     else:
         trainer.evaluate()
-    after = module._rng_state()
+    after = module.rng_state()
     assert after["python"] == before["python"]
     assert after["numpy"] == before["numpy"]
     torch.testing.assert_close(after["torch"], before["torch"])
@@ -1259,7 +1259,9 @@ def test_independent_architectures_train_and_reload(
     critic_encoder_type,
     design_kind,
 ):
-    cfg = _tiny_cfg()
+    # Enough transitions that the sampled batch isn't all empty histories,
+    # which give DeepSet encoders zero gradients.
+    cfg = _tiny_cfg(num_envs=8, batch_size=16)
     cfg.design_net._target_ = "testbed.design_nets.make_stochastic_policy"
     cfg.design_net.architecture = actor_architecture
     cfg.critic_architecture = critic_architecture
