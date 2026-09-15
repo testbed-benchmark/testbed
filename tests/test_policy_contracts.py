@@ -5,6 +5,7 @@ import torch
 
 from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
 from testbed.design_nets import (
+    AttentivePolicyNet,
     CategoricalHead,
     CategoricalPolicyNet,
     DeepSetEncoder,
@@ -13,6 +14,7 @@ from testbed.design_nets import (
     GatedDeepSetPolicyNet,
     GaussianHead,
     GaussianPolicyNet,
+    TimeEmbeddedDeepSetEncoder,
 )
 
 EVENT_SHAPE = (2, 2)
@@ -229,6 +231,110 @@ def test_gated_deepset_encoder_sees_the_design_alone_with_two_heads():
 def test_gated_deepset_rejects_non_scalar_outcomes():
     with pytest.raises(ValueError, match="scalar outcome"):
         GatedDeepSetEncoder(EVENT_SHAPE, GATED_SHAPE_DESIGN)
+
+
+def make_time_embedded_encoder(dim_emb=7, dim_time=None, max_T=8):
+    return TimeEmbeddedDeepSetEncoder(
+        EVENT_SHAPE,
+        EVENT_SHAPE,
+        dim_emb=dim_emb,
+        dim_h=8,
+        dim_time=dim_time,
+        max_T=max_T,
+    )
+
+
+def test_deepset_is_permutation_invariant():
+    """The baseline the time-embedded encoder is meant to break."""
+    encoder = DeepSetEncoder(EVENT_SHAPE, EVENT_SHAPE, dim_emb=7, dim_h=8)
+    y_history, design_history = make_histories(batch_shape=(1,), history_length=3)
+    permutation = [2, 0, 1]
+
+    torch.testing.assert_close(
+        encoder(y_history, design_history),
+        encoder(y_history[:, permutation], design_history[:, permutation]),
+    )
+
+
+def test_time_embedded_deepset_is_not_permutation_invariant():
+    """The whole point of the class, and easy to get wrong.
+
+    Adding the embedding to the per-step encoding instead of concatenating it
+    onto the token would leave invariance intact, since
+    ``sum_t [phi(x_t) + e_t]`` splits into ``sum_t phi(x_t)`` plus a constant
+    that does not depend on the ordering.
+    """
+    encoder = make_time_embedded_encoder()
+    y_history, design_history = make_histories(batch_shape=(1,), history_length=3)
+    permutation = [2, 0, 1]
+
+    assert not torch.allclose(
+        encoder(y_history, design_history),
+        encoder(y_history[:, permutation], design_history[:, permutation]),
+    )
+
+
+def test_time_embedded_deepset_token_carries_the_time_embedding():
+    encoder = make_time_embedded_encoder(dim_emb=16, dim_time=5)
+    linear_layers = [
+        layer for layer in encoder.encoder_net.net if isinstance(layer, torch.nn.Linear)
+    ]
+
+    # y + design + time, so the time enters inside the per-step nonlinearity.
+    assert encoder.dim_token == 4 + 4 + 5
+    assert linear_layers[0].in_features == 13
+    assert encoder.time_emb.num_embeddings == 9  # max_T + 1
+
+
+def test_time_embedded_deepset_dim_time_defaults_to_dim_emb():
+    encoder = make_time_embedded_encoder(dim_emb=7)
+
+    assert encoder.dim_time == 7
+
+
+def test_time_embedded_deepset_rejects_histories_longer_than_max_T():
+    encoder = make_time_embedded_encoder(max_T=3)
+    y_history, design_history = make_histories(batch_shape=(1,), history_length=4)
+
+    with pytest.raises(ValueError, match="exceeds max_T"):
+        encoder(y_history, design_history)
+
+
+def test_attentive_policy_without_time_embedding_is_permutation_invariant():
+    """use_time_embedding is the only thing separating these two."""
+    torch.manual_seed(0)
+    timed = AttentivePolicyNet(
+        EVENT_SHAPE,
+        EVENT_SHAPE,
+        event_shape_out=EVENT_SHAPE,
+        dim_emb=8,
+        encoder_dim_h=8,
+        num_heads=2,
+        num_blocks=1,
+    )
+    torch.manual_seed(0)
+    untimed = AttentivePolicyNet(
+        EVENT_SHAPE,
+        EVENT_SHAPE,
+        event_shape_out=EVENT_SHAPE,
+        dim_emb=8,
+        encoder_dim_h=8,
+        num_heads=2,
+        num_blocks=1,
+        use_time_embedding=False,
+    )
+    y_history, design_history = make_histories(batch_shape=(1,), history_length=3)
+    permutation = [2, 0, 1]
+
+    assert not untimed.encoder.use_time_embedding
+    torch.testing.assert_close(
+        untimed.encoder(y_history, design_history),
+        untimed.encoder(y_history[:, permutation], design_history[:, permutation]),
+    )
+    assert not torch.allclose(
+        timed.encoder(y_history, design_history),
+        timed.encoder(y_history[:, permutation], design_history[:, permutation]),
+    )
 
 
 @pytest.mark.parametrize("make_policy", [make_gaussian_policy, make_categorical_policy])

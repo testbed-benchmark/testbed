@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - /experiments/benchmarking/stochastic_pendulum/dad
+  - override /net@design_net: attentive_no_time_policy
+  - _self_
+
+wandb:
+  project: architecture_stochastic_pendulum
+  group: dad_attentive_no_time

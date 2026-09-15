@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - /experiments/benchmarking/location_finding_2src/joint_var_post
+  - override /net@design_net: deepset_policy
+  - _self_
+
+wandb:
+  project: architecture_location_finding_2src
+  group: joint_var_post_deepset

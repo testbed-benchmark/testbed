@@ -1,0 +1,28 @@
+# Seed sweep for experiments/architecture/location_finding_2src/dad_deepset_time.
+#
+# Part of the architecture ablation: every recipe under
+# experiments/architecture inherits its benchmarking counterpart and swaps only
+# the policy net, so the architecture is the only thing that varies.
+#
+# wandb sweep sweeps/architecture/location_finding_2src_dad_deepset_time.yaml
+
+name: architecture-location_finding_2src-dad_deepset_time-seeds
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: architecture_location_finding_2src
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+  # Pinned here as well as in the recipe: the sweep's own project field only
+  # controls where the agent registers the sweep, not where the run logs.
+  wandb.project:
+    value: architecture_location_finding_2src
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/architecture/location_finding_2src/dad_deepset_time
+  - ${args_no_hyphens}

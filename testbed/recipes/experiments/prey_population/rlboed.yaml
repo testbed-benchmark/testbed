@@ -7,7 +7,14 @@ defaults:
 
 reward:
   n_contrastive: 10_000
+
+# This recipe stops on its own iteration count, not the wall clock, so it opts
+# out of the method recipe's time budget. RL-BOED anneals this task's discrete
+# target entropy on a different schedule entirely, so no bound is imposed here.
+train_time_budget_seconds: null
+
 sac:
+  entropy_anneal_total: null
   num_training_iterations: 40_001
   buffer_size: 1_000_000
 

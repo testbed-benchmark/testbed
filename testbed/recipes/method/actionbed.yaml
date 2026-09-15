@@ -12,6 +12,7 @@ defaults:
   
 # system (device/save_dir come from the system group)
 seed: 0
+torch_deterministic: true
 
 use_raw_history: true
 
@@ -27,6 +28,10 @@ n_outer: 2_048
 # eval
 eval_every: 100
 n_outer_eval: 2_048
+
+# budget / checkpointing
+train_time_budget_seconds: null  # null for no time limit
+checkpoint_every: 10_000  # 0 to disable
 
 # optimizer
 lr: 5e-4

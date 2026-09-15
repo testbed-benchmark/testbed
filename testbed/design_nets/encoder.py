@@ -238,16 +238,16 @@ class AttentiveEncoder(HistoryEncoder):
         self.output_norm = nn.LayerNorm(dim_emb)
 
     def encode_tokens(self, tokens, mask=None):
-        """Runs the forward pass of the encoder.
-
-        Note that masking is not yet supported for the AttentiveEncoder.
-        """
-        if mask is not None:
-            raise NotImplementedError(
-                "Masking not yet supported with an attention-based encoder."
-            )
-
+        """Encodes valid history tokens; the CLS token always remains unmasked."""
         b, T, _ = tokens.shape
+        if mask is None:
+            mask = torch.ones(b, T, dtype=torch.bool, device=tokens.device)
+        # Clear padding before projection, including non-finite padded values.
+        tokens = tokens.masked_fill(~mask.unsqueeze(-1), 0.0)
+        lengths = mask.sum(dim=-1)
+        key_padding_mask = torch.cat(
+            [~mask, torch.zeros(b, 1, dtype=torch.bool, device=tokens.device)], dim=1
+        )
 
         # Input projection
         enc = self.input_encoder(tokens)  # [b, T, dim_emb]
@@ -255,17 +255,14 @@ class AttentiveEncoder(HistoryEncoder):
         # Class token
         cls = self.cls_token.expand(b, 1, -1)  # [b, 1, dim_emb]
 
-        # Add time embeddings
+        # Histories are valid prefixes followed by padding. CLS follows the prefix.
         if self.use_time_embedding:
-            if T > 0:
-                time_idx = (
-                    torch.arange(T, device=tokens.device).unsqueeze(0).expand(b, T)
-                )
-                enc = enc + self.time_emb(time_idx)
-
-            # Always use T for the class token
-            cls_time_idx = torch.full((b, 1), T, dtype=torch.long, device=tokens.device)
-            cls = cls + self.time_emb(cls_time_idx)
+            if torch.any(lengths > self.max_T):
+                raise ValueError(f"History length exceeds max_T={self.max_T}.")
+            time_idx = torch.arange(T, device=tokens.device).unsqueeze(0).expand(b, T)
+            time_idx = time_idx.masked_fill(~mask, 0)
+            enc = enc + self.time_emb(time_idx)
+            cls = cls + self.time_emb(lengths.unsqueeze(1))
 
         # Add type embeddings
         if self.use_type_embedding:
@@ -282,7 +279,7 @@ class AttentiveEncoder(HistoryEncoder):
 
         # Attention blocks
         for block in self.blocks:
-            enc = block(enc)
+            enc = block(enc, key_padding_mask=key_padding_mask)
 
         # cls readout
         cls_out = enc[:, -1, :]
@@ -354,6 +351,72 @@ class DeepSetEncoder(HistoryEncoder):
         return self.sum_pool(self.encoder_net(tokens), mask)
 
 
+class TimeEmbeddedDeepSetEncoder(DeepSetEncoder):
+    """DeepSets encoder whose tokens carry a learned time embedding.
+
+    Deliberately **not** permutation invariant, unlike its parent. That is the
+    point of it: against :class:`DeepSetEncoder` it isolates whether a policy
+    needs to know *when* each observation arrived, and against
+    :class:`AttentiveEncoder`, which uses the same embedding table, it isolates
+    attention from order-awareness.
+
+    The embedding is concatenated onto the token. Concatenating puts the time inside
+    ``phi``'s nonlinearity, where reordering genuinely changes the pooled encoding.
+
+    Use :class:`DeepSetEncoder` when the history genuinely is a set.
+    """
+
+    def __init__(
+        self,
+        event_shape_y,
+        event_shape_design,
+        dim_h=(128, 128),
+        dim_emb=64,
+        activation=nn.ReLU,
+        dim_time=None,
+        max_T: int = 128,
+    ):
+        """dim_h: per-layer hidden widths as a list; an int is a single layer.
+
+        dim_time: width of the time embedding (default: dim_emb).
+        max_T: longest history the embedding table covers.
+        """
+        dim_time = int(dim_emb if dim_time is None else dim_time)
+        if dim_time <= 0:
+            raise ValueError("dim_time must be positive.")
+
+        # Tokens are [y, design, time_emb], so the per-step net is that much
+        # wider at its input than the plain DeepSets one.
+        super().__init__(
+            event_shape_y,
+            event_shape_design,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+            dim_token=prod(torch.Size(event_shape_y))
+            + prod(torch.Size(event_shape_design))
+            + dim_time,
+            activation=activation,
+        )
+
+        self.dim_time = dim_time
+        self.max_T = max_T
+        self.time_emb = nn.Embedding(max_T + 1, dim_time)
+
+    def make_tokens(self, y_flat, design_flat):
+        """Concatenates outcomes, designs and the step's time embedding."""
+        b, T, _ = y_flat.shape
+
+        if T > self.max_T:
+            raise ValueError(
+                f"History of length {T} exceeds max_T={self.max_T}; raise max_T "
+                f"to cover the task's T."
+            )
+
+        time_idx = torch.arange(T, device=y_flat.device).unsqueeze(0).expand(b, T)
+        time = self.time_emb(time_idx).to(y_flat.dtype)  # [b, T, dim_time]
+        return torch.cat([y_flat, design_flat, time], dim=-1)
+
+
 class GatedDeepSetEncoder(DeepSetEncoder):
     """DeepSets encoder whose per-step embedding is gated by a binary outcome.
 
@@ -409,3 +472,27 @@ class GatedDeepSetEncoder(DeepSetEncoder):
         # A convex mix rather than a gather, so relaxed outcomes also work.
         enc = y_flat * h_one + (1.0 - y_flat) * h_zero  # [b, T, dim_emb]
         return self.sum_pool(enc, mask)
+
+
+def make_history_encoder(
+    *,
+    event_shape_y,
+    event_shape_design,
+    architecture="deepset",
+    dim_h=(128, 128),
+    dim_emb=64,
+    attention=None,
+):
+    """Builds an independently initialized encoder for a policy or critic."""
+    kwargs = {
+        "event_shape_y": event_shape_y,
+        "event_shape_design": event_shape_design,
+        "dim_h": dim_h,
+        "dim_emb": dim_emb,
+    }
+    if architecture == "deepset":
+        return DeepSetEncoder(**kwargs)
+    if architecture == "attention":
+        kwargs.update(dict(attention or {}))
+        return AttentiveEncoder(**kwargs)
+    raise ValueError("architecture must be 'deepset' or 'attention'.")

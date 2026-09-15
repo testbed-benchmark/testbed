@@ -1,0 +1,34 @@
+# @package _global_
+
+defaults:
+  - /method: dad
+  - override /task: double_link
+  - _self_
+
+# Benchmark run of DAD on the double link (T = 50 torque steps).
+#
+
+seed: 0
+# designer
+# Condition on the unconstrained designs the policy emits rather than on the
+# torques, whose two coordinates have different ranges ([-4, 4] and [-2, 2]).
+# The raw values are O(1) and on one scale, so the encoder needs no input
+# normalization.
+use_raw_history: true
+# objective
+objective:
+  name: spce
+  n_inner: 2_000  # contrastive samples for sPCE
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false
+# training
+n_train_iter: 200_000
+n_outer: 2_048
+
+# eval
+eval_every: 0  # the final_eval block handles it
+
+wandb:
+  project: benchmarking_double_link  # the sweep pins the same value
+  group: dad_attention_2000

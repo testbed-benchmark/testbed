@@ -9,7 +9,7 @@ from testbed.envs.history import History
 
 
 class RLBOEDQNetwork(nn.Module):
-    """DeepSets critic with masked sum pooling over experiment history.
+    """Continuous critic with a configurable history encoder.
 
     Args:
         dim_y: Flattened outcome dimension.
@@ -21,6 +21,7 @@ class RLBOEDQNetwork(nn.Module):
         dim_h: Hidden layer widths; an integer specifies one layer.
         dim_emb: History-summary dimension for the default encoder.
         encoder: Optional history encoder. Defaults to ``DeepSetEncoder``.
+        head: Optional readout of concatenated history encoding and design.
     """
 
     def __init__(
@@ -35,6 +36,7 @@ class RLBOEDQNetwork(nn.Module):
         dim_h=(128, 128),
         dim_emb: int = 64,
         encoder: HistoryEncoder | None = None,
+        head: nn.Module | None = None,
     ):
         """Initializes the continuous-action critic.
 
@@ -48,6 +50,7 @@ class RLBOEDQNetwork(nn.Module):
             dim_h: Hidden layer widths; an integer specifies one layer.
             dim_emb: History-summary dimension for the default encoder.
             encoder: Optional history encoder. Defaults to ``DeepSetEncoder``.
+            head: Optional readout of concatenated history encoding and design.
         """
         super().__init__()
         self.dim_y = dim_y
@@ -57,18 +60,20 @@ class RLBOEDQNetwork(nn.Module):
         )
         self.dim_emb = self.encoder.dim_emb
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
-        self.emitter_net = MLP(
-            [self.dim_emb + dim_design] + hidden_widths + [1],
-            activation=nn.ReLU,
-        )
-        _initialize_linear_layers(self.emitter_net)
+        self.emitter_net = head
+        if self.emitter_net is None:
+            self.emitter_net = MLP(
+                [self.dim_emb + dim_design] + hidden_widths + [1],
+                activation=nn.ReLU,
+            )
+            _initialize_linear_layers(self.emitter_net)
         self.register_buffer("design_low", torch.as_tensor(design_low))
         self.register_buffer("design_high", torch.as_tensor(design_high))
         self.register_buffer("outcome_low", torch.as_tensor(outcome_low))
         self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
 
     def forward(self, observation: History, design: Tensor) -> Tensor:
-        """Estimates Q from a permutation-invariant history summary and design.
+        """Estimates Q from an encoded history summary and candidate design.
 
         Args:
             observation: History containing designs, outcomes, and an optional
@@ -115,7 +120,7 @@ class RLBOEDQNetwork(nn.Module):
 
 
 class RLBOEDDiscreteQNetwork(nn.Module):
-    """DeepSets critic that returns one Q-value for each categorical design.
+    """Configurable history critic returning Q-values for categorical designs.
 
     Attributes:
         dim_y: Flattened outcome dimension.
@@ -126,7 +131,7 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         design_high: Per-coordinate upper bounds for design normalization.
         outcome_low: Lower bound for outcome normalization.
         outcome_high: Upper bound for outcome normalization.
-        encoder_net: Module that embeds each design-outcome pair.
+        encoder: Module that summarizes the masked experiment history.
         emitter_net: Module that maps a history embedding to Q-values.
     """
 
@@ -143,6 +148,7 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         dim_h=(128, 128),
         dim_emb: int = 64,
         encoder: HistoryEncoder | None = None,
+        head: nn.Module | None = None,
     ):
         """Initializes the discrete critic.
 
@@ -157,6 +163,7 @@ class RLBOEDDiscreteQNetwork(nn.Module):
             dim_h: Hidden layer widths; an integer specifies one layer.
             dim_emb: History-summary dimension.
             encoder: Optional history encoder. Defaults to ``DeepSetEncoder``.
+            head: Optional readout from history encoding to one Q-value per design.
         """
         super().__init__()
         self.dim_y = int(dim_y)
@@ -167,17 +174,19 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         )
         self.dim_emb = self.encoder.dim_emb
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
-        self.emitter_net = MLP(
-            [self.dim_emb] + hidden_widths + [self.n_designs], activation=nn.ReLU
-        )
-        _initialize_linear_layers(self.emitter_net)
+        self.emitter_net = head
+        if self.emitter_net is None:
+            self.emitter_net = MLP(
+                [self.dim_emb] + hidden_widths + [self.n_designs], activation=nn.ReLU
+            )
+            _initialize_linear_layers(self.emitter_net)
         self.register_buffer("design_low", torch.as_tensor(design_low))
         self.register_buffer("design_high", torch.as_tensor(design_high))
         self.register_buffer("outcome_low", torch.as_tensor(outcome_low))
         self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
 
     def forward(self, observation: History) -> Tensor:
-        """Estimates all design Q-values from a permutation-invariant history.
+        """Estimates all design Q-values from an encoded history.
 
         Args:
             observation: History containing designs, outcomes, and an optional
