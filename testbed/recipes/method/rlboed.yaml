@@ -34,14 +34,14 @@ reward:
 # eval
 eval_every: 0  # no periodic eval during SAC training
 eval_n_contrastive: 1_000_000
-train_time_budget_seconds: 43_200  # 12 hours
+train_time_budget_seconds: 43_200  # 12 hours; null for no time limit
 checkpoint_every: 1_000
 # SAC hyperparameters
 sac:
   num_training_iterations: 100_000
   num_envs: 100
   buffer_size: 10_000_000
-  buffer_device: cuda
+  buffer_device: ${device}
   gamma: 0.9
   tau: 0.001
   batch_size: 4096
@@ -54,5 +54,10 @@ sac:
   alpha: null
   initial_alpha: 1.0
   target_entropy: null
-  entropy_anneal_rate: 7.142857142857143e-05  # 1 / 1.4e4
+  entropy_anneal_rate: 7.143e-05  # 1 / 1.4e4, per iteration
+  # RL-BOED has no floor: it just stops annealing when its 20_001 iterations
+  # run out, having dropped 20_001 / 1.4e4. Training here can run much longer
+  # (and stops on the clock), so pin that same endpoint explicitly, otherwise
+  # the setpoint lands wherever the host's speed reached. null -> unbounded.
+  entropy_anneal_total: 1.429  # 20_001 / 1.4e4
   log_frequency: 100

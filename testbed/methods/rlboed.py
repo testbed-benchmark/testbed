@@ -7,7 +7,7 @@ import random
 import time
 import warnings
 from dataclasses import dataclass
-from math import ceil, isfinite, log
+from math import ceil, inf, isfinite, isinf, log
 
 import hydra
 import numpy as np
@@ -291,6 +291,18 @@ class _CompactEpisodeReplayBuffer:
         }
 
 
+def _time_budget(cfg) -> float:
+    """Returns the wall-clock training limit in seconds.
+
+    ``train_time_budget_seconds: null`` means "no time limit" and normalizes
+    to ``inf``, so every deadline comparison and overrun calculation stays
+    plain float arithmetic. An explicit infinity works too, spelled ``.inf``
+    in a recipe and ``inf`` in a Hydra command-line override.
+    """
+    budget = cfg.train_time_budget_seconds
+    return float("inf") if budget is None else float(budget)
+
+
 def _resolve_buffer_device(buffer_device: str) -> torch.device:
     """Returns the replay storage device requested by the config."""
     requested = buffer_device.strip().lower()
@@ -332,8 +344,16 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
     """Rejects unsupported tasks and invalid settings."""
     sac = cfg.sac
     budget = cfg.train_time_budget_seconds
-    if isinstance(budget, bool) or not isfinite(budget) or budget <= 0:
-        raise ValueError("train_time_budget_seconds must be finite and positive.")
+    if (
+        isinstance(budget, bool)
+        or not isinstance(budget, (int, float, type(None)))
+        # ``not budget > 0`` rejects NaN as well as non-positive budgets.
+        or (budget is not None and not budget > 0)
+    ):
+        raise ValueError(
+            "train_time_budget_seconds must be a positive number of seconds, "
+            "or null for no time limit."
+        )
     interval = cfg.checkpoint_every
     if isinstance(interval, bool) or not isinstance(interval, int) or interval < 0:
         raise ValueError("checkpoint_every must be a non-negative integer.")
@@ -365,6 +385,17 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.learning_starts must be non-negative.")
     if sac.entropy_anneal_rate < 0:
         raise ValueError("sac.entropy_anneal_rate must be non-negative.")
+    anneal_total = sac.entropy_anneal_total
+    if anneal_total is not None and (
+        isinstance(anneal_total, bool)
+        or not isinstance(anneal_total, (int, float))
+        # ``not >= 0`` rejects NaN as well as negative totals.
+        or not anneal_total >= 0
+    ):
+        raise ValueError(
+            "sac.entropy_anneal_total must be a non-negative number, "
+            "or null for an unbounded anneal."
+        )
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
     if isinstance(design_space, DefaultDesignSpace):
@@ -734,6 +765,15 @@ class Trainer:
             )
         else:
             self.target_entropy = float(cfg.sac.target_entropy)
+        # The anneal needs an endpoint: training stops on a wall-clock budget,
+        # so an unbounded schedule would leave the setpoint wherever the host's
+        # throughput happened to reach, and two seeds on different GPUs would
+        # optimize against different objectives. The bound is a drop from the
+        # starting value because that value is task-dependent.
+        anneal_total = cfg.sac.entropy_anneal_total
+        self.min_target_entropy = (
+            -inf if anneal_total is None else self.target_entropy - float(anneal_total)
+        )
 
         # logging / checkpointing
         self.metrics: list[dict[str, float]] = []
@@ -818,11 +858,13 @@ class Trainer:
         self._synchronize()
         self.training_elapsed_seconds = time.monotonic() - self._start_time
         if self.manager is not None:
+            budget = _time_budget(self.cfg)
+            limit = "none" if isinf(budget) else f"{budget}s"
             self.manager.event_logger.info(
                 f"Stopped: {self.stop_reason}; {self.completed_iterations} iterations, "
                 f"{self.optimization_step} updates, {self.training_elapsed_seconds:.3f}s "
-                f"before final serialization; budget={self.cfg.train_time_budget_seconds}s, "
-                f"overrun={max(0.0, self.training_elapsed_seconds - self.cfg.train_time_budget_seconds):.3f}s."
+                f"before final serialization; budget={limit}, "
+                f"overrun={max(0.0, self.training_elapsed_seconds - budget):.3f}s."
             )
             save_path = self.manager.path("final_step.pt")
             torch.save(self.build_checkpoint(), save_path)
@@ -834,6 +876,7 @@ class Trainer:
         cfg = self.cfg
         sac = cfg.sac
         horizon = self.env.horizon
+        budget = _time_budget(cfg)
 
         if self._iteration_progress is None:
             # Finish collection before tracking progress through gradient updates.
@@ -892,14 +935,17 @@ class Trainer:
                 progress["updates_completed"] += 1
 
                 # Check the CPU clock without waiting for queued GPU work.
-                if time.monotonic() - self._start_time >= cfg.train_time_budget_seconds:
+                if time.monotonic() - self._start_time >= budget:
                     self.stop_reason = "time_budget"
                     if progress["updates_completed"] < sac.gradient_steps_per_iteration:
                         return None
                     break  # Finalize an iteration stopped on its last update.
 
         if sac.alpha is None:
-            self.target_entropy -= sac.entropy_anneal_rate
+            self.target_entropy = max(
+                self.target_entropy - sac.entropy_anneal_rate,
+                self.min_target_entropy,
+            )
 
         self._iteration_progress = None
         return {
@@ -1022,7 +1068,7 @@ class Trainer:
                 name: getattr(self, name).detach()
                 for name in ("_qf_loss", "_actor_loss", "_alpha_loss")
             },
-            "train_time_budget_seconds": self.cfg.train_time_budget_seconds,
+            "train_time_budget_seconds": _time_budget(self.cfg),
             "stop_reason": self.stop_reason,
         }
         # Compatibility aliases used by existing checkpoint consumers.
@@ -1082,7 +1128,8 @@ def load_checkpoint(
         path: Path to a full checkpoint, typically ``final_step.pt``.
         device: Optional model/task device, otherwise the saved device.
         buffer_device: Optional replay device, otherwise the saved device.
-        train_time_budget_seconds: Optional new total training time limit.
+        train_time_budget_seconds: Optional new total training time limit;
+            pass ``float("inf")`` to continue with no time limit.
         num_training_iterations: Optional new total iteration limit.
         manager: Optional output manager, configured for the resumed run.
 
@@ -1143,7 +1190,7 @@ def load_checkpoint(
     elapsed = state["elapsed_seconds"]
     if not isfinite(elapsed) or elapsed < 0:
         raise ValueError("Checkpoint elapsed_seconds must be finite and non-negative.")
-    if cfg.train_time_budget_seconds <= elapsed:
+    if _time_budget(cfg) <= elapsed:
         raise ValueError(
             "The saved training time budget is exhausted; pass "
             "train_time_budget_seconds greater than the checkpoint's "

@@ -1,8 +1,10 @@
 """Tests for the RL-BOED (SAC) training components."""
 
 import json
+import random
 from math import log
 
+import numpy as np
 import pytest
 import torch
 from hydra.utils import instantiate
@@ -448,6 +450,7 @@ def _tiny_cfg(**sac_overrides):
                 "initial_alpha": 1.0,
                 "target_entropy": None,
                 "entropy_anneal_rate": 1 / 1.4e4,
+                "entropy_anneal_total": 1.0,
                 "log_frequency": 1,
             },
         }
@@ -695,3 +698,535 @@ def test_rlboed_fixed_alpha_disables_temperature_optimizer(alpha):
     checkpoint = trainer.build_checkpoint()
     assert checkpoint["alpha"].item() == pytest.approx(alpha)
     assert checkpoint["alpha_optimizer"] is None
+
+
+@pytest.mark.parametrize("setup_seconds", [0.0, 12.0])
+@pytest.mark.parametrize("gradient_steps", [1, 3])
+def test_budget_checked_after_update_and_excludes_save(
+    tmp_path, monkeypatch, setup_seconds, gradient_steps
+):
+    import testbed.methods.rlboed as module
+
+    cfg = _tiny_cfg(gradient_steps_per_iteration=gradient_steps)
+    cfg.train_time_budget_seconds = 10
+    manager = Manager(
+        cfg, root=str(tmp_path), name="timed", timestamp=False, console=False
+    )
+    trainer = _build_trainer(cfg, manager=manager)
+    initial_entropy = trainer.target_entropy
+    trainer._start_time = 0
+    clock = [setup_seconds]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    update = module.sac_update
+    save = torch.save
+    sync_calls = []
+
+    def slow_update(*args, **kwargs):
+        result = update(*args, **kwargs)
+        clock[0] += 11
+        return result
+
+    def slow_save(state, path):
+        assert sync_calls == [1]
+        clock[0] += 100
+        save(state, path)
+
+    def final_synchronize():
+        sync_calls.append(trainer.optimization_step)
+        clock[0] += 3  # Outstanding GPU work finishes before timing and saving.
+
+    monkeypatch.setattr(module, "sac_update", slow_update)
+    monkeypatch.setattr(torch, "save", slow_save)
+    monkeypatch.setattr(trainer, "_synchronize", final_synchronize)
+    trainer.train()
+    state = torch.load(tmp_path / "timed" / "final_step.pt", weights_only=True)
+    completed = int(gradient_steps == 1)
+    assert state["completed_iterations"] == completed
+    assert state["optimization_step"] == 1
+    assert state["step"] == completed - 1
+    assert state["stop_reason"] == "time_budget"
+    assert state["training_elapsed_seconds"] == setup_seconds + 14
+    assert state["elapsed_seconds"] == setup_seconds + 14
+    assert state["deadline_overrun_seconds"] == setup_seconds + 4
+    assert state["target_entropy"] == pytest.approx(
+        initial_entropy - completed * cfg.sac.entropy_anneal_rate
+    )
+    if completed:
+        assert state["iteration_progress"] is None
+    else:
+        assert state["iteration_progress"]["updates_completed"] == 1
+    # Building another snapshot after saving must not count serialization time.
+    assert trainer.build_policy_checkpoint()["elapsed_seconds"] == setup_seconds + 14
+
+
+@pytest.mark.parametrize("stop_after_update", [1, 3])
+def test_budget_stop_preserves_completed_iteration_metrics_and_checkpoint(
+    tmp_path, monkeypatch, stop_after_update
+):
+    import testbed.methods.rlboed as module
+
+    cfg = _tiny_cfg(gradient_steps_per_iteration=3)
+    cfg.train_time_budget_seconds = 10
+    cfg.checkpoint_every = 1
+    cfg.eval_every = 1
+    manager = Manager(
+        cfg, root=str(tmp_path), name="budget", timestamp=False, console=False
+    )
+    trainer = _build_trainer(cfg, manager=manager)
+    trainer._start_time = 0
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    update = module.sac_update
+
+    def timed_update(*args, **kwargs):
+        result = update(*args, **kwargs)
+        if result.optimization_step == stop_after_update:
+            clock[0] = cfg.train_time_budget_seconds
+        return result
+
+    def unexpected_evaluation():
+        pytest.fail("Budget stop must not start periodic evaluation")
+
+    monkeypatch.setattr(module, "sac_update", timed_update)
+    monkeypatch.setattr(trainer, "evaluate", unexpected_evaluation)
+    trainer.train()
+
+    run_dir = tmp_path / "budget"
+    final = torch.load(run_dir / "final_step.pt", weights_only=True)
+    records = [
+        json.loads(line)
+        for line in (run_dir / "metrics.jsonl").read_text().splitlines()
+    ]
+    assert final["stop_reason"] == "time_budget"
+    assert final["optimization_step"] == stop_after_update
+    completed = int(stop_after_update == 3)
+    assert final["completed_iterations"] == completed
+    assert len(trainer.metrics) == len(records) == completed
+    policy_path = run_dir / "step_00000001.pt"
+    assert policy_path.exists() == bool(completed)
+    if completed:
+        assert trainer.metrics[0]["step"] == final["step"] == 0
+        assert trainer.metrics[0]["env_steps"] == final["env_steps"]
+        assert records[0]["episodic_return"] == trainer.metrics[0]["episodic_return"]
+        assert records[0]["step"] == 0
+        policy = torch.load(policy_path, weights_only=True)
+        assert policy["completed_iterations"] == completed
+        torch.testing.assert_close(policy["design_net"], final["design_net"])
+
+
+def test_evaluation_finishes_before_next_update_checks_budget(monkeypatch):
+    import testbed.methods.rlboed as module
+
+    cfg = _tiny_cfg()
+    cfg.train_time_budget_seconds = 10
+    cfg.eval_every = 1
+    trainer = _build_trainer(cfg)
+    trainer._start_time = 0
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    build_env = module.build_env
+    eval_steps = []
+
+    def slow_eval_env(*args, **kwargs):
+        env = build_env(*args, **kwargs)
+        step = env.step
+
+        def slow_step(designs):
+            result = step(designs)
+            eval_steps.append(env.t)
+            clock[0] = 12.0
+            return result
+
+        monkeypatch.setattr(env, "step", slow_step)
+        return env
+
+    monkeypatch.setattr(module, "build_env", slow_eval_env)
+    trainer.train()
+    assert eval_steps == [1, 2]
+    assert any("eval/spce" in record for record in trainer.metrics)
+    assert trainer.stop_reason == "time_budget"
+    assert trainer.optimization_step == 2
+    assert trainer.completed_iterations == 2
+    assert trainer._iteration_progress is None
+    assert trainer.designer.design_net.training
+    assert "eval/spce" in trainer.evaluate()
+
+
+@pytest.mark.parametrize("was_training", [False, True])
+@pytest.mark.parametrize("fails", [False, True])
+def test_evaluation_restores_rng_and_mode(monkeypatch, was_training, fails):
+    import testbed.methods.rlboed as module
+
+    trainer = _build_trainer(_tiny_cfg())
+    trainer.designer.design_net.train(was_training)
+    build_env = module.build_env
+
+    def randomized_env(*args, **kwargs):
+        random.random()
+        np.random.random()
+        torch.rand(1)
+        if fails:
+            raise RuntimeError("evaluation failed")
+        return build_env(*args, **kwargs)
+
+    monkeypatch.setattr(module, "build_env", randomized_env)
+    before = module._rng_state()
+    if fails:
+        with pytest.raises(RuntimeError, match="evaluation failed"):
+            trainer.evaluate()
+    else:
+        trainer.evaluate()
+    after = module._rng_state()
+    assert after["python"] == before["python"]
+    assert after["numpy"] == before["numpy"]
+    torch.testing.assert_close(after["torch"], before["torch"])
+    if before["cuda"] is not None:
+        for actual, expected in zip(after["cuda"], before["cuda"]):
+            torch.testing.assert_close(actual, expected)
+    assert trainer.designer.design_net.training == was_training
+
+
+@pytest.mark.parametrize("alpha", [None, 0.0, 0.2])
+@pytest.mark.parametrize("stop_after_update", [2, 3])
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA required"
+            ),
+        ),
+    ],
+)
+def test_checkpoint_continues_remaining_updates(
+    tmp_path, monkeypatch, alpha, stop_after_update, device
+):
+    import testbed.methods.rlboed as module
+
+    cfg = _tiny_cfg(
+        num_training_iterations=2, gradient_steps_per_iteration=3, alpha=alpha
+    )
+    cfg.device = device
+    cfg.sac.buffer_device = device
+    cfg.train_time_budget_seconds = 10
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    uninterrupted = _build_trainer(cfg)
+    uninterrupted.train()
+    expected = uninterrupted.build_checkpoint()
+
+    interrupted = _build_trainer(cfg)
+    initial_entropy = interrupted.target_entropy
+    update = module.sac_update
+
+    def stop_at_update(*args, **kwargs):
+        result = update(*args, **kwargs)
+        if result.optimization_step == stop_after_update:
+            clock[0] = 10.0
+        return result
+
+    monkeypatch.setattr(module, "sac_update", stop_at_update)
+    interrupted.train()
+    path = tmp_path / "partial.pt"
+    torch.save(interrupted.build_checkpoint(), path)
+    state = torch.load(path, weights_only=True)
+    completed = int(stop_after_update == 3)
+    assert state["completed_iterations"] == completed
+    assert state["optimization_step"] == stop_after_update
+    if completed:
+        assert state["iteration_progress"] is None
+    else:
+        assert state["iteration_progress"]["updates_completed"] == stop_after_update
+    assert state["target_entropy"] == pytest.approx(
+        initial_entropy - completed * cfg.sac.entropy_anneal_rate * (alpha is None)
+    )
+
+    # Loading excludes offline time and continues the interrupted update sequence.
+    clock[0] = 1000.0
+    monkeypatch.setattr(module, "sac_update", update)
+    resumed = module.load_checkpoint(path, train_time_budget_seconds=20)
+    assert resumed.cfg.train_time_budget_seconds == 20
+    assert resumed.build_checkpoint()["elapsed_seconds"] == 10
+    for name, value in state["losses"].items():
+        torch.testing.assert_close(
+            getattr(resumed, name), value.to(resumed.device), equal_nan=True
+        )
+    resumed.train()
+    actual = resumed.build_checkpoint()
+    for name in (
+        "design_net",
+        "qf1",
+        "qf2",
+        "qf1_target",
+        "qf2_target",
+        "actor_optimizer",
+        "q_optimizer",
+        "log_alpha",
+        "alpha_optimizer",
+        "target_entropy",
+        "completed_iterations",
+        "optimization_step",
+        "env_steps",
+        "completed_episodes",
+        "replay_buffer",
+        "iteration_progress",
+        "losses",
+    ):
+        torch.testing.assert_close(
+            actual[name],
+            expected[name],
+            rtol=0,
+            atol=0,
+            equal_nan=True,
+            check_device=name != "losses",
+        )
+    assert actual["rng_state"]["python"] == expected["rng_state"]["python"]
+    assert actual["rng_state"]["numpy"] == expected["rng_state"]["numpy"]
+    torch.testing.assert_close(
+        actual["rng_state"]["torch"], expected["rng_state"]["torch"]
+    )
+    if expected["rng_state"]["cuda"] is not None:
+        for actual_rng, expected_rng in zip(
+            actual["rng_state"]["cuda"], expected["rng_state"]["cuda"]
+        ):
+            torch.testing.assert_close(actual_rng, expected_rng, rtol=0, atol=0)
+
+
+def test_load_checkpoint_restores_limits_and_counts_setup_time(tmp_path, monkeypatch):
+    import testbed.methods.rlboed as module
+
+    cfg = _tiny_cfg(num_training_iterations=1)
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    trainer = _build_trainer(cfg)
+    clock[0] = 5.0
+    trainer.train()
+    path = tmp_path / "full.pt"
+    torch.save(trainer.build_checkpoint(), path)
+    with pytest.raises(ValueError, match="iteration limit is exhausted"):
+        module.load_checkpoint(path)
+    with pytest.raises(ValueError, match="time budget is exhausted"):
+        module.load_checkpoint(path, train_time_budget_seconds=5)
+
+    make_networks = module.make_networks
+    clock[0] = 100.0
+
+    def slow_networks(*args, **kwargs):
+        result = make_networks(*args, **kwargs)
+        clock[0] += 2
+        return result
+
+    monkeypatch.setattr(module, "make_networks", slow_networks)
+    resumed = module.load_checkpoint(
+        path, num_training_iterations=2, train_time_budget_seconds=8
+    )
+    assert resumed.build_checkpoint()["elapsed_seconds"] == 7
+    update = module.sac_update
+
+    def timed_update(*args, **kwargs):
+        result = update(*args, **kwargs)
+        clock[0] += 1
+        return result
+
+    monkeypatch.setattr(module, "sac_update", timed_update)
+    resumed.train()
+    assert resumed.completed_iterations == 2
+    assert resumed.optimization_step == 2
+    assert resumed.training_elapsed_seconds == 8
+    assert resumed.stop_reason == "time_budget"
+
+
+def test_load_checkpoint_rejects_policy_only_checkpoint(tmp_path):
+    from testbed.methods.rlboed import load_checkpoint
+
+    path = tmp_path / "policy.pt"
+    torch.save(_build_trainer(_tiny_cfg()).build_policy_checkpoint(), path)
+    with pytest.raises(ValueError, match="full version-2 checkpoint"):
+        load_checkpoint(path)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_load_checkpoint_moves_training_state_to_cuda(tmp_path):
+    from testbed.methods.rlboed import load_checkpoint
+
+    trainer = _build_trainer(_tiny_cfg(num_training_iterations=1))
+    trainer.train()
+    path = tmp_path / "cpu.pt"
+    torch.save(trainer.build_checkpoint(), path)
+    resumed = load_checkpoint(
+        path, device="cuda", buffer_device="cuda", num_training_iterations=2
+    )
+    assert resumed.device.type == "cuda"
+    assert resumed.replay_buffer.device.type == "cuda"
+    assert resumed.replay_buffer.designs.is_cuda
+    assert resumed.nets.log_alpha.is_cuda
+    assert next(resumed.nets.actor.parameters()).is_cuda
+    assert not resumed.replay_buffer.pin_memory
+    resumed.train()
+    assert resumed.optimization_step == 2
+    assert torch.isfinite(resumed._qf_loss)
+
+    # A GPU checkpoint can also be reconstructed on a CPU-only destination.
+    torch.save(resumed.build_checkpoint(), path)
+    restored_cpu = load_checkpoint(
+        path, device="cpu", buffer_device="cpu", num_training_iterations=3
+    )
+    assert restored_cpu.replay_buffer.device.type == "cpu"
+    assert not next(restored_cpu.nets.actor.parameters()).is_cuda
+    restored_cpu.train()
+    assert restored_cpu.optimization_step == 3
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("train_time_budget_seconds", 0),
+        ("train_time_budget_seconds", float("nan")),
+        ("checkpoint_every", -1),
+        ("checkpoint_every", 1.5),
+    ],
+)
+def test_invalid_timing_config(key, value):
+    cfg = _tiny_cfg()
+    cfg[key] = value
+    with pytest.raises(ValueError, match=key):
+        _build_trainer(cfg)
+
+
+def test_warmup_finishes_before_first_budget_check(monkeypatch):
+    import testbed.methods.rlboed as module
+
+    cfg = _tiny_cfg(learning_starts=9, gradient_steps_per_iteration=3)
+    cfg.train_time_budget_seconds = 10
+    trainer = _build_trainer(cfg)
+    trainer._start_time = 0
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    step = trainer.env.step
+    rollout_steps = []
+
+    def slow_step(designs):
+        result = step(designs)
+        rollout_steps.append(trainer.env.t)
+        clock[0] = 12.0
+        return result
+
+    monkeypatch.setattr(trainer.env, "step", slow_step)
+    trainer.train()
+    state = trainer.build_checkpoint()
+    assert rollout_steps == [1, 2, 1, 2, 1, 2]
+    assert state["completed_episodes"] == 3 * cfg.sac.num_envs
+    assert state["env_steps"] == 12
+    assert len(trainer.replay_buffer) == 12
+    assert state["optimization_step"] == 1
+    assert state["completed_iterations"] == 0
+    assert state["iteration_progress"]["updates_completed"] == 1
+    assert state["deadline_overrun_seconds"] == 2
+
+
+def test_periodic_policy_loads_in_evaluator(tmp_path):
+    cfg = _tiny_cfg(num_training_iterations=1)
+    cfg.checkpoint_every = 1
+    manager = Manager(
+        cfg, root=str(tmp_path), name="eval", timestamp=False, console=False
+    )
+    trainer = _build_trainer(cfg, manager=manager)
+    trainer.train()
+    run_dir = tmp_path / "eval"
+    (run_dir / ".hydra").mkdir()
+    OmegaConf.save(cfg, run_dir / ".hydra" / "config.yaml")
+    result = evaluate_checkpoint(
+        str(run_dir),
+        checkpoint="step_00000001.pt",
+        n_outer=2,
+        n_contrastive=2,
+        outer_batch_size=2,
+        contrastive_chunk_size=2,
+    )
+    assert result["weights_used"] == "design_net"
+
+
+def test_main_starts_timer_before_setup(monkeypatch, tmp_path):
+    import testbed.methods.rlboed as module
+
+    cfg = _tiny_cfg()
+    clock = [100.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    manager = Manager(
+        cfg, root=str(tmp_path), name="main", timestamp=False, console=False
+    )
+    task = instantiate(cfg.task).to(cfg.device)
+
+    def setup(_cfg):
+        clock[0] = 107.0
+        return manager, task
+
+    class RecordingTrainer:
+        def __init__(self, **kwargs):
+            assert kwargs["start_time"] == 100.0
+            assert clock[0] == 107.0
+
+        def train(self):
+            pass
+
+        def evaluate(self):
+            return {"eval/spce": 0.0, "eval/spce_se": 0.0}
+
+    monkeypatch.setattr(module, "setup", setup)
+    monkeypatch.setattr(module, "Trainer", RecordingTrainer)
+    module.main.__wrapped__(cfg)
+    manager.metric_logger.close()
+
+
+@pytest.mark.parametrize("budget", [None, float("inf")])
+def test_no_time_limit_never_stops_training_on_the_clock(monkeypatch, budget):
+    """null / inf disable the deadline, so only the iteration cap stops training."""
+    import testbed.methods.rlboed as module
+
+    cfg = _tiny_cfg()
+    cfg.train_time_budget_seconds = budget
+    trainer = _build_trainer(cfg)
+    trainer._start_time = 0
+    # A clock far past any plausible budget must not end the run.
+    monkeypatch.setattr(module.time, "monotonic", lambda: 1e9)
+
+    trainer.train()
+
+    assert trainer.stop_reason == "iteration_limit"
+    assert trainer.completed_iterations == cfg.sac.num_training_iterations
+
+
+@pytest.mark.parametrize("total,drop", [(1.0, 1.0), (None, 2.5)])
+def test_entropy_anneal_stops_at_the_configured_total(total, drop):
+    """Unbounded, a wall-clock stop leaves the setpoint wherever the host reached."""
+    cfg = _tiny_cfg(num_training_iterations=5, entropy_anneal_rate=0.5)
+    cfg.sac.entropy_anneal_total = total
+    trainer = _build_trainer(cfg)
+    initial = trainer.target_entropy
+
+    trainer.train()
+
+    # 5 iterations x 0.5 would drop 2.5; a total of 1.0 has to stop it at 1.0.
+    assert trainer.target_entropy == pytest.approx(initial - drop)
+
+
+def test_entropy_anneal_floor_survives_a_resume(tmp_path):
+    """The floor is derived from cfg, so a resumed run cannot anneal past it."""
+    from testbed.methods.rlboed import load_checkpoint
+
+    cfg = _tiny_cfg(num_training_iterations=1, entropy_anneal_rate=0.5)
+    cfg.sac.entropy_anneal_total = 1.0
+    trainer = _build_trainer(cfg)
+    initial = trainer.target_entropy
+    trainer.train()
+    assert trainer.target_entropy == pytest.approx(initial - 0.5)
+
+    path = tmp_path / "full.pt"
+    torch.save(trainer.build_checkpoint(), path)
+    resumed = load_checkpoint(path, num_training_iterations=5)
+
+    resumed.train()
+
+    assert resumed.target_entropy == pytest.approx(initial - 1.0)
