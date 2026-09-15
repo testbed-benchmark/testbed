@@ -263,30 +263,19 @@ class _CompactEpisodeReplayBuffer:
         history_lengths: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """Reconstructs padded observations for sampled episode prefixes."""
-        batch_size = episode_designs.shape[0]
-        designs = torch.zeros(
-            batch_size,
-            self.horizon,
-            *self.event_shape_design,
-            device=self.device,
-            dtype=self.designs.dtype,
-        )
-        outcomes = torch.zeros(
-            batch_size,
-            self.horizon,
-            *self.event_shape_y,
-            device=self.device,
-            dtype=self.outcomes.dtype,
-        )
         mask = torch.arange(self.horizon, device=self.device).unsqueeze(0) < (
             history_lengths.unsqueeze(1)
         )
-        if mask.any():
-            designs[mask] = episode_designs[mask]
-            outcomes[mask] = episode_outcomes[mask]
+
+        def masked(x: torch.Tensor) -> torch.Tensor:
+            # Keep fixed shapes to avoid GPU-to-host synchronization from
+            # a Python conditional or variable-length boolean indexing.
+            expanded = mask.reshape(*mask.shape, *((1,) * (x.ndim - mask.ndim)))
+            return torch.where(expanded, x, 0)
+
         return {
-            "designs": designs,
-            "outcomes": outcomes,
+            "designs": masked(episode_designs),
+            "outcomes": masked(episode_outcomes),
             "mask": mask,
         }
 
