@@ -360,7 +360,7 @@ class TimeEmbeddedDeepSetEncoder(DeepSetEncoder):
     :class:`AttentiveEncoder`, which uses the same embedding table, it isolates
     attention from order-awareness.
 
-    The embedding is concatenated onto the token. Concatenating puts the time inside 
+    The embedding is concatenated onto the token. Concatenating puts the time inside
     ``phi``'s nonlinearity, where reordering genuinely changes the pooled encoding.
 
     Use :class:`DeepSetEncoder` when the history genuinely is a set.

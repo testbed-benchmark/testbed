@@ -235,7 +235,11 @@ def test_gated_deepset_rejects_non_scalar_outcomes():
 
 def make_time_embedded_encoder(dim_emb=7, dim_time=None, max_T=8):
     return TimeEmbeddedDeepSetEncoder(
-        EVENT_SHAPE, EVENT_SHAPE, dim_emb=dim_emb, dim_h=8, dim_time=dim_time,
+        EVENT_SHAPE,
+        EVENT_SHAPE,
+        dim_emb=dim_emb,
+        dim_h=8,
+        dim_time=dim_time,
         max_T=max_T,
     )
 
@@ -300,13 +304,24 @@ def test_attentive_policy_without_time_embedding_is_permutation_invariant():
     """use_time_embedding is the only thing separating these two."""
     torch.manual_seed(0)
     timed = AttentivePolicyNet(
-        EVENT_SHAPE, EVENT_SHAPE, event_shape_out=EVENT_SHAPE, dim_emb=8,
-        encoder_dim_h=8, num_heads=2, num_blocks=1,
+        EVENT_SHAPE,
+        EVENT_SHAPE,
+        event_shape_out=EVENT_SHAPE,
+        dim_emb=8,
+        encoder_dim_h=8,
+        num_heads=2,
+        num_blocks=1,
     )
     torch.manual_seed(0)
     untimed = AttentivePolicyNet(
-        EVENT_SHAPE, EVENT_SHAPE, event_shape_out=EVENT_SHAPE, dim_emb=8,
-        encoder_dim_h=8, num_heads=2, num_blocks=1, use_time_embedding=False,
+        EVENT_SHAPE,
+        EVENT_SHAPE,
+        event_shape_out=EVENT_SHAPE,
+        dim_emb=8,
+        encoder_dim_h=8,
+        num_heads=2,
+        num_blocks=1,
+        use_time_embedding=False,
     )
     y_history, design_history = make_histories(batch_shape=(1,), history_length=3)
     permutation = [2, 0, 1]
