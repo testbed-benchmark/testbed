@@ -119,6 +119,36 @@ def _maybe_sort_by_norm(
     return input, sort_by_norm(target)
 
 
+def _min_over_permutations(cost: Tensor, dim_object: int, reduction: str) -> Tensor:
+    """Minimises a pairwise matching cost over all permutations, then reduces.
+
+    Args:
+        cost (Tensor):
+            ``cost[..., i, j]`` is the cost of matching estimate ``i`` to
+            target ``j``, shape ``[*batch, K, K]``.
+        dim_object (int):
+            Size of each object, used to normalize the ``"mean"`` reduction.
+        reduction (str):
+            One of ``"sum"``, ``"mean"``, or ``"none"``.
+
+    Returns:
+        Tensor:
+            If ``reduction`` is ``"none"``, the minimal total cost of shape
+            ``[*batch]``. ``"mean"`` normalizes it by ``K * dim_object`` before
+            averaging; ``"sum"`` sums it.
+    """
+    K = cost.shape[-1]
+    perms = _permutation_index(K).to(cost.device)  # [K!, K]
+    rows = torch.arange(K, device=cost.device)  # [K]
+    per_sample = cost[..., rows, perms].sum(dim=-1).min(dim=-1).values  # [*batch]
+
+    if reduction == "mean":
+        return (per_sample / (K * dim_object)).mean()
+    if reduction == "sum":
+        return per_sample.sum()
+    return per_sample
+
+
 class LogMSELoss(nn.Module):
     r"""Sum of a standard MSE loss and an MSE loss on a log-scale.
 
@@ -304,36 +334,6 @@ def _check_objects_shape(input: Tensor, target: Tensor) -> None:
             f"expected shape [*batch, n_objects, dim_object]; got a "
             f"{input.dim()}-D tensor."
         )
-
-
-def _min_over_permutations(cost: Tensor, dim_object: int, reduction: str) -> Tensor:
-    """Minimises a pairwise matching cost over all permutations, then reduces.
-
-    Args:
-        cost (Tensor):
-            ``cost[..., i, j]`` is the cost of matching estimate ``i`` to
-            target ``j``, shape ``[*batch, K, K]``.
-        dim_object (int):
-            Size of each object, used to normalize the ``"mean"`` reduction.
-        reduction (str):
-            One of ``"sum"``, ``"mean"``, or ``"none"``.
-
-    Returns:
-        Tensor:
-            If ``reduction`` is ``"none"``, the minimal total cost of shape
-            ``[*batch]``. ``"mean"`` normalizes it by ``K * dim_object`` before
-            averaging; ``"sum"`` sums it.
-    """
-    K = cost.shape[-1]
-    perms = _permutation_index(K).to(cost.device)  # [K!, K]
-    rows = torch.arange(K, device=cost.device)  # [K]
-    per_sample = cost[..., rows, perms].sum(dim=-1).min(dim=-1).values  # [*batch]
-
-    if reduction == "mean":
-        return (per_sample / (K * dim_object)).mean()
-    if reduction == "sum":
-        return per_sample.sum()
-    return per_sample
 
 
 class PermutationInvariantMSELoss(nn.Module):
