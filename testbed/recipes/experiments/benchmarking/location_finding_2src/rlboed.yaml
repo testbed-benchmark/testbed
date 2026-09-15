@@ -1,0 +1,24 @@
+# @package _global_
+
+defaults:
+  - /method: rlboed
+  - /benchmarking: rlboed
+  - _self_
+  - /benchmark_schedule: null
+  - override /task: location_finding_2src
+
+# Preserve the existing RLBOED task bounds and outcome normalization.
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: -4.0
+    high: 4.0
+    event_shape:
+      - ${task.dim_theta}
+
+reward:
+  outcome_low: -3.0
+  outcome_high: 10.0
+
+wandb:
+  project: benchmarking_location_finding_2src

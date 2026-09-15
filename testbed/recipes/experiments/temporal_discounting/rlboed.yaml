@@ -1,0 +1,38 @@
+# @package _global_
+
+defaults:
+  - /method: rlboed
+  - override /task: temporal_discounting
+  - _self_
+
+# RL-BOED currently trains continuous policies over bounded boxes. These bounds
+# stay inside HTD's physical domain and center the initial policy near
+# E[k] * D_1 ~= 1 and R_0 = 50, where choices are unlikely to be saturated.
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: [0.5, 1.0]
+    high: [200.0, 99.0]
+    event_shape: [2]
+
+# HTD observations are Bernoulli choices.
+reward:
+  outcome_low: 0.0
+  outcome_high: 1.0
+  n_contrastive: 100_000
+  gamma: 0.9
+
+# HTD has a cheap explicit likelihood, so use the longer continuous-task
+# schedule while keeping the replay buffer at the size used by CES and prey.
+sac:
+  num_training_iterations: 20_001
+  buffer_size: 1_000_000
+  tau: 0.005
+  policy_lr: 0.0003
+
+final_eval:
+  n_contrastive: 10_000_000
+
+wandb:
+  project: temporal_discounting
+  group: rlboed

@@ -3,6 +3,7 @@
 defaults:
   - /system: default
   - /task: location_finding
+  - /net@attention_policy: attentive_policy
   - /wandb: default
   - /final_eval: default
   - /hydra_run: default
@@ -11,9 +12,21 @@ defaults:
 # system (device/save_dir come from the system group)
 seed: 0
 torch_deterministic: true
+# Independently selectable history encoders for the actor and critics.
+# Each may be either deepset or attention.
+actor_architecture: deepset
+critic_architecture: deepset
 # complete deployable policy
 design_net:
-  _target_: testbed.design_nets.make_deepset_stochastic_policy
+  _target_: testbed.design_nets.make_stochastic_policy
+  architecture: ${actor_architecture}
+  attention:
+    dim_h: ${attention_policy.encoder_dim_h}
+    dim_emb: ${attention_policy.dim_emb}
+    num_heads: ${attention_policy.num_heads}
+    num_blocks: ${attention_policy.num_blocks}
+  # DeepSet encoder and SAC head defaults. Attention encoder widths come from
+  # net/attentive_policy above; unspecified options use AttentiveEncoder defaults.
   dim_h: [128, 128]
   dim_emb: 64
   log_std_min: -20.0

@@ -1,0 +1,50 @@
+# Experiment: does collecting more fresh experience improve RLBOED on
+# two-source location finding (T=30), at the same 200,000 SAC-update budget?
+# The concern is that the original 3,125 collection iterations may expose the
+# policy to too little new experience relative to its replay-buffer updates.
+#
+# Compare these paired schedules, each at seeds 0, 1, 2, 3, 4 (10 runs total):
+#   rlboed_64: 3,125 iterations x 64 updates; entropy anneal rate = 1/14,000.
+#   rlboed_32: 6,250 iterations x 32 updates; entropy anneal rate = 1/28,000.
+# Each normal collection iteration adds 100 complete episodes (3,000
+# transitions); the first collects extra episodes for replay warm-up. The
+# second schedule therefore collects roughly twice as much experience and
+# performs fewer replay updates between collections, but costs more in
+# simulation/reward computation. It is not a matched wall-clock comparison.
+# Entropy annealing occurs per collection iteration, so its rate is halved
+# in rlboed_32 to preserve the total decrease over the training run.
+#
+# Both use the shared default attention encoder for the stochastic actor,
+# DeepSet Q networks, and replay minibatches of 2,048. All other training
+# settings are held fixed. A Hydra config group couples the three schedule
+# settings to avoid unintended Cartesian-product combinations.
+#
+# Final evaluation inherits final_eval/default.yaml: currently 2,048 outer
+# trajectories, 10^9 inner contrastive samples, and fused=true. Compare mean
+# eval/lower_bound across the five seeds, with seed-to-seed spread, to decide
+# which schedule to use for subsequent benchmarks. W&B groups distinguish
+# updates64 from updates32. This sweep changes location finding only.
+name: benchmarking-location_finding_2src-rlboed-schedules
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: benchmarking_location_finding_2src
+
+metric:
+  name: eval/lower_bound
+  goal: maximize
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+  benchmark_schedule:
+    values: [rlboed_64, rlboed_32]
+  wandb.project:
+    value: benchmarking_location_finding_2src
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/benchmarking/location_finding_2src/rlboed
+  - ${args_no_hyphens}

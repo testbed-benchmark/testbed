@@ -86,8 +86,8 @@ design_net:
 #
 # alpha is not. alpha ~ HalfNormal(2) has its mode at zero, so log alpha has a
 # tail decaying like e^z that no Gaussian covers; a draw near zero lands ~13
-# spreads out and its gradient (~1/scale^2) overflows. Left alone, alpha leaks 
-# 0.3% of its mass below zero, costing 0.006 nats of tightness on a ~3.4-nat gain, 
+# spreads out and its gradient (~1/scale^2) overflows. Left alone, alpha leaks
+# 0.3% of its mass below zero, costing 0.006 nats of tightness on a ~3.4-nat gain,
 # and the bound stays valid.
 #
 # No canonicalisation: the two coordinates are not exchangeable (and the
