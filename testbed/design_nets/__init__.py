@@ -13,6 +13,7 @@ from .encoder import (
     DeepSetEncoder,
     GatedDeepSetEncoder,
     HistoryEncoder,
+    make_history_encoder,
 )
 from .history import PreparedHistory, prepare_history
 from .modules import BlockTransform, affine_rescale
@@ -21,13 +22,11 @@ from .stochastic import (
     CategoricalHead,
     CategoricalPolicyActor,
     CategoricalPolicyNet,
-    DeepSetCategoricalActor,
-    DeepSetGaussianActor,
     GaussianHead,
     GaussianPolicyActor,
     GaussianPolicyNet,
     StochasticDesignNet,
-    make_deepset_stochastic_policy,
+    make_stochastic_policy,
 )
 from .variational_posterior import (
     AttentiveVariationalPosteriorNet,

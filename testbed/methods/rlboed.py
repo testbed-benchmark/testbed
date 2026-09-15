@@ -7,12 +7,13 @@ import random
 import time
 import warnings
 from dataclasses import dataclass
-from math import ceil, log
+from math import ceil, inf, isfinite, isinf, log
 
 import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import optim
 
@@ -30,11 +31,33 @@ from testbed.design_nets import (
     RLBOEDQNetwork,
     StochasticDesignNet,
 )
+from testbed.design_nets.encoder import make_history_encoder
 from testbed.designers import PolicyDesigner
 from testbed.envs import BEDEnv
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
 from testbed.tasks.base import Task
+
+
+def _rng_state():
+    state = np.random.get_state()
+    return {
+        "python": random.getstate(),
+        "numpy": (state[0], state[1].tolist(), *state[2:]),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+
+
+def _restore_rng(state):
+    random.setstate(state["python"])
+    name, keys, pos, has_gauss, cached = state["numpy"]
+    np.random.set_state(
+        (name, np.asarray(keys, dtype=np.uint32), pos, has_gauss, cached)
+    )
+    torch.set_rng_state(state["torch"].cpu())
+    if state["cuda"] is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all([value.cpu() for value in state["cuda"]])
 
 
 @dataclass
@@ -241,32 +264,33 @@ class _CompactEpisodeReplayBuffer:
         history_lengths: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """Reconstructs padded observations for sampled episode prefixes."""
-        batch_size = episode_designs.shape[0]
-        designs = torch.zeros(
-            batch_size,
-            self.horizon,
-            *self.event_shape_design,
-            device=self.device,
-            dtype=self.designs.dtype,
-        )
-        outcomes = torch.zeros(
-            batch_size,
-            self.horizon,
-            *self.event_shape_y,
-            device=self.device,
-            dtype=self.outcomes.dtype,
-        )
         mask = torch.arange(self.horizon, device=self.device).unsqueeze(0) < (
             history_lengths.unsqueeze(1)
         )
-        if mask.any():
-            designs[mask] = episode_designs[mask]
-            outcomes[mask] = episode_outcomes[mask]
+
+        def masked(x: torch.Tensor) -> torch.Tensor:
+            # Keep fixed shapes to avoid GPU-to-host synchronization from
+            # a Python conditional or variable-length boolean indexing.
+            expanded = mask.reshape(*mask.shape, *((1,) * (x.ndim - mask.ndim)))
+            return torch.where(expanded, x, 0)
+
         return {
-            "designs": designs,
-            "outcomes": outcomes,
+            "designs": masked(episode_designs),
+            "outcomes": masked(episode_outcomes),
             "mask": mask,
         }
+
+
+def _time_budget(cfg) -> float:
+    """Returns the wall-clock training limit in seconds.
+
+    ``train_time_budget_seconds: null`` means "no time limit" and normalizes
+    to ``inf``, so every deadline comparison and overrun calculation stays
+    plain float arithmetic. An explicit infinity works too, spelled ``.inf``
+    in a recipe and ``inf`` in a Hydra command-line override.
+    """
+    budget = cfg.train_time_budget_seconds
+    return float("inf") if budget is None else float(budget)
 
 
 def _resolve_buffer_device(buffer_device: str) -> torch.device:
@@ -309,6 +333,20 @@ def _soft_update(source: torch.nn.Module, target: torch.nn.Module, tau: float) -
 def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
     """Rejects unsupported tasks and invalid settings."""
     sac = cfg.sac
+    budget = cfg.train_time_budget_seconds
+    if (
+        isinstance(budget, bool)
+        or not isinstance(budget, (int, float, type(None)))
+        # ``not budget > 0`` rejects NaN as well as non-positive budgets.
+        or (budget is not None and not budget > 0)
+    ):
+        raise ValueError(
+            "train_time_budget_seconds must be a positive number of seconds, "
+            "or null for no time limit."
+        )
+    interval = cfg.checkpoint_every
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval < 0:
+        raise ValueError("checkpoint_every must be a non-negative integer.")
     positive_ints = {
         "sac.num_training_iterations": sac.num_training_iterations,
         "sac.num_envs": sac.num_envs,
@@ -337,6 +375,17 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         raise ValueError("sac.learning_starts must be non-negative.")
     if sac.entropy_anneal_rate < 0:
         raise ValueError("sac.entropy_anneal_rate must be non-negative.")
+    anneal_total = sac.entropy_anneal_total
+    if anneal_total is not None and (
+        isinstance(anneal_total, bool)
+        or not isinstance(anneal_total, (int, float))
+        # ``not >= 0`` rejects NaN as well as negative totals.
+        or not anneal_total >= 0
+    ):
+        raise ValueError(
+            "sac.entropy_anneal_total must be a non-negative number, "
+            "or null for an unbounded anneal."
+        )
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
     if isinstance(design_space, DefaultDesignSpace):
@@ -383,45 +432,43 @@ def make_networks(
     if not isinstance(actor, StochasticDesignNet):
         raise TypeError("cfg.design_net must construct a StochasticDesignNet.")
 
+    critic_type = RLBOEDQNetwork
+    critic_kwargs = {
+        "dim_y": dim_y,
+        "dim_design": dim_design,
+        "dim_h": cfg.design_net.dim_h,
+        "outcome_low": cfg.reward.outcome_low,
+        "outcome_high": cfg.reward.outcome_high,
+    }
     if isinstance(design_space, BoxDesignSpace):
-        critic_kwargs = {
-            "dim_y": dim_y,
-            "dim_design": dim_design,
-            "design_low": design_space.low.to(device),
-            "design_high": design_space.high.to(device),
-            "outcome_low": cfg.reward.outcome_low,
-            "outcome_high": cfg.reward.outcome_high,
-        }
-        qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
+        design_low = design_space.low.to(device).clone()
+        design_high = design_space.high.to(device).clone()
     elif isinstance(design_space, DefaultDesignSpace):
         if not isinstance(actor, GaussianPolicyNet):
             raise TypeError(
                 "Unconstrained RLBOED design spaces require a GaussianPolicyNet."
             )
-        critic_kwargs = {
-            "dim_y": dim_y,
-            "dim_design": dim_design,
-            "design_low": actor.design_low.detach().clone(),
-            "design_high": actor.design_high.detach().clone(),
-            "outcome_low": cfg.reward.outcome_low,
-            "outcome_high": cfg.reward.outcome_high,
-        }
-        qf1 = RLBOEDQNetwork(**critic_kwargs).to(device)
-        qf2 = RLBOEDQNetwork(**critic_kwargs).to(device)
+        design_low, design_high = actor.design_low, actor.design_high
     else:
         values = design_space.values.reshape(design_space.n_designs, dim_design)
-        critic_kwargs = {
-            "dim_y": dim_y,
-            "dim_design": dim_design,
-            "n_designs": design_space.n_designs,
-            "design_low": values.amin(dim=0).to(device),
-            "design_high": values.amax(dim=0).to(device),
-            "outcome_low": cfg.reward.outcome_low,
-            "outcome_high": cfg.reward.outcome_high,
-        }
-        qf1 = RLBOEDDiscreteQNetwork(**critic_kwargs).to(device)
-        qf2 = RLBOEDDiscreteQNetwork(**critic_kwargs).to(device)
+        design_low, design_high = values.amin(dim=0), values.amax(dim=0)
+        critic_type = RLBOEDDiscreteQNetwork
+        critic_kwargs["n_designs"] = design_space.n_designs
+    critic_kwargs.update(design_low=design_low, design_high=design_high)
+
+    def make_critic():
+        # Each network owns fresh parameters, constructed from the same encoder settings.
+        encoder = make_history_encoder(
+            event_shape_y=(dim_y,),
+            event_shape_design=(dim_design,),
+            architecture=cfg.critic_architecture,
+            dim_h=cfg.design_net.dim_h,
+            dim_emb=cfg.design_net.dim_emb,
+            attention=cfg.design_net.get("attention"),
+        )
+        return critic_type(encoder=encoder, **critic_kwargs).to(device)
+
+    qf1, qf2 = make_critic(), make_critic()
     qf1_target = copy.deepcopy(qf1)
     qf2_target = copy.deepcopy(qf2)
 
@@ -672,7 +719,18 @@ def sac_update(
 class Trainer:
     """Training class for RL-BOED (SAC) training."""
 
-    def __init__(self, task, designer, env, replay_buffer, nets, cfg, manager=None):
+    def __init__(
+        self,
+        task,
+        designer,
+        env,
+        replay_buffer,
+        nets,
+        cfg,
+        manager=None,
+        *,
+        start_time=None,
+    ):
         """Initializes the trainer."""
         assert isinstance(designer, PolicyDesigner), (
             "This Trainer assumes your designer is a PolicyDesigner object."
@@ -695,17 +753,29 @@ class Trainer:
             )
         else:
             self.target_entropy = float(cfg.sac.target_entropy)
+        # The anneal needs an endpoint: training stops on a wall-clock budget,
+        # so an unbounded schedule would leave the setpoint wherever the host's
+        # throughput happened to reach, and two seeds on different GPUs would
+        # optimize against different objectives. The bound is a drop from the
+        # starting value because that value is task-dependent.
+        anneal_total = cfg.sac.entropy_anneal_total
+        self.min_target_entropy = (
+            -inf if anneal_total is None else self.target_entropy - float(anneal_total)
+        )
 
         # logging / checkpointing
         self.metrics: list[dict[str, float]] = []
-        self.best_metric = -torch.inf
 
         # training counters
         self.optimization_step = 0
         self.env_steps = 0
         self.completed_episodes = 0
         self._first_collect = True
-        self._start_time = time.time()
+        self._start_time = time.monotonic() if start_time is None else start_time
+        self.completed_iterations = 0
+        self._iteration_progress = None
+        self.training_elapsed_seconds: float | None = None
+        self.stop_reason = None
 
         # most recent losses, surfaced in the periodic log
         self._qf_loss = torch.tensor(float("nan"))
@@ -715,15 +785,32 @@ class Trainer:
     def train(self):
         """Full training loop."""
         self.designer.design_net.train()
-        self._start_time = time.time()
+        self.training_elapsed_seconds = None
+        self.stop_reason = "iteration_limit"
 
-        for step in range(self.cfg.sac.num_training_iterations):
+        for step in range(
+            self.completed_iterations, self.cfg.sac.num_training_iterations
+        ):
             metrics = self.train_step()
+            if metrics is None:
+                break
+            self.completed_iterations = step + 1
             metrics["step"] = step
             self.metrics.append(metrics)
 
             if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
+
+            interval = self.cfg.checkpoint_every
+            if self.manager is not None and interval and (step + 1) % interval == 0:
+                torch.save(
+                    self.build_policy_checkpoint(),
+                    self.manager.path(f"step_{step + 1:08d}.pt"),
+                )
+
+            # Preserve completed work before stopping, without starting evaluation.
+            if self.stop_reason == "time_budget":
+                break
 
             # evaluation
             if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
@@ -756,52 +843,68 @@ class Trainer:
                         f"alpha={step_metrics['alpha']:.4f}"
                     )
 
-            self._maybe_save_best(step, metrics)
-
+        self._synchronize()
+        self.training_elapsed_seconds = time.monotonic() - self._start_time
         if self.manager is not None:
+            budget = _time_budget(self.cfg)
+            limit = "none" if isinf(budget) else f"{budget}s"
+            self.manager.event_logger.info(
+                f"Stopped: {self.stop_reason}; {self.completed_iterations} iterations, "
+                f"{self.optimization_step} updates, {self.training_elapsed_seconds:.3f}s "
+                f"before final serialization; budget={limit}, "
+                f"overrun={max(0.0, self.training_elapsed_seconds - budget):.3f}s."
+            )
             save_path = self.manager.path("final_step.pt")
-            torch.save(self.build_checkpoint(step=step), save_path)
+            torch.save(self.build_checkpoint(), save_path)
             if self.manager.metric_logger is not None:
                 self.manager.metric_logger.close()
 
     def train_step(self):
-        """Takes a single training iteration (collect + gradient steps)."""
+        """Collects data and updates; returns None if stopped mid-iteration."""
         cfg = self.cfg
         sac = cfg.sac
         horizon = self.env.horizon
-        transitions_per_episode_batch = sac.num_envs * horizon
+        budget = _time_budget(cfg)
 
-        # During warm-up, collect enough episode batches to reach learning_starts.
-        episode_batches = 1
-        if len(self.replay_buffer) < sac.learning_starts:
-            episode_batches = ceil(
-                (sac.learning_starts - len(self.replay_buffer))
-                / transitions_per_episode_batch
-            )
+        if self._iteration_progress is None:
+            # Finish collection before tracking progress through gradient updates.
+            transitions_per_episode_batch = sac.num_envs * horizon
+            episode_batches = 1
+            if len(self.replay_buffer) < sac.learning_starts:
+                episode_batches = ceil(
+                    (sac.learning_starts - len(self.replay_buffer))
+                    / transitions_per_episode_batch
+                )
 
-        iteration_returns = []
-        for _ in range(episode_batches):
-            seed = cfg.seed if self._first_collect else None
-            self._first_collect = False
-            batch = collect_episode_batch(
-                self.env, self.nets.actor, self.task, cfg, seed=seed
-            )
-            self.replay_buffer.extend_episode_batch(
-                designs=batch.designs,
-                outcomes=batch.outcomes,
-                policy_designs=batch.policy_designs,
-                rewards=batch.rewards,
-                dones=batch.dones,
-            )
-            self.completed_episodes += sac.num_envs
-            self.env_steps += sac.num_envs * horizon
-            iteration_returns.append(batch.episodic_return)
+            returns = []
+            for _ in range(episode_batches):
+                seed = cfg.seed if self._first_collect else None
+                batch = collect_episode_batch(
+                    self.env, self.nets.actor, self.task, cfg, seed=seed
+                )
+                self._first_collect = False
+                self.replay_buffer.extend_episode_batch(
+                    designs=batch.designs,
+                    outcomes=batch.outcomes,
+                    policy_designs=batch.policy_designs,
+                    rewards=batch.rewards,
+                    dones=batch.dones,
+                )
+                self.completed_episodes += sac.num_envs
+                self.env_steps += sac.num_envs * horizon
+                returns.append(batch.episodic_return)
+
+            self._iteration_progress = {
+                "updates_completed": 0,
+                "episodic_return": torch.stack(returns).mean().item(),
+            }
+        progress = self._iteration_progress
 
         if (
             len(self.replay_buffer) >= sac.learning_starts
             and len(self.replay_buffer) >= sac.batch_size
         ):
-            for _ in range(sac.gradient_steps_per_iteration):
+            while progress["updates_completed"] < sac.gradient_steps_per_iteration:
                 losses = sac_update(
                     self.replay_buffer,
                     self.nets,
@@ -817,45 +920,54 @@ class Trainer:
                 if losses.alpha_loss is not None:
                     self._alpha_loss = losses.alpha_loss
                 self.optimization_step = losses.optimization_step
+                progress["updates_completed"] += 1
+
+                # Check the CPU clock without waiting for queued GPU work.
+                if time.monotonic() - self._start_time >= budget:
+                    self.stop_reason = "time_budget"
+                    if progress["updates_completed"] < sac.gradient_steps_per_iteration:
+                        return None
+                    break  # Finalize an iteration stopped on its last update.
 
         if sac.alpha is None:
-            self.target_entropy -= sac.entropy_anneal_rate
+            self.target_entropy = max(
+                self.target_entropy - sac.entropy_anneal_rate,
+                self.min_target_entropy,
+            )
 
+        self._iteration_progress = None
         return {
             "env_steps": float(self.env_steps),
             "episodes": float(self.completed_episodes),
-            "episodic_return": torch.stack(iteration_returns).mean().item(),
+            "episodic_return": progress["episodic_return"],
         }
 
     @torch.no_grad()
     def evaluate(self):
         """Estimates the policy-mean SPCE of the deterministic policy."""
         was_training = self.designer.design_net.training
-        cpu_rng_state = torch.get_rng_state()
-        cuda_rng_state = (
-            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-        )
+        rng = _rng_state()
         self.designer.design_net.eval()
 
-        eval_env = build_env(
-            self.cfg,
-            self.task,
-            n_contrastive=self.cfg.eval_n_contrastive,
-        )
-        obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
-        returns = torch.zeros(self.cfg.sac.num_envs, device=self.device)
-        for _ in range(self.env.horizon):
-            raw_designs = self.designer.design_net(
-                obs.outcomes, obs.designs, mask=obs.mask
+        try:
+            eval_env = build_env(
+                self.cfg,
+                self.task,
+                n_contrastive=self.cfg.eval_n_contrastive,
             )
-            designs = self.task.design_space.to_design(raw_designs)
-            obs, rewards, _, _, _ = eval_env.step(designs)
-            returns += rewards
+            obs, _ = eval_env.reset(seed=self.cfg.seed + 1)
+            returns = torch.zeros(self.cfg.sac.num_envs, device=self.device)
+            for _ in range(self.env.horizon):
+                raw_designs = self.designer.design_net(
+                    obs.outcomes, obs.designs, mask=obs.mask
+                )
+                designs = self.task.design_space.to_design(raw_designs)
+                obs, rewards, _, _, _ = eval_env.step(designs)
+                returns += rewards
 
-        self.designer.design_net.train(was_training)
-        torch.set_rng_state(cpu_rng_state)
-        if cuda_rng_state is not None:
-            torch.cuda.set_rng_state_all(cuda_rng_state)
+        finally:
+            self.designer.design_net.train(was_training)
+            _restore_rng(rng)
 
         mean = returns.mean().item()
         standard_error = (
@@ -865,7 +977,7 @@ class Trainer:
 
     def _loss_metrics(self, step):
         """Builds the periodic loss metrics dict."""
-        elapsed = max(time.time() - self._start_time, 1e-12)
+        elapsed = max(time.monotonic() - self._start_time, 1e-12)
         return {
             "step": step,
             "env_steps": float(self.env_steps),
@@ -877,53 +989,44 @@ class Trainer:
             "target_entropy": self.target_entropy,
         }
 
-    def _maybe_save_best(self, step, metrics, min_step=0):
-        # Saves a checkpoint of the model if it's the highest episodic return seen.
-        # NB: our objective is maximizing the episodic return (an MI bound).
+    def _synchronize(self):
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        elif self.device.type == "mps":
+            torch.mps.synchronize()
 
-        # min_step controls how long we wait before saving; useful for avoiding a
-        # ton of i/o at the start.
-        if step < min_step:
-            return
+    def build_policy_checkpoint(self):
+        """Builds policy weights and metadata shared by both checkpoint types."""
+        return {
+            "design_net": self.nets.actor.state_dict(),
+            "use_raw_history": self.designer.use_raw_history,
+            "step": self.completed_iterations - 1,
+            "completed_iterations": self.completed_iterations,
+            "optimization_step": self.optimization_step,
+            "elapsed_seconds": (
+                time.monotonic() - self._start_time
+                if self.training_elapsed_seconds is None
+                else self.training_elapsed_seconds
+            ),
+        }
 
-        if self.manager is None:
-            return
-
-        metric_val = metrics["episodic_return"]
-        is_better = metric_val > self.best_metric
-
-        if is_better:
-            self.best_metric = metric_val
-
-            chkpt_path = self.manager.path("best.pt")
-            torch.save(
-                self.build_checkpoint(step=step, metric=metric_val),
-                chkpt_path,
-            )
-
-            self.manager.event_logger.info(
-                f"Saving new best checkpoint : "
-                f"episodic_return={metric_val} @ step={step}"
-            )
-
-    def build_checkpoint(self, step=None, metric=None):
+    def build_checkpoint(self):
         """Builds the checkpoint dict holding weights and training state."""
         design_space = self.task.design_space
         checkpoint = {
+            **self.build_policy_checkpoint(),
             "config": OmegaConf.to_container(
                 self.cfg, resolve=True, throw_on_missing=False
             ),
             "horizon": self.env.horizon,
             "outcome_low": torch.as_tensor(self.cfg.reward.outcome_low),
             "outcome_high": torch.as_tensor(self.cfg.reward.outcome_high),
-            "design_net": self.nets.actor.state_dict(),
             "qf1": self.nets.qf1.state_dict(),
             "qf2": self.nets.qf2.state_dict(),
             "qf1_target": self.nets.qf1_target.state_dict(),
             "qf2_target": self.nets.qf2_target.state_dict(),
             "actor_optimizer": self.nets.actor_optimizer.state_dict(),
             "q_optimizer": self.nets.q_optimizer.state_dict(),
-            "alpha": self.nets.log_alpha.exp().detach().cpu(),
             "log_alpha": self.nets.log_alpha.detach().cpu(),
             "alpha_optimizer": (
                 None
@@ -931,11 +1034,42 @@ class Trainer:
                 else self.nets.alpha_optimizer.state_dict()
             ),
             "target_entropy": self.target_entropy,
-            "optimization_step": self.optimization_step,
             "env_steps": self.env_steps,
-            "training_iterations": self.cfg.sac.num_training_iterations,
-            "global_step": self.cfg.sac.num_training_iterations,
+            "checkpoint_version": 2,
+            "completed_episodes": self.completed_episodes,
+            "_first_collect": self._first_collect,
+            "iteration_progress": self._iteration_progress,
+            "replay_buffer": {
+                name: getattr(self.replay_buffer, name)
+                for name in (
+                    "designs",
+                    "outcomes",
+                    "policy_designs",
+                    "rewards",
+                    "dones",
+                    "_next_episode",
+                    "_episodes_written",
+                )
+            },
+            "rng_state": _rng_state(),
+            "losses": {
+                name: getattr(self, name).detach()
+                for name in ("_qf_loss", "_actor_loss", "_alpha_loss")
+            },
+            "train_time_budget_seconds": _time_budget(self.cfg),
+            "stop_reason": self.stop_reason,
         }
+        # Compatibility aliases used by existing checkpoint consumers.
+        checkpoint.update(
+            training_iterations=checkpoint["completed_iterations"],
+            global_step=checkpoint["completed_iterations"],
+            alpha=checkpoint["log_alpha"].exp(),
+            training_elapsed_seconds=checkpoint["elapsed_seconds"],
+            deadline_overrun_seconds=max(
+                0.0,
+                checkpoint["elapsed_seconds"] - checkpoint["train_time_budget_seconds"],
+            ),
+        )
         if isinstance(design_space, BoxDesignSpace):
             checkpoint["design_low"] = design_space.low.detach().cpu()
             checkpoint["design_high"] = design_space.high.detach().cpu()
@@ -945,16 +1079,168 @@ class Trainer:
             checkpoint["design_values"] = design_space.values.detach().cpu()
         # DefaultDesignSpace has no physical bounds. Its normalization
         # references are already part of the actor and critic state dicts.
-        if step is not None:
-            checkpoint["step"] = step
-        if metric is not None:
-            checkpoint["metric"] = metric
         return checkpoint
 
 
 # ============================================================================
 # Helper functions
 # ============================================================================
+
+
+def load_checkpoint(
+    path,
+    *,
+    device=None,
+    buffer_device=None,
+    train_time_budget_seconds=None,
+    num_training_iterations=None,
+    manager=None,
+) -> Trainer:
+    """Reconstructs a trainer from a full version-2 checkpoint.
+
+    Restores networks, optimizers, replay data, temperature, counters, losses,
+    partial-iteration progress and random generators. Periodic policy-only
+    checkpoints cannot resume training. The saved configuration is used rather
+    than the current recipe defaults; device overrides explicitly move the
+    model or replay data. Exact continuation requires the same device/RNG setup.
+
+    Time and iteration limits are cumulative, including completed training.
+    For example, pass ``train_time_budget_seconds=24 * 3600`` to continue a run
+    that stopped after 12 hours. Time between saving and loading is excluded;
+    the timer restarts on entry to this function and includes reconstruction.
+    Call ``trainer.train()`` on the returned trainer to continue. Supply a
+    manager to enable logging and automatic checkpoint saving in the new run;
+    without one, use ``torch.save(trainer.build_checkpoint(), output_path)``.
+
+    Args:
+        path: Path to a full checkpoint, typically ``final_step.pt``.
+        device: Optional model/task device, otherwise the saved device.
+        buffer_device: Optional replay device, otherwise the saved device.
+        train_time_budget_seconds: Optional new total training time limit;
+            pass ``float("inf")`` to continue with no time limit.
+        num_training_iterations: Optional new total iteration limit.
+        manager: Optional output manager, configured for the resumed run.
+
+    Returns:
+        A trainer ready to continue from the saved update.
+
+    Raises:
+        ValueError: If the checkpoint lacks training state or has no budget left.
+    """
+    start_time = time.monotonic()
+    # Keep replay data and RNG bytes on CPU until their destinations are known.
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    required = {
+        "config",
+        "design_net",
+        "use_raw_history",
+        "qf1",
+        "qf2",
+        "qf1_target",
+        "qf2_target",
+        "actor_optimizer",
+        "q_optimizer",
+        "log_alpha",
+        "alpha_optimizer",
+        "target_entropy",
+        "replay_buffer",
+        "rng_state",
+        "completed_iterations",
+        "optimization_step",
+        "completed_episodes",
+        "env_steps",
+        "_first_collect",
+        "iteration_progress",
+        "losses",
+        "elapsed_seconds",
+    }
+    if (
+        not isinstance(state, dict)
+        or state.get("checkpoint_version") != 2
+        or not required.issubset(state)
+    ):
+        raise ValueError(
+            "Resuming requires a full version-2 checkpoint (final_step.pt), "
+            "including optimizer, replay and RNG state; policy-only checkpoints "
+            "cannot resume training."
+        )
+
+    cfg = OmegaConf.create(state["config"])
+    if device is not None:
+        cfg.device = str(device)
+    if buffer_device is not None:
+        cfg.sac.buffer_device = str(buffer_device)
+    if train_time_budget_seconds is not None:
+        cfg.train_time_budget_seconds = train_time_budget_seconds
+    if num_training_iterations is not None:
+        cfg.sac.num_training_iterations = num_training_iterations
+
+    elapsed = state["elapsed_seconds"]
+    if not isfinite(elapsed) or elapsed < 0:
+        raise ValueError("Checkpoint elapsed_seconds must be finite and non-negative.")
+    if _time_budget(cfg) <= elapsed:
+        raise ValueError(
+            "The saved training time budget is exhausted; pass "
+            "train_time_budget_seconds greater than the checkpoint's "
+            f"elapsed_seconds ({elapsed}). This is a total, not additional, budget."
+        )
+    if cfg.sac.num_training_iterations <= state["completed_iterations"]:
+        raise ValueError(
+            "The saved iteration limit is exhausted; pass num_training_iterations "
+            "greater than the checkpoint's completed_iterations."
+        )
+
+    task = instantiate(cfg.task).to(cfg.device)
+    validate_config(task, cfg, task.design_space)
+    _set_seed(cfg.seed, cfg.torch_deterministic)
+    nets = make_networks(task, cfg, task.device)
+    nets.actor.load_state_dict(state["design_net"])
+    for name in ("qf1", "qf2", "qf1_target", "qf2_target"):
+        getattr(nets, name).load_state_dict(state[name])
+    with torch.no_grad():
+        nets.log_alpha.copy_(state["log_alpha"])
+    for name in ("actor_optimizer", "q_optimizer", "alpha_optimizer"):
+        optimizer = getattr(nets, name)
+        if optimizer is not None:
+            optimizer.load_state_dict(state[name])
+
+    replay = build_replay_buffer(cfg, task)
+    for name in ("designs", "outcomes", "policy_designs", "rewards", "dones"):
+        source = state["replay_buffer"][name]
+        target = getattr(replay, name)
+        if source.shape != target.shape or source.dtype != target.dtype:
+            raise ValueError(f"Checkpoint replay_buffer.{name} does not match config.")
+        target.copy_(source)
+    for name in ("_next_episode", "_episodes_written"):
+        setattr(replay, name, state["replay_buffer"][name])
+
+    trainer = Trainer(
+        task,
+        PolicyDesigner(
+            task, cfg.T, nets.actor, use_raw_history=state["use_raw_history"]
+        ),
+        build_env(cfg, task),
+        replay,
+        nets,
+        cfg,
+        manager=manager,
+        start_time=start_time - elapsed,
+    )
+    for name in (
+        "completed_iterations",
+        "optimization_step",
+        "completed_episodes",
+        "env_steps",
+        "target_entropy",
+        "_first_collect",
+    ):
+        setattr(trainer, name, state[name])
+    trainer._iteration_progress = state["iteration_progress"]
+    for name in ("_qf_loss", "_actor_loss", "_alpha_loss"):
+        setattr(trainer, name, state["losses"][name].to(task.device))
+    # Construction consumes randomness; restore generators only once it is done.
+    _restore_rng(state["rng_state"])
+    return trainer
 
 
 def build_env(cfg, task, *, n_contrastive=None):
@@ -1006,6 +1292,7 @@ def main(cfg):
 
     Run with ``python testbed/methods/rlboed.py [overrides...]``.
     """
+    start_time = time.monotonic()
     manager, task = setup(cfg)
 
     # Seed immediately before network construction (mirrors the original
@@ -1031,6 +1318,7 @@ def main(cfg):
         nets=nets,
         cfg=cfg,
         manager=manager,
+        start_time=start_time,
     )
 
     trainer.train()
