@@ -1,7 +1,6 @@
 # @package _global_
 
-# Hyperparameter settings for reproducing ActionBED on the 2D, 2 source LF problem
-# Follows the ActionBED code rather than the paper (arXiv v1)
+# Hyperparameter settings for ActionBED on the 2D, 2 source LF problem
 # Uses the PermutationInvariantLogMSELoss
 
 defaults:
@@ -12,6 +11,9 @@ defaults:
 
 seed: 0 # override on sweeps
 
+train_time_budget_seconds: 43_200 # 12 hours
+eval_every: 0  # the final_eval block handles it
+
 wandb:
   project: benchmarking_location_finding_2src  # project = task
   group: actionbed_logmse # group = method
@@ -20,7 +22,7 @@ wandb:
 loss:
   _target_: testbed.design_objectives.PermutationInvariantLogMSELoss
 # training
-n_train_iter: 150_000
+n_train_iter: 1_000_000 # very high to avoid quitting before spending the train time budget
 n_action_warmup_iter: 50_000
 n_outer: 2_000
 

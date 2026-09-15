@@ -1,12 +1,16 @@
 """Training for ActionBED (Rossa et al., 2026)."""
 
 import inspect
+import time
+from math import inf
 
 import hydra
 import torch
 from hydra.utils import get_class, instantiate
+from omegaconf import OmegaConf
 
 from testbed.core.setup import setup
+from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.designers import (
     ActionHook,
     PolicyDesigner,
@@ -51,8 +55,11 @@ class Trainer:
 
         self.manager = manager
 
-        # checkpointing
+        # checkpointing / progress, restored by load_checkpoint
         self.best_metric = torch.inf
+        self.step = -1
+        self.elapsed_seconds = 0.0
+        self._start_time = time.monotonic()
 
         # Attach an action hook directly to the designer(s), so every
         # rollout() call from them computes an action -- no need to thread
@@ -67,15 +74,23 @@ class Trainer:
         self.designer.design_net.train()
         self.action_net.train()
 
+        budget = self.cfg.train_time_budget_seconds
+        self._budget = inf if budget is None else budget
+        self._start_time = time.monotonic() - self.elapsed_seconds
+        self.stop_reason = "iteration_limit"
+
         # Action warm-up
-        if self.manager and self.cfg.n_action_warmup_iter > 0:
+        if self.manager and self.step + 1 < self.cfg.n_action_warmup_iter:
             self.manager.event_logger.info("Starting action warmup training...")
-        for step in range(self.cfg.n_action_warmup_iter):
+        for step in range(self.step + 1, self.cfg.n_action_warmup_iter):
             metrics = self.action_warmup_step()
             metrics["step"] = step
 
             if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
+
+            if self._checkpoint_or_stop(step):
+                return self._finish()
 
             # evaluation
             if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
@@ -93,14 +108,16 @@ class Trainer:
         if self.manager:
             self.manager.event_logger.info("Starting joint data-action training...")
         for step in range(
-            self.cfg.n_action_warmup_iter,
-            self.cfg.n_action_warmup_iter + self.cfg.n_train_iter,
+            self.step + 1, self.cfg.n_action_warmup_iter + self.cfg.n_train_iter
         ):
             metrics = self.train_step()
             metrics["step"] = step
 
             if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
+
+            if self._checkpoint_or_stop(step):
+                break
 
             # evaluation
             if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
@@ -116,19 +133,52 @@ class Trainer:
 
                 self._maybe_save_best(step, eval_metrics)
 
-        save_path = self.manager.path("final_step.pt")
+        self._finish()
+
+    def _checkpoint_or_stop(self, step):
+        """Saves a periodic policy checkpoint; returns True once the time budget is spent."""
+        self.step = step
+        interval = self.cfg.checkpoint_every
+        if interval and (step + 1) % interval == 0:
+            torch.save(
+                self._policy_state(step), self.manager.path(f"step_{step + 1:08d}.pt")
+            )
+        if time.monotonic() - self._start_time >= self._budget:
+            self.stop_reason = "time_budget"
+            return True
+        return False
+
+    def _finish(self):
+        """Saves the full training state, enabling warm-starts."""
+        self.elapsed_seconds = time.monotonic() - self._start_time
+        self.manager.event_logger.info(
+            f"Stopped: {self.stop_reason} after {self.step + 1} steps, "
+            f"{self.elapsed_seconds:.1f}s."
+        )
         torch.save(
             {
-                "design_net": self.designer.design_net.state_dict(),
-                "action_net": self.action_net.state_dict(),
-                "step": step,
-                "use_raw_history": self.designer.use_raw_history,
+                **self._policy_state(self.step),
+                "optimizer": self.optimizer.state_dict(),
+                "scheduler": self.scheduler and self.scheduler.state_dict(),
+                "best_metric": self.best_metric,
+                "stop_reason": self.stop_reason,
+                "config": OmegaConf.to_container(self.cfg, resolve=True),
+                "rng_state": rng_state(),
             },
-            save_path,
+            self.manager.path("final_step.pt"),
         )
 
         if self.manager.metric_logger is not None:
             self.manager.metric_logger.close()
+
+    def _policy_state(self, step):
+        return {
+            "design_net": self.designer.design_net.state_dict(),
+            "action_net": self.action_net.state_dict(),
+            "step": step,
+            "use_raw_history": self.designer.use_raw_history,
+            "elapsed_seconds": time.monotonic() - self._start_time,
+        }
 
     def action_warmup_step(self):
         """Takes a single training step while warming up the action network."""
@@ -243,16 +293,7 @@ class Trainer:
 
             chkpt_path = self.manager.path("best.pt")
 
-            torch.save(
-                {
-                    "design_net": self.designer.design_net.state_dict(),
-                    "action_net": self.action_net.state_dict(),
-                    "step": step,
-                    "metric": metric_val,
-                    "use_raw_history": self.designer.use_raw_history,
-                },
-                chkpt_path,
-            )
+            torch.save({**self._policy_state(step), "metric": metric_val}, chkpt_path)
 
             self.manager.event_logger.info("Saved new best checkpoint")
 
@@ -300,6 +341,83 @@ def build_loss_fn(cfg, task):
     return instantiate(cfg.loss, **extra_kwargs)
 
 
+def build_trainer(cfg, task, manager=None):
+    """Seeds, then builds a fresh trainer with its networks, optimizer and loss."""
+    seed_all(cfg.seed)
+    torch.backends.cudnn.deterministic = cfg.torch_deterministic
+
+    design_net, action_net = build_policy_nets(cfg, task)
+    design_net = design_net.to(cfg.device)
+    action_net = action_net.to(cfg.device)
+    designer = PolicyDesigner(
+        task, cfg.T, design_net, use_raw_history=cfg.use_raw_history
+    )
+
+    # Setup for action-warmup; designs are drawn from the task's design space.
+    random_designer = None
+    if cfg.n_action_warmup_iter > 0:
+        random_designer = RandomDesigner(task, cfg.T)
+
+    # Create optimizer + LR scheduler
+    all_policy_params = list(design_net.parameters()) + list(action_net.parameters())
+    optimizer = torch.optim.Adam(all_policy_params, lr=cfg.lr, betas=tuple(cfg.betas))
+
+    scheduler = None
+    if cfg.lr_period is not None:
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma
+        )
+
+    return Trainer(
+        task=task,
+        designer=designer,
+        action_net=action_net,
+        loss_fn=build_loss_fn(cfg, task),
+        optimizer=optimizer,
+        cfg=cfg,
+        scheduler=scheduler,
+        random_designer=random_designer,
+        manager=manager,
+    )
+
+
+def load_checkpoint(
+    path,
+    *,
+    device=None,
+    train_time_budget_seconds=None,
+    n_train_iter=None,
+    manager=None,
+):
+    """Reconstructs a trainer from a ``final_step.pt`` checkpoint to resume training.
+
+    The saved config is used, with optional overrides. Time and iteration limits
+    are totals including completed training, e.g. pass
+    ``train_time_budget_seconds=24 * 3600`` to continue a run stopped at 12 hours
+    (``float("inf")`` removes the limit). ``trainer.train()`` requires a manager.
+    """
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    cfg = OmegaConf.create(state["config"])
+    overrides = {
+        "device": device,
+        "train_time_budget_seconds": train_time_budget_seconds,
+        "n_train_iter": n_train_iter,
+    }
+    cfg.merge_with({k: v for k, v in overrides.items() if v is not None})
+
+    trainer = build_trainer(cfg, instantiate(cfg.task).to(cfg.device), manager)
+    trainer.designer.design_net.load_state_dict(state["design_net"])
+    trainer.action_net.load_state_dict(state["action_net"])
+    trainer.optimizer.load_state_dict(state["optimizer"])
+    if trainer.scheduler is not None:
+        trainer.scheduler.load_state_dict(state["scheduler"])
+    for name in ("step", "best_metric", "elapsed_seconds"):
+        setattr(trainer, name, state[name])
+    # Construction consumes randomness, so restore generators last.
+    restore_rng(state["rng_state"])
+    return trainer
+
+
 # ============================================================================
 # Entry point
 # ============================================================================
@@ -316,47 +434,11 @@ def main(cfg):
 
     Run with ``python testbed/methods/actionbed.py [overrides...]``.
     """
+    start_time = time.monotonic()
     manager, task = setup(cfg)
-
-    # Set seed
-    torch.manual_seed(cfg.seed)
-
-    design_net, action_net = build_policy_nets(cfg, task)
-    design_net = design_net.to(cfg.device)
-    action_net = action_net.to(cfg.device)
-    designer = PolicyDesigner(
-        task, cfg.T, design_net, use_raw_history=cfg.use_raw_history
-    )
-
-    # Setup for action-warmup; designs are drawn from the task's design space.
-    random_designer = None
-    if cfg.n_action_warmup_iter > 0:
-        random_designer = RandomDesigner(task, cfg.T)
-
-    # Create optimizer + LR scheduler
-    all_policy_params = list(design_net.parameters()) + list(action_net.parameters())
-    optimizer = torch.optim.Adam(all_policy_params, lr=cfg.lr, betas=cfg.betas)
-
-    scheduler = None
-    if cfg.lr_period is not None:
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=cfg.lr_period, gamma=cfg.lr_gamma
-        )
-
-    loss_fn = build_loss_fn(cfg, task)
-
-    trainer = Trainer(
-        task=task,
-        designer=designer,
-        action_net=action_net,
-        loss_fn=loss_fn,
-        optimizer=optimizer,
-        cfg=cfg,
-        scheduler=scheduler,
-        random_designer=random_designer,
-        manager=manager,
-    )
-
+    trainer = build_trainer(cfg, task, manager)
+    # Setup counts toward the time budget.
+    trainer.elapsed_seconds = time.monotonic() - start_time
     trainer.train()
 
 

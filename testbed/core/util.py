@@ -1,7 +1,9 @@
-"""Tensor shape and probability helpers."""
+"""Tensor shape, probability and random number generator helpers."""
 
 import math
+import random
 
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -212,3 +214,33 @@ def shape_as_str(x: Tensor | None) -> str:
     if x is None:
         return "None"
     return str(tuple(x.shape))
+
+
+def seed_all(seed):
+    """Seeds Python, NumPy and torch."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def rng_state():
+    """Returns the global generator states in a ``weights_only``-loadable form."""
+    state = np.random.get_state()
+    return {
+        "python": random.getstate(),
+        "numpy": (state[0], state[1].tolist(), *state[2:]),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+
+
+def restore_rng(state):
+    """Restores generator states saved by :func:`rng_state`."""
+    random.setstate(state["python"])
+    name, keys, pos, has_gauss, cached = state["numpy"]
+    np.random.set_state(
+        (name, np.asarray(keys, dtype=np.uint32), pos, has_gauss, cached)
+    )
+    torch.set_rng_state(state["torch"].cpu())
+    if state["cuda"] is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all([value.cpu() for value in state["cuda"]])

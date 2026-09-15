@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import copy
-import random
 import time
 import warnings
 from dataclasses import dataclass
 from math import ceil, inf, isfinite, isinf, log
 
 import hydra
-import numpy as np
 import torch
 import torch.nn.functional as F
 from hydra.utils import instantiate
@@ -24,6 +22,7 @@ from testbed.core.design_spaces import (
     FiniteDesignSpace,
 )
 from testbed.core.setup import instantiate_design_net, setup
+from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import (
     CategoricalPolicyNet,
     GaussianPolicyNet,
@@ -37,27 +36,6 @@ from testbed.envs import BEDEnv
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
 from testbed.tasks.base import Task
-
-
-def _rng_state():
-    state = np.random.get_state()
-    return {
-        "python": random.getstate(),
-        "numpy": (state[0], state[1].tolist(), *state[2:]),
-        "torch": torch.get_rng_state(),
-        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
-    }
-
-
-def _restore_rng(state):
-    random.setstate(state["python"])
-    name, keys, pos, has_gauss, cached = state["numpy"]
-    np.random.set_state(
-        (name, np.asarray(keys, dtype=np.uint32), pos, has_gauss, cached)
-    )
-    torch.set_rng_state(state["torch"].cpu())
-    if state["cuda"] is not None and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all([value.cpu() for value in state["cuda"]])
 
 
 @dataclass
@@ -318,9 +296,7 @@ def _resolve_buffer_device(buffer_device: str) -> torch.device:
 
 def _set_seed(seed: int, torch_deterministic: bool) -> None:
     """Sets random seeds to match the reference script."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+    seed_all(seed)
     torch.backends.cudnn.deterministic = torch_deterministic
 
 
@@ -946,7 +922,7 @@ class Trainer:
     def evaluate(self):
         """Estimates the policy-mean SPCE of the deterministic policy."""
         was_training = self.designer.design_net.training
-        rng = _rng_state()
+        rng = rng_state()
         self.designer.design_net.eval()
 
         try:
@@ -967,7 +943,7 @@ class Trainer:
 
         finally:
             self.designer.design_net.train(was_training)
-            _restore_rng(rng)
+            restore_rng(rng)
 
         mean = returns.mean().item()
         standard_error = (
@@ -1051,7 +1027,7 @@ class Trainer:
                     "_episodes_written",
                 )
             },
-            "rng_state": _rng_state(),
+            "rng_state": rng_state(),
             "losses": {
                 name: getattr(self, name).detach()
                 for name in ("_qf_loss", "_actor_loss", "_alpha_loss")
@@ -1239,7 +1215,7 @@ def load_checkpoint(
     for name in ("_qf_loss", "_actor_loss", "_alpha_loss"):
         setattr(trainer, name, state["losses"][name].to(task.device))
     # Construction consumes randomness; restore generators only once it is done.
-    _restore_rng(state["rng_state"])
+    restore_rng(state["rng_state"])
     return trainer
 
 
