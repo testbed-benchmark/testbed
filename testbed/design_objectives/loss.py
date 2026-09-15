@@ -119,6 +119,36 @@ def _maybe_sort_by_norm(
     return input, sort_by_norm(target)
 
 
+def _min_over_permutations(cost: Tensor, dim_object: int, reduction: str) -> Tensor:
+    """Minimises a pairwise matching cost over all permutations, then reduces.
+
+    Args:
+        cost (Tensor):
+            ``cost[..., i, j]`` is the cost of matching estimate ``i`` to
+            target ``j``, shape ``[*batch, K, K]``.
+        dim_object (int):
+            Size of each object, used to normalize the ``"mean"`` reduction.
+        reduction (str):
+            One of ``"sum"``, ``"mean"``, or ``"none"``.
+
+    Returns:
+        Tensor:
+            If ``reduction`` is ``"none"``, the minimal total cost of shape
+            ``[*batch]``. ``"mean"`` normalizes it by ``K * dim_object`` before
+            averaging; ``"sum"`` sums it.
+    """
+    K = cost.shape[-1]
+    perms = _permutation_index(K).to(cost.device)  # [K!, K]
+    rows = torch.arange(K, device=cost.device)  # [K]
+    per_sample = cost[..., rows, perms].sum(dim=-1).min(dim=-1).values  # [*batch]
+
+    if reduction == "mean":
+        return (per_sample / (K * dim_object)).mean()
+    if reduction == "sum":
+        return per_sample.sum()
+    return per_sample
+
+
 class LogMSELoss(nn.Module):
     r"""Sum of a standard MSE loss and an MSE loss on a log-scale.
 
@@ -296,6 +326,16 @@ def _permutation_index(n: int) -> Tensor:
     return torch.tensor(list(itertools.permutations(range(n))), dtype=torch.long)
 
 
+def _check_objects_shape(input: Tensor, target: Tensor) -> None:
+    """Checks ``input``/``target`` share a ``[*batch, n_objects, dim_object]`` shape."""
+    _check_same_shape(input, target)
+    if input.dim() < 2:
+        raise ValueError(
+            f"expected shape [*batch, n_objects, dim_object]; got a "
+            f"{input.dim()}-D tensor."
+        )
+
+
 class PermutationInvariantMSELoss(nn.Module):
     r"""A permutation-invariant version of the MSE loss, defined by the optimal matching between objects.
 
@@ -344,35 +384,76 @@ class PermutationInvariantMSELoss(nn.Module):
             ValueError: If ``input`` and ``target`` have different shapes, or
                 if they have fewer than 2 dimensions.
         """
-        _check_same_shape(input, target)
-        if input.dim() < 2:
-            raise ValueError(
-                f"expected shape [*batch, n_objects, dim_object]; got a "
-                f"{input.dim()}-D tensor."
-            )
-
-        K, D = input.shape[-2:]
+        _check_objects_shape(input, target)
 
         # Pairwise squared L2 distance between every estimate object i and
         # target object j:  cost[..., i, j] = || input_i - target_j ||_2^2
         diff = input.unsqueeze(-2) - target.unsqueeze(-3)  # [*batch, K, K, d]
         cost = diff.pow(2).sum(dim=-1)  # [*batch, K, K]
 
-        perms = _permutation_index(K).to(input.device)  # [K!, K]
-        rows = torch.arange(K, device=input.device)  # [K]
+        return _min_over_permutations(cost, input.shape[-1], self.reduction)
 
-        perm_cost = cost[..., rows, perms].sum(dim=-1)  # [*batch, K!]
 
-        # minimise over permutations
-        pi_mse = perm_cost.min(dim=-1).values  # [*batch]
+class PermutationInvariantLogMSELoss(nn.Module):
+    r"""A permutation-invariant version of :class:`LogMSELoss`.
 
-        if self.reduction == "none":
-            return pi_mse
-        if self.reduction == "mean":
-            pi_mse = pi_mse / (D * K)
-            return pi_mse.mean()
-        if self.reduction == "sum":
-            return pi_mse.sum()
+    This is the Log-MSE loss used in the reference ActionBED implementation
+    (``logMSEDownstreamLoss``, whose default ``permute=True`` takes the minimum
+    over source orderings), rather than the sorted variant of eq. 56 in [1].
+
+    Inputs are tensors of shape ``[*batch, n_objects, dim_object]``. Writing
+    :math:`K` = ``n_objects`` and :math:`f(e) = e^2 + \log(e^2 + \epsilon)`
+    applied element-wise, the per-sample loss is
+
+    .. math::
+        \min_{\sigma \in S_K} \sum_{k=1}^K \sum_{d}
+            f(\mathrm{input}_{k,d} - \mathrm{target}_{\sigma(k),d})
+
+    found by brute-force enumeration of all ``K!`` permutations.
+
+    Args:
+        reduction (str):
+            One of ``"sum"``, ``"mean"``, or ``"none"`` (default: ``"mean"``).
+        epsilon (float):
+            Small constant added before taking the log, for numerical
+            stability (default: ``1e-6``).
+
+    Note:
+        ``reduction='mean'`` normalizes by ``B*K*D``, not just ``B``, matching
+        the reference implementation's mean over objects and coordinates.
+    """
+
+    def __init__(self, reduction: str = "mean", epsilon: float = 1e-6) -> None:
+        """Initializes the loss."""
+        super().__init__()
+        self.reduction = _check_reduction(reduction)
+        self.epsilon = epsilon
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        """Computes the loss.
+
+        Args:
+            input (Tensor):
+                Estimated objects, of shape ``[*batch, n_objects, dim_object]``.
+            target (Tensor):
+                Target objects, the same shape as ``input``.
+
+        Returns:
+            Tensor:
+                If ``reduction`` is ``"none"``, shape ``[*batch]``.
+                Otherwise, a scalar.
+
+        Raises:
+            ValueError: If ``input`` and ``target`` have different shapes, or
+                if they have fewer than 2 dimensions.
+        """
+        _check_objects_shape(input, target)
+
+        # cost[..., i, j] = sum_d f(input_{i,d} - target_{j,d})
+        sq = (input.unsqueeze(-2) - target.unsqueeze(-3)).pow(2)  # [*batch, K, K, d]
+        cost = (sq + torch.log(sq + self.epsilon)).sum(dim=-1)  # [*batch, K, K]
+
+        return _min_over_permutations(cost, input.shape[-1], self.reduction)
 
 
 class TrueLogMSELoss(nn.Module):

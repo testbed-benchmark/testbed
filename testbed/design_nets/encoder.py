@@ -238,16 +238,16 @@ class AttentiveEncoder(HistoryEncoder):
         self.output_norm = nn.LayerNorm(dim_emb)
 
     def encode_tokens(self, tokens, mask=None):
-        """Runs the forward pass of the encoder.
-
-        Note that masking is not yet supported for the AttentiveEncoder.
-        """
-        if mask is not None:
-            raise NotImplementedError(
-                "Masking not yet supported with an attention-based encoder."
-            )
-
+        """Encodes valid history tokens; the CLS token always remains unmasked."""
         b, T, _ = tokens.shape
+        if mask is None:
+            mask = torch.ones(b, T, dtype=torch.bool, device=tokens.device)
+        # Clear padding before projection, including non-finite padded values.
+        tokens = tokens.masked_fill(~mask.unsqueeze(-1), 0.0)
+        lengths = mask.sum(dim=-1)
+        key_padding_mask = torch.cat(
+            [~mask, torch.zeros(b, 1, dtype=torch.bool, device=tokens.device)], dim=1
+        )
 
         # Input projection
         enc = self.input_encoder(tokens)  # [b, T, dim_emb]
@@ -255,17 +255,14 @@ class AttentiveEncoder(HistoryEncoder):
         # Class token
         cls = self.cls_token.expand(b, 1, -1)  # [b, 1, dim_emb]
 
-        # Add time embeddings
+        # Histories are valid prefixes followed by padding. CLS follows the prefix.
         if self.use_time_embedding:
-            if T > 0:
-                time_idx = (
-                    torch.arange(T, device=tokens.device).unsqueeze(0).expand(b, T)
-                )
-                enc = enc + self.time_emb(time_idx)
-
-            # Always use T for the class token
-            cls_time_idx = torch.full((b, 1), T, dtype=torch.long, device=tokens.device)
-            cls = cls + self.time_emb(cls_time_idx)
+            if torch.any(lengths > self.max_T):
+                raise ValueError(f"History length exceeds max_T={self.max_T}.")
+            time_idx = torch.arange(T, device=tokens.device).unsqueeze(0).expand(b, T)
+            time_idx = time_idx.masked_fill(~mask, 0)
+            enc = enc + self.time_emb(time_idx)
+            cls = cls + self.time_emb(lengths.unsqueeze(1))
 
         # Add type embeddings
         if self.use_type_embedding:
@@ -282,7 +279,7 @@ class AttentiveEncoder(HistoryEncoder):
 
         # Attention blocks
         for block in self.blocks:
-            enc = block(enc)
+            enc = block(enc, key_padding_mask=key_padding_mask)
 
         # cls readout
         cls_out = enc[:, -1, :]
@@ -475,3 +472,27 @@ class GatedDeepSetEncoder(DeepSetEncoder):
         # A convex mix rather than a gather, so relaxed outcomes also work.
         enc = y_flat * h_one + (1.0 - y_flat) * h_zero  # [b, T, dim_emb]
         return self.sum_pool(enc, mask)
+
+
+def make_history_encoder(
+    *,
+    event_shape_y,
+    event_shape_design,
+    architecture="deepset",
+    dim_h=(128, 128),
+    dim_emb=64,
+    attention=None,
+):
+    """Builds an independently initialized encoder for a policy or critic."""
+    kwargs = {
+        "event_shape_y": event_shape_y,
+        "event_shape_design": event_shape_design,
+        "dim_h": dim_h,
+        "dim_emb": dim_emb,
+    }
+    if architecture == "deepset":
+        return DeepSetEncoder(**kwargs)
+    if architecture == "attention":
+        kwargs.update(dict(attention or {}))
+        return AttentiveEncoder(**kwargs)
+    raise ValueError("architecture must be 'deepset' or 'attention'.")

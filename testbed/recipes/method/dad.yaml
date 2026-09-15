@@ -17,6 +17,7 @@ use_raw_history: false
 # objective
 objective:
   name: spce
+  fused: true
   n_inner: 1_023  # contrastive samples for sPCE
   reparameterize_policy: false
   baseline: null

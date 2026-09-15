@@ -51,6 +51,7 @@ def evaluate_checkpoint(
     contrastive_chunk_size: int = 2_000,
     use_raw_weights: bool = False,
     device: str = "cpu",
+    fused: bool = True,
 ):
     """Computes mean +/- SEM sPCE/sNMC bounds for a saved policy checkpoint."""
     run_dir = Path(run_dir)
@@ -90,6 +91,7 @@ def evaluate_checkpoint(
         n_contrastive=n_contrastive,
         outer_batch_size=outer_batch_size,
         contrastive_chunk_size=contrastive_chunk_size,
+        fused=fused,
     )
     out["weights_used"] = key
     return out
@@ -118,5 +120,7 @@ if __name__ == "__main__":
             contrastive_chunk_size=settings.contrastive_chunk_size,
             use_raw_weights=settings.use_raw_weights,
             device=cfg.device,
+            # run configs saved before final_eval.fused existed default to fused
+            fused=settings.get("fused", True),
         )
     )

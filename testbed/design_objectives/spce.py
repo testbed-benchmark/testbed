@@ -25,14 +25,23 @@ class SPCE(RolloutObjective):
     where theta_0' = theta_i and theta_l' ~ p(theta) for l >= 1.
     """
 
-    def __init__(self, task: Task, n_contrastive: int, chunk_size: int | None = None):
+    def __init__(
+        self,
+        task: Task,
+        n_contrastive: int,
+        chunk_size: int | None = None,
+        fused: bool = False,
+    ):
         """Initializes the SPCE estimator.
 
         chunk_size caps how many contrastive samples are scored at once; the
         default scores all of them together. Set it when n_contrastive is too
         large to materialize, as evaluation does.
+
+        fused scores each chunk in one compiled call rather than looping over
+        the T steps. See ``Task.history_logp``.
         """
-        super().__init__(task)
+        super().__init__(task, fused=fused)
         self.n_contrastive = int(n_contrastive)
         self.chunk_size = None if chunk_size is None else int(chunk_size)
 
@@ -64,6 +73,7 @@ class SPCE(RolloutObjective):
             self.chunk_size,
             y_context=y_context,
             design_context=design_context,
+            fused=self.fused,
         )
         return self.gain_from_logsumexps(
             logp_joint, chunk_logsumexps, self.n_contrastive
@@ -90,12 +100,12 @@ class PCE(DesignObjective):
     evaluates the T=1 SPCE bound. Useful when optimizing or evaluating a static design.
     """
 
-    def __init__(self, task: Task, n_outer: int, n_inner: int):
+    def __init__(self, task: Task, n_outer: int, n_inner: int, fused: bool = False):
         """Initializes the PCE estimator."""
-        super().__init__(task)
+        super().__init__(task, fused=fused)
         self.n_outer = int(n_outer)
         self.n_inner = int(n_inner)
-        self.inner_spce = SPCE(task, n_contrastive=n_inner)
+        self.inner_spce = SPCE(task, n_contrastive=n_inner, fused=fused)
 
     def __call__(
         self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None

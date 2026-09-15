@@ -311,6 +311,7 @@ def build_objective(cfg, task, posterior_net):
             stochastic_design_policy=cfg.objective.requires_policy_log_probs,
             baseline=cfg.objective.baseline,
             use_current_prior=cfg.objective.use_current_prior,
+            fused=cfg.objective.fused,
         ),
     }
     name = cfg.objective.name

@@ -25,6 +25,17 @@ columns instead of overwriting them::
 
     python scripts/eval_run.py --run-dir runs/<run_name> \
         --n-contrastive 10000000 --n-outer 512 --prefix eval_L1e7
+
+``--checkpoint`` scores a file other than the recipe's
+``final_eval.checkpoint``, such as one of the periodic ``step_*.pt`` policies
+RL-BOED writes when ``checkpoint_every`` is set. Scoring a non-default
+checkpoint namespaces its own output (``eval_step_00010000.json`` and
+``eval_step_00010000/*``), so a mid-training score cannot overwrite the run's
+headline ``eval/*`` columns; pass ``--prefix`` to choose the namespace
+yourself::
+
+    python scripts/eval_run.py --run-dir runs/<run_name> \
+        --checkpoint step_00010000.pt
 """
 
 from __future__ import annotations
@@ -73,6 +84,12 @@ def main() -> None:
     )
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Checkpoint filename within the run directory. "
+        "Default: the run's final_eval.checkpoint.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Evaluate even when the run's final_eval.enabled is false.",
@@ -88,8 +105,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--prefix",
-        default="eval",
-        help="Namespace for the metric keys and the JSON file.",
+        default=None,
+        help="Namespace for the metric keys and the JSON file. Default: "
+        "'eval', or 'eval_<checkpoint stem>' when --checkpoint is not the "
+        "one the run would be evaluated with.",
     )
     args = parser.parse_args()
 
@@ -107,17 +126,32 @@ def main() -> None:
         print("final_eval.enabled is false; skipping")
         return
 
+    # Scoring a checkpoint other than the run's own would otherwise overwrite
+    # its headline eval/* columns and eval.json with a mid-training number.
+    checkpoint = args.checkpoint or settings.checkpoint
+    prefix = args.prefix
+    if prefix is None:
+        prefix = (
+            "eval"
+            if checkpoint == settings.checkpoint
+            else f"eval_{Path(checkpoint).stem}"
+        )
+
     results = evaluate_checkpoint(
         str(run_dir),
-        checkpoint=settings.checkpoint,
+        checkpoint=checkpoint,
         n_outer=args.n_outer or settings.n_outer,
         n_contrastive=args.n_contrastive or settings.n_contrastive,
         outer_batch_size=settings.outer_batch_size,
         contrastive_chunk_size=settings.contrastive_chunk_size,
         use_raw_weights=settings.use_raw_weights,
         device=args.device or cfg.device,
+        # run configs saved before final_eval.fused existed default to fused
+        fused=settings.get("fused", True),
     )
-    (run_dir / f"{args.prefix}.json").write_text(json.dumps(results, indent=2))
+    results_path = run_dir / f"{prefix}.json"
+    results_path.write_text(json.dumps(results, indent=2))
+    print(f"{checkpoint} -> {results_path}")
     print(results)
 
     run_id = args.wandb_run_id
@@ -126,7 +160,7 @@ def main() -> None:
         run_id = id_path.read_text().strip() if id_path.exists() else None
     if not args.no_wandb and run_id:
         try:
-            log_to_wandb(run_dir, run_id, results, args.prefix)
+            log_to_wandb(run_dir, run_id, results, prefix)
         except Exception as error:
             print(
                 f"could not add eval metrics to wandb run {run_id}: {error}",

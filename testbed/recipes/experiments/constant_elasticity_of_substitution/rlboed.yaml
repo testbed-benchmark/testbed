@@ -17,7 +17,13 @@ reward:
   outcome_high: 1.0
   n_contrastive: 100_000
 
+# This recipe stops on its own iteration count, not the wall clock, so it opts
+# out of the method recipe's time budget. Its iteration count already equals
+# RL-BOED's, so the entropy schedule ends on the reference endpoint unaided.
+train_time_budget_seconds: null
+
 sac:
+  entropy_anneal_total: null
   num_training_iterations: 20_001
   buffer_size: 1_000_000
   tau: 0.005

@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from testbed.core.util import sort_by_norm
 from testbed.design_objectives import (
     LogMSELoss,
+    PermutationInvariantLogMSELoss,
     PermutationInvariantMSELoss,
     SortedLogMSELoss,
     SortedMSELoss,
@@ -17,6 +18,7 @@ LOSS_CLASSES = [
     SortedMSELoss,
     SortedLogMSELoss,
     PermutationInvariantMSELoss,
+    PermutationInvariantLogMSELoss,
 ]
 
 
@@ -348,3 +350,68 @@ def test_permutation_invariant_loss_reduction_semantics():
     torch.testing.assert_close(
         sum_loss, torch.tensor(52.0)
     )  # sum(none), no D*K scaling
+
+
+def test_permutation_invariant_log_mse_loss_matches_brute_force_reference():
+    torch.manual_seed(13)
+    epsilon = 1e-6
+    loss_fn = PermutationInvariantLogMSELoss(reduction="none", epsilon=epsilon)
+
+    def f(e):
+        return (e.pow(2) + torch.log(e.pow(2) + epsilon)).sum().item()
+
+    for k in (1, 2, 3, 4):
+        input = torch.randn(5, k, 3)
+        target = torch.randn(5, k, 3)
+
+        expected = torch.tensor(
+            [
+                min(
+                    sum(f(input[b, i] - target[b, j]) for i, j in enumerate(perm))
+                    for perm in itertools.permutations(range(k))
+                )
+                for b in range(5)
+            ]
+        )
+
+        torch.testing.assert_close(
+            loss_fn(input, target), expected, atol=1e-4, rtol=1e-5
+        )
+
+
+def test_permutation_invariant_log_mse_loss_matches_actionbed_two_source_formula():
+    # Reference: Action-BED's logMSEDownstreamLoss.compute_loss (permute=True).
+    torch.manual_seed(14)
+    input = torch.randn(64, 2, 2)
+    target = torch.randn(64, 2, 2)
+    epsilon = 1e-6
+
+    def per_sample(a):
+        err2 = (target - a).pow(2)
+        return (err2 + torch.log(err2 + epsilon)).mean(dim=(1, 2))
+
+    expected = torch.minimum(per_sample(input), per_sample(input.flip(1))).mean()
+    loss = PermutationInvariantLogMSELoss(epsilon=epsilon)(input, target)
+
+    torch.testing.assert_close(loss, expected)
+
+
+def test_permutation_invariant_log_mse_loss_is_invariant_to_object_order():
+    torch.manual_seed(15)
+    input = torch.randn(3, 4, 2)
+    target = torch.randn(3, 4, 2)
+    permutation = torch.tensor([2, 0, 3, 1])
+
+    loss_fn = PermutationInvariantLogMSELoss(reduction="none")
+    loss = loss_fn(input, target)
+
+    torch.testing.assert_close(loss, loss_fn(input[:, permutation], target))
+    torch.testing.assert_close(loss, loss_fn(input, target[:, permutation]))
+
+
+def test_permutation_invariant_log_mse_loss_zero_error_equals_log_epsilon():
+    target = torch.randn(5, 3, 2)
+    epsilon = 1e-4
+    loss = PermutationInvariantLogMSELoss(epsilon=epsilon)(target.flip(1), target)
+
+    torch.testing.assert_close(loss, torch.log(torch.tensor(epsilon)))
