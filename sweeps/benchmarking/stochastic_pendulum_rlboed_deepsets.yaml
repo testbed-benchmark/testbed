@@ -1,0 +1,18 @@
+# Seed sweep for experiments/benchmarking/stochastic_pendulum/rlboed_deepsets.
+
+name: stochastic_pendulum-rlboed-benchmark-deepsets-seeds
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: benchmarking_stochastic_pendulum
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/benchmarking/stochastic_pendulum/rlboed_deepsets
+  - ${args_no_hyphens}
