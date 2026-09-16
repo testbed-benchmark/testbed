@@ -1,0 +1,31 @@
+# @package _global_
+
+defaults:
+  - /method: rlboed
+  - override /task: temporal_discounting
+  - _self_
+
+# The design space needs to be overridden to a be a box.
+# RL-BOED does not work with unbounded design spaces.
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: [0.5, 1.0]
+    high: [200.0, 99.0]
+    event_shape: [2]
+
+# Observations are Bernoulli choices.
+reward:
+  outcome_low: 0.0
+  outcome_high: 1.0
+  n_contrastive: 100_000
+
+sac:
+  num_training_iterations: 20_001
+  buffer_size: 1_000_000
+  tau: 0.005
+  policy_lr: 0.0003
+
+wandb:
+  project: temporal_discounting
+  group: rlboed

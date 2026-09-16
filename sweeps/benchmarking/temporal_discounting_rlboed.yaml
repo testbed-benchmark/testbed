@@ -1,0 +1,18 @@
+# Seed sweep for experiments/benchmarking/temporal_discounting/rlboed.
+
+name: temporal_discounting-rlboed-benchmark-seeds
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: benchmarking_temporal_discounting
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/benchmarking/temporal_discounting/rlboed
+  - ${args_no_hyphens}
