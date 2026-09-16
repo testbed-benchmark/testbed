@@ -38,6 +38,8 @@ ENTRY_POINT_RECIPES = [
     "experiments/benchmarking/temporal_discounting/joint_var_post",
     "experiments/benchmarking/constant_elasticity_of_substitution/dad",
     "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post",
+    "experiments/benchmarking/michaelis_menten/dad",
+    "experiments/benchmarking/michaelis_menten/joint_var_post",
     "experiments/benchmarking/location_finding_2src/static",
     "experiments/benchmarking/temporal_discounting/static",
     "experiments/benchmarking/constant_elasticity_of_substitution/static",

@@ -49,6 +49,7 @@ from testbed.tasks import (
     HyperbolicTemporalDiscounting,
     LinearRegression,
     LocationFinding,
+    MichaelisMenten,
 )
 
 # ============================================================================
@@ -1356,6 +1357,37 @@ def test_ces_posterior_pushforward_normalises():
     )
 
     assert log_weights.exp().mean().item() == pytest.approx(0.99, rel=0.05)
+
+
+def test_michaelis_menten_posterior_pushforward_normalises():
+    """The sigmoid-affine map must land on exactly the prior's (20, 200) box.
+
+    Unlike CES there is no squash the prior fails to account for, so this
+    integrates to 1. A drift guard on the bounds: change MichaelisMentenPrior's
+    range or the recipe's affine alone and this fails.
+    """
+    torch.manual_seed(0)
+    task = MichaelisMenten()
+    transform = BlockTransform(
+        transforms=[
+            ComposeTransform(
+                [SigmoidTransform(), AffineTransform(loc=20.0, scale=180.0)]
+            )
+        ],
+        raw_sizes=[2],
+        theta_sizes=[2],
+    )
+
+    raw = transform.inv(task.sample_prior(20_000))
+    proposal = Independent(Normal(raw.mean(0), 2.0 * raw.std(0)), 1)
+    z = proposal.sample((200_000,))
+    log_weights = (
+        task.prior.log_prob(transform(z))
+        + transform.log_abs_det_jacobian(z, transform(z))
+        - proposal.log_prob(z)
+    )
+
+    assert log_weights.exp().mean().item() == pytest.approx(1.0, rel=0.05)
 
 
 def test_ces_posterior_gradients_reach_the_posterior_parameters():
