@@ -22,7 +22,6 @@ task:
       - ${task.dim_theta}
 
 sac:
-  entropy_anneal_total: null
   num_training_iterations: 20_001
 
 wandb:

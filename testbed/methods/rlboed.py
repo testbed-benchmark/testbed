@@ -729,11 +729,9 @@ class Trainer:
             )
         else:
             self.target_entropy = float(cfg.sac.target_entropy)
-        # The anneal needs an endpoint: training stops on a wall-clock budget,
-        # so an unbounded schedule would leave the setpoint wherever the host's
-        # throughput happened to reach, and two seeds on different GPUs would
-        # optimize against different objectives. The bound is a drop from the
-        # starting value because that value is task-dependent.
+        # Time-limited benchmark recipes cap the total entropy reduction;
+        # iteration-limited experiments leave annealing unbounded by default.
+        # The cap is a drop from the task-dependent starting target entropy.
         anneal_total = cfg.sac.entropy_anneal_total
         self.min_target_entropy = (
             -inf if anneal_total is None else self.target_entropy - float(anneal_total)
