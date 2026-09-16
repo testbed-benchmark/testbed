@@ -112,8 +112,7 @@ class Trainer:
             self.manager.metric_logger.close()
 
     def _log_summary(self):
-        """Logs how far training got, as metrics rather than only to the event log.
-        """
+        """Logs how far training got, as metrics rather than only to the event log."""
         if self.step < 0:
             return
         self.manager.metric_logger.log(
