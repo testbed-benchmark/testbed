@@ -11,6 +11,7 @@ a user launches `python testbed/methods/<x>.py`.
 from pathlib import Path
 
 import pytest
+import torch
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
@@ -48,12 +49,33 @@ ENTRY_POINT_RECIPES = [
     "experiments/benchmarking/michaelis_menten/static",
 ]
 
+BENCHMARK_TASKS = [
+    "cart_pole",
+    "constant_elasticity_of_substitution",
+    "double_link",
+    "location_finding_2src",
+    "michaelis_menten",
+    "pharmacokinetic",
+    "stochastic_pendulum",
+    "temporal_discounting",
+]
 
-# Static designs have no design net and their own training budget.
+# One ActionBED recipe per (task, loss); the whole grid is an entry point.
+ACTIONBED_RECIPES = [
+    f"experiments/benchmarking/{task}/actionbed_{loss}"
+    for task in BENCHMARK_TASKS
+    for loss in ("logmse", "mse", "truelogmse")
+]
+
+ENTRY_POINT_RECIPES += ACTIONBED_RECIPES
+
+
+# Static designs have no design net, and ActionBED runs to a wall-clock budget;
+# both sit outside the shared step-budget configuration below.
 BENCHMARK_RECIPES = [
     r
     for r in ENTRY_POINT_RECIPES
-    if "/benchmarking/" in r and not r.endswith("/static")
+    if "/benchmarking/" in r and not r.endswith("/static") and "/actionbed_" not in r
 ]
 
 
@@ -318,6 +340,41 @@ def test_benchmark_recipes_share_one_configuration(recipe):
     assert cfg.n_outer == 2_048
     task = recipe.split("/")[-2]
     assert cfg.wandb.project == f"benchmarking_{task}"
+
+
+@pytest.mark.parametrize("recipe", ACTIONBED_RECIPES)
+def test_actionbed_benchmark_recipes_share_one_configuration(recipe):
+    """The ActionBED grid varies the task and the loss, nothing else."""
+    cfg = _compose(recipe)
+    task, loss = recipe.split("/")[-2], recipe.split("_")[-1]
+
+    assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
+    assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
+    assert cfg.train_time_budget_seconds == 43_200
+    assert cfg.n_action_warmup_iter == 50_000
+    assert cfg.n_outer == 2_000
+    assert cfg.eval_every == 0  # the final_eval block handles it
+    assert cfg.wandb.project == f"benchmarking_{task}"
+    assert cfg.wandb.group == f"actionbed_{loss}"
+
+
+@pytest.mark.parametrize("recipe", ACTIONBED_RECIPES)
+def test_actionbed_recipes_size_their_action_net_to_the_task(recipe):
+    """Runs the nets, rather than only asserting on the composed config.
+
+    MLPPolicyNet flattens the whole history, so its first and last `dims` are
+    fixed by the task. A stale pair composes cleanly and only fails on the
+    first training step; this is the only thing that catches it.
+    """
+    from testbed.methods.actionbed import build_policy_nets
+
+    cfg = _compose(recipe)
+    task = instantiate(cfg.task)
+    _, action_net = build_policy_nets(cfg, task)
+
+    y = torch.zeros(2, cfg.T, *task.event_shape_y)
+    designs = torch.zeros(2, cfg.T, *task.event_shape_design)
+    assert action_net(y, designs).shape == (2, *task.action_space.event_shape)
 
 
 def test_ces_posterior_transform_matches_the_task_theta_width():

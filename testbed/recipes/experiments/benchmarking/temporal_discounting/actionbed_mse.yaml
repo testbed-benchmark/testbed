@@ -37,7 +37,7 @@ n_outer: 2_000
 # optimizer
 lr: 5e-4
 betas: [0.8, 0.998]
-grad_clip: null
+grad_clip: 1.0  # REINFORCE gradient variance; unclipped is unsafe here
 lr_gamma: 0.95
 lr_period: 2500
 # policy networks

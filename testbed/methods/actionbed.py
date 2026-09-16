@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 
 from testbed.core.setup import setup
 from testbed.core.util import restore_rng, rng_state, seed_all
+from testbed.design_objectives import LossReinforce
 from testbed.designers import (
     ActionHook,
     PolicyDesigner,
@@ -33,11 +34,17 @@ class Trainer:
         loss_fn,
         optimizer,
         cfg,
+        objective=None,
         scheduler=None,
         random_designer=None,
         manager=None,
     ):
-        """Initializes the trainer."""
+        """Initializes the trainer.
+
+        objective: optional RolloutObjective replacing the plain loss during
+        joint training (see build_objective). Warmup and evaluation always use
+        loss_fn, which is the quantity every objective's value reports anyway.
+        """
         assert isinstance(designer, PolicyDesigner), (
             "This Trainer assumes your designer is a PolicyDesigner object."
         )
@@ -46,6 +53,7 @@ class Trainer:
         self.designer = designer
         self.action_net = action_net
         self.loss_fn = loss_fn
+        self.objective = objective
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.cfg = cfg
@@ -210,8 +218,12 @@ class Trainer:
         theta = self.task.sample_prior(cfg.n_outer)
         rollout = self.designer.rollout(theta)
 
-        action = rollout.extra["action"]
-        loss = self.loss_fn(action, theta)
+        # The objective's value is the mean loss; its gradient additionally
+        # carries the score term the plain loss misses (see build_objective).
+        if self.objective is not None:
+            loss = self.objective.estimate_gain(rollout)
+        else:
+            loss = self.loss_fn(rollout.extra["action"], theta)
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -322,7 +334,7 @@ def build_policy_nets(cfg, task):
     return design_net, action_net
 
 
-def build_loss_fn(cfg, task):
+def build_loss_fn(cfg, task, **overrides):
     """Instantiates the training loss.
 
     Most losses only depend on ``cfg.loss``, but some (e.g. LogLoss) also
@@ -330,6 +342,9 @@ def build_loss_fn(cfg, task):
     casing loss classes by name, we inspect the target's constructor and only
     supply what it actually declares. Losses needing a design prior take it
     from ``task.design_space``, so nothing extra is threaded through here.
+
+    ``overrides`` are passed straight to the target, so a caller needing a
+    particular reduction can ask for it without editing the recipe.
     """
     loss_cls = get_class(cfg.loss._target_)
     params = inspect.signature(loss_cls.__init__).parameters
@@ -338,7 +353,44 @@ def build_loss_fn(cfg, task):
     if "task" in params:
         extra_kwargs["task"] = task
 
-    return instantiate(cfg.loss, **extra_kwargs)
+    return instantiate(cfg.loss, **extra_kwargs, **overrides)
+
+
+def per_sample_loss(loss_fn):
+    """Turns a ``reduction="none"`` loss into the [b] per-rollout value REINFORCE needs.
+
+    Every event dimension is averaged over; only the batch axis survives, so
+    the leave-one-out baseline sees one number per rollout.
+    """
+
+    def value(action, theta):
+        loss = loss_fn(action, theta)
+        return loss.reshape(loss.shape[0], -1).mean(-1)
+
+    return value
+
+
+def build_objective(cfg, task):
+    """Instantiates the objective for joint training, or None for the plain loss.
+
+    "loss" backpropagates the loss as-is: correct only when the outcomes are
+    reparameterizable, since that gradient sees the designs solely through the
+    action net's input. "reinforce" adds the trajectory score term, which is
+    the missing piece for a discrete (or otherwise non-reparameterizable)
+    likelihood; it assumes a deterministic design policy.
+    """
+    name = cfg.objective.name
+    if name == "loss":
+        return None
+    if name != "reinforce":
+        raise ValueError(f"Unknown objective: {name}")
+
+    return LossReinforce(
+        task,
+        per_sample_loss(build_loss_fn(cfg, task, reduction="none")),
+        stochastic_design_policy=cfg.objective.requires_policy_log_probs,
+        baseline=cfg.objective.baseline,
+    )
 
 
 def build_trainer(cfg, task, manager=None):
@@ -350,8 +402,14 @@ def build_trainer(cfg, task, manager=None):
     design_net = design_net.to(cfg.device)
     action_net = action_net.to(cfg.device)
     designer = PolicyDesigner(
-        task, cfg.T, design_net, use_raw_history=cfg.use_raw_history
+        task,
+        cfg.T,
+        design_net,
+        reparameterize_policy=cfg.objective.reparameterize_policy,
+        use_raw_history=cfg.use_raw_history,
     )
+    # Update config to match the designer's proposal/gradient capability.
+    cfg.objective.requires_policy_log_probs = designer.requires_policy_log_probs
 
     # Setup for action-warmup; designs are drawn from the task's design space.
     random_designer = None
@@ -375,6 +433,7 @@ def build_trainer(cfg, task, manager=None):
         loss_fn=build_loss_fn(cfg, task),
         optimizer=optimizer,
         cfg=cfg,
+        objective=build_objective(cfg, task),
         scheduler=scheduler,
         random_designer=random_designer,
         manager=manager,
