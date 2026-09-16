@@ -13,9 +13,15 @@ defaults:
 #
 
 seed: 0
+
+# budget / checkpointing
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 5_000
+
 # objective: 
 objective:
   name: spce
+  fused: true  # false falls back to the per-step loop
   n_inner: 2_000  # contrastive samples for sPCE
   reparameterize_policy: false
   baseline: null

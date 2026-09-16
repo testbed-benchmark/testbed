@@ -28,7 +28,7 @@ columns instead of overwriting them::
 
 ``--checkpoint`` scores a file other than the recipe's
 ``final_eval.checkpoint``, such as one of the periodic ``step_*.pt`` policies
-RL-BOED writes when ``checkpoint_every`` is set. Scoring a non-default
+a run writes when ``checkpoint_every`` is set. Scoring a non-default
 checkpoint namespaces its own output (``eval_step_00010000.json`` and
 ``eval_step_00010000/*``), so a mid-training score cannot overwrite the run's
 headline ``eval/*`` columns; pass ``--prefix`` to choose the namespace
