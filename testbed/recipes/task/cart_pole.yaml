@@ -1,6 +1,7 @@
 # @package _global_
 
-# Task defaults, from https://arxiv.org/abs/2402.07868.
+# Task defaults, from https://arxiv.org/abs/2402.07868, with the diffusion
+# matched to ScoreBED (https://github.com/angusphillips/Score_Matching_BED).
 T: 50
 
 task:
@@ -10,9 +11,8 @@ task:
   stiffness_p: 0.01  # k2
   damping_c: 0.01  # d1
   damping_p: 0.01  # d2
-  # L = [0, 0, 0.1, 0]: the SDE drives the cart velocity only.
-  noise_scale: [0.0, 0.0, 0.1, 0.0]
-  noise_jitter: 1.0e-6  # not in the paper; keeps the other three coordinates non-degenerate
+  # L = 0.1 I: the SDE drives all four coordinates (ScoreBED's diffusion_mat).
+  noise_scale: [0.1, 0.1, 0.1, 0.1]
   prior: null  # use the standard log-normal prior on (mp, mc, l)
   design_space: null  # derive the standard force range, -5 to 5
   reparameterize_outcomes: true  # Gaussian noise on a differentiable drift
