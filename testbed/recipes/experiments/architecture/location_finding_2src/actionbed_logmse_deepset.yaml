@@ -1,0 +1,59 @@
+# @package _global_
+
+# ActionBED on the 2D, 2 source LF problem, with DAD's DeepSets design net.
+# Uses the PermutationInvariantLogMSELoss.
+#
+# Identical to experiments/benchmarking/location_finding_2src/actionbed_logmse
+# except for design_net, so the architecture is the only thing that varies.
+# design_net is written out in full, and its `net` group default is nulled so
+# the attentive preset's num_heads/num_blocks cannot merge in underneath it.
+
+defaults:
+  - /method: actionbed
+  - override /task: location_finding_2src
+  - override /net@design_net: null  # design_net is given in full below
+  - override /net@action_net: null
+  - _self_
+
+seed: 0 # override on sweeps
+
+train_time_budget_seconds: 43_200 # 12 hours
+eval_every: 0  # the final_eval block handles it
+
+wandb:
+  project: architecture_location_finding_2src  # project = task
+  group: actionbed_logmse_deepset # group = method + architecture
+
+# loss
+loss:
+  _target_: testbed.design_objectives.PermutationInvariantLogMSELoss
+# training
+n_train_iter: 1_000_000 # very high to avoid quitting before spending the train time budget
+n_action_warmup_iter: 50_000
+n_outer: 2_000
+
+# optimizer
+lr: 5e-4
+betas: [0.8, 0.998]
+grad_clip: null
+lr_gamma: 0.95
+lr_period: 2500
+# policy networks
+design_net:
+  # Matches net/deepset_policy, as used by dad_deepset.
+  _target_: testbed.design_nets.DeepSetPolicyNet
+  encoder_dim_h: [256]
+  dim_emb: 16
+  encoder_activation:
+    _target_: torch.nn.ReLU
+    _partial_: true
+  decoder_dim_h: [2]
+  decoder_activation: null
+action_net:
+  _target_: testbed.design_nets.MLPPolicyNet
+  # input dim: T * (dim_y + dim_design) = 30 * (1 + 2)
+  # output dim: n_sources * dim_theta = 2 * 2
+  dims: [90, 512, 256, 128, 4]
+  activation:
+    _target_: torch.nn.GELU
+    _partial_: true
