@@ -8,9 +8,7 @@ defaults:
 # Benchmark run of DAD on the stochastic pendulum (T = 50 torque steps).
 #
 # The Euler-Maruyama step is a differentiable drift plus Gaussian noise, so the
-# outcomes reparameterize and the objective is pathwise sPCE. The diffusion
-# drives the angular velocity only, so the task's noise_jitter is what keeps
-# the angle's density non-degenerate and _outcome_logp finite.
+# outcomes reparameterize and the objective is pathwise sPCE.
 
 seed: 0
 # designer
