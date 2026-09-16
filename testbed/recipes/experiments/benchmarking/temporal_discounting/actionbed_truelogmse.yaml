@@ -16,7 +16,7 @@ eval_every: 0  # the final_eval block handles it
 
 wandb:
   project: benchmarking_temporal_discounting  # project = task
-  group: actionbed_mse # group = method
+  group: actionbed_truelogmse # group = method
 
 # HTD has discrete outcomes; use REINFORCE
 objective:
@@ -31,7 +31,7 @@ loss:
   reduction: mean
   transform_input: false
   transform_target: true
-  
+
 # training
 n_train_iter: 1_000_000 # very high to avoid quitting before spending the train time budget
 n_action_warmup_iter: 50_000
@@ -52,9 +52,9 @@ design_net:
   num_blocks: 2
 action_net:
   _target_: testbed.design_nets.MLPPolicyNet
-  # input dim: T * (dim_y + n_sources * dim_theta)
-  # output dim: dim_theta
-  dims: [90, 512, 256, 128, 4]
+  # input dim: T * (dim_y + dim_design) = 20 * (1 + 2)
+  # output dim: dim_theta = 2
+  dims: [60, 512, 256, 128, 2]
   activation:
     _target_: torch.nn.GELU
     _partial_: true

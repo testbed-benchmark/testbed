@@ -1,7 +1,7 @@
 # @package _global_
 
 # Hyperparameter settings for ActionBED on the Michaelis-Menten problem
-# Uses the PermutationInvariantTrueLogMSELoss
+# Uses the TrueLogMSELoss
 
 defaults:
   - /method: actionbed
@@ -45,9 +45,9 @@ design_net:
   num_blocks: 2
 action_net:
   _target_: testbed.design_nets.MLPPolicyNet
-  # input dim: T * (dim_y + n_sources * dim_theta)
-  # output dim: dim_theta
-  dims: [90, 512, 256, 128, 4]
+  # input dim: T * (dim_y + dim_design) = 20 * (1 + 1)
+  # output dim: dim_theta = 2
+  dims: [40, 512, 256, 128, 2]
   activation:
     _target_: torch.nn.GELU
     _partial_: true

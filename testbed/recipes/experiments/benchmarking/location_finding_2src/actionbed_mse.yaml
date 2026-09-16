@@ -41,8 +41,8 @@ design_net:
   num_blocks: 2
 action_net:
   _target_: testbed.design_nets.MLPPolicyNet
-  # input dim: T * (dim_y + n_sources * dim_theta)
-  # output dim: dim_theta
+  # input dim: T * (dim_y + dim_design) = 30 * (1 + 2)
+  # output dim: n_sources * dim_theta = 2 * 2
   dims: [90, 512, 256, 128, 4]
   activation:
     _target_: torch.nn.GELU
