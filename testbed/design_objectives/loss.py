@@ -515,3 +515,77 @@ class TrueLogMSELoss(nn.Module):
             target = torch.log(target + self.epsilon)
 
         return F.mse_loss(input, target, reduction=self.reduction)
+
+
+class PermutationInvariantTrueLogMSELoss(nn.Module):
+    r"""A permutation-invariant version of :class:`TrueLogMSELoss`.
+
+    Inputs are tensors of shape ``[*batch, n_objects, dim_object]``. Writing
+    :math:`K` = ``n_objects`` and :math:`g` for the (optional) element-wise
+    :math:`x \mapsto \log(x + \epsilon)` transform, the per-sample loss is
+
+    .. math::
+        \min_{\sigma \in S_K} \sum_{k=1}^K
+            \lVert g(\mathrm{input}_k) - g(\mathrm{target}_{\sigma(k)}) \rVert_2^2
+
+    found by brute-force enumeration of all ``K!`` permutations. Only practical
+    for small ``K`` (roughly <= 8).
+
+    Args:
+        reduction (str):
+            One of ``"sum"``, ``"mean"``, or ``"none"`` (default: ``"mean"``).
+        transform_input (bool, optional):
+            Should we take a log of the input before calculating the loss? (default: True)
+        transform_target (bool, optional):
+            Should we take a log of the target before calculating the loss? (default: True)
+        epsilon (float):
+            Small constant added before taking the log, for numerical
+            stability (default: ``1e-6``).
+
+    Note:
+        ``reduction='mean'`` normalizes by ``B*K*D``, not just ``B``.
+    """
+
+    def __init__(
+        self,
+        reduction: str = "mean",
+        transform_input: bool = True,
+        transform_target: bool = True,
+        epsilon: float = 1e-6,
+    ) -> None:
+        """Initializes the loss."""
+        super().__init__()
+        self.reduction = _check_reduction(reduction)
+        self.transform_input = transform_input
+        self.transform_target = transform_target
+        self.epsilon = epsilon
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        """Computes the loss.
+
+        Args:
+            input (Tensor):
+                Estimated objects, of shape ``[*batch, n_objects, dim_object]``.
+            target (Tensor):
+                Target objects, the same shape as ``input``.
+
+        Returns:
+            Tensor:
+                If ``reduction`` is ``"none"``, shape ``[*batch]``.
+                Otherwise, a scalar.
+
+        Raises:
+            ValueError: If ``input`` and ``target`` have different shapes, or
+                if they have fewer than 2 dimensions.
+        """
+        _check_objects_shape(input, target)
+        if self.transform_input:
+            input = torch.log(input + self.epsilon)
+        if self.transform_target:
+            target = torch.log(target + self.epsilon)
+
+        # cost[..., i, j] = || input_i - target_j ||_2^2
+        diff = input.unsqueeze(-2) - target.unsqueeze(-3)  # [*batch, K, K, d]
+        cost = diff.pow(2).sum(dim=-1)  # [*batch, K, K]
+
+        return _min_over_permutations(cost, input.shape[-1], self.reduction)

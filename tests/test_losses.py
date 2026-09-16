@@ -9,8 +9,10 @@ from testbed.design_objectives import (
     LogMSELoss,
     PermutationInvariantLogMSELoss,
     PermutationInvariantMSELoss,
+    PermutationInvariantTrueLogMSELoss,
     SortedLogMSELoss,
     SortedMSELoss,
+    TrueLogMSELoss,
 )
 
 LOSS_CLASSES = [
@@ -19,6 +21,7 @@ LOSS_CLASSES = [
     SortedLogMSELoss,
     PermutationInvariantMSELoss,
     PermutationInvariantLogMSELoss,
+    PermutationInvariantTrueLogMSELoss,
 ]
 
 
@@ -47,8 +50,9 @@ def test_rejects_mismatched_shapes(loss_cls):
 
 @pytest.mark.parametrize("loss_cls", LOSS_CLASSES)
 def test_gradient_flows_through_loss(loss_cls):
-    input = torch.randn(2, 3, 2, requires_grad=True)
-    target = torch.randn(2, 3, 2)
+    # Positive values, so the log-transforming losses stay finite.
+    input = torch.rand(2, 3, 2, requires_grad=True)
+    target = torch.rand(2, 3, 2)
 
     loss_cls()(input, target).backward()
 
@@ -415,3 +419,66 @@ def test_permutation_invariant_log_mse_loss_zero_error_equals_log_epsilon():
     loss = PermutationInvariantLogMSELoss(epsilon=epsilon)(target.flip(1), target)
 
     torch.testing.assert_close(loss, torch.log(torch.tensor(epsilon)))
+
+
+def test_permutation_invariant_true_log_mse_loss_matches_brute_force_reference():
+    torch.manual_seed(16)
+    epsilon = 1e-6
+    loss_fn = PermutationInvariantTrueLogMSELoss(reduction="none", epsilon=epsilon)
+
+    for k in (1, 2, 3, 4):
+        input = torch.rand(5, k, 3)
+        target = torch.rand(5, k, 3)
+        log_input = torch.log(input + epsilon)
+        log_target = torch.log(target + epsilon)
+
+        expected = torch.tensor(
+            [
+                _brute_force_permutation_mse(log_input[b], log_target[b])
+                for b in range(5)
+            ]
+        )
+
+        torch.testing.assert_close(
+            loss_fn(input, target), expected, atol=1e-5, rtol=1e-5
+        )
+
+
+def test_permutation_invariant_true_log_mse_loss_is_invariant_to_object_order():
+    torch.manual_seed(17)
+    input = torch.rand(3, 4, 2)
+    target = torch.rand(3, 4, 2)
+    permutation = torch.tensor([2, 0, 3, 1])
+
+    loss_fn = PermutationInvariantTrueLogMSELoss(reduction="none")
+    loss = loss_fn(input, target)
+
+    torch.testing.assert_close(loss, loss_fn(input[:, permutation], target))
+    torch.testing.assert_close(loss, loss_fn(input, target[:, permutation]))
+
+
+def test_permutation_invariant_true_log_mse_loss_without_transforms_matches_mse():
+    torch.manual_seed(18)
+    input = torch.randn(3, 4, 2)
+    target = torch.randn(3, 4, 2)
+
+    loss = PermutationInvariantTrueLogMSELoss(
+        reduction="none", transform_input=False, transform_target=False
+    )(input, target)
+
+    torch.testing.assert_close(
+        loss, PermutationInvariantMSELoss(reduction="none")(input, target)
+    )
+
+
+def test_permutation_invariant_true_log_mse_loss_matches_true_log_mse_when_matched():
+    # The optimal matching for identical inputs is the identity, so the two
+    # losses agree (both 'mean' reductions normalize by B*K*D).
+    torch.manual_seed(19)
+    target = torch.rand(6, 3, 2)
+    epsilon = 1e-6
+
+    loss = PermutationInvariantTrueLogMSELoss(epsilon=epsilon)(target, target)
+
+    torch.testing.assert_close(loss, TrueLogMSELoss(epsilon=epsilon)(target, target))
+    torch.testing.assert_close(loss, torch.tensor(0.0))
