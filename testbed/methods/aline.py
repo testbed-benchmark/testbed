@@ -5,10 +5,16 @@ Unlike the authors' code however, this implementation is specialized to
 targeting the EIG in all parameters.
 """
 
+import time
+from math import isfinite
+
 import hydra
 import torch
+from hydra.utils import instantiate
+from omegaconf import OmegaConf
 
 from testbed.core.setup import instantiate_design_net, setup
+from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import AlineModel
 from testbed.design_objectives import SPCE
 from testbed.designers import AlineDesigner
@@ -23,6 +29,8 @@ class Trainer:
         model: AlineModel,
         cfg,
         manager=None,
+        *,
+        start_time=None,
     ) -> None:
         """Initializes the ALINE trainer."""
         validate_config(task, cfg)
@@ -37,6 +45,10 @@ class Trainer:
         )
         self.cfg = cfg
         self.manager = manager
+        self._start_time = time.monotonic() if start_time is None else start_time
+        self.completed_iterations = 0
+        self.training_elapsed_seconds = None
+        self.stop_reason = None
         self.best_metric = -torch.inf
         self._joint_optimizer_started = False
         self._start_warmup_optimizer()
@@ -193,36 +205,197 @@ class Trainer:
             f"@ step={step}"
         )
 
+    def _synchronize(self) -> None:
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+
+    def _deadline_reached(self) -> bool:
+        if time.monotonic() - self._start_time >= _time_budget(self.cfg):
+            self.stop_reason = "time_budget"
+            return True
+        return False
+
+    def build_policy_checkpoint(self) -> dict:
+        """Builds a deployable model snapshot without optimizer state."""
+        elapsed = self.training_elapsed_seconds
+        if elapsed is None:
+            elapsed = time.monotonic() - self._start_time
+        return {
+            "design_net": self.model.state_dict(),
+            "step": self.completed_iterations - 1,
+            "completed_iterations": self.completed_iterations,
+            "elapsed_seconds": elapsed,
+        }
+
+    def build_checkpoint(self) -> dict:
+        """Builds the full state required to resume warm-up or joint training."""
+        return {
+            **self.build_policy_checkpoint(),
+            "checkpoint_version": 1,
+            "method": "aline",
+            "config": OmegaConf.to_container(
+                self.cfg, resolve=True, throw_on_missing=False
+            ),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "joint_optimizer_started": self._joint_optimizer_started,
+            "best_metric": self.best_metric,
+            "rng_state": rng_state(),
+            "stop_reason": self.stop_reason,
+            "train_time_budget_seconds": _time_budget(self.cfg),
+        }
+
     def train(self) -> None:
         """Runs warm-up and joint ALINE training."""
-        for step in range(self.cfg.n_train_iter):
+        self.training_elapsed_seconds = None
+        self.stop_reason = "iteration_limit"
+        for step in range(self.completed_iterations, self.cfg.n_train_iter):
+            if self._deadline_reached():
+                break
             metrics = self.train_step(step)
+            self.completed_iterations = step + 1
             metrics["step"] = step
             if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
 
+            self._maybe_save_best(step, metrics, min_step=self.cfg.n_warmup_iter)
+            interval = getattr(self.cfg, "checkpoint_every", 0)
+            if self.manager is not None and interval and (step + 1) % interval == 0:
+                torch.save(
+                    self.build_policy_checkpoint(),
+                    self.manager.path(f"step_{step + 1:08d}.pt"),
+                )
+
+            # Complete the update and preserve its weights before stopping;
+            # avoid starting a potentially expensive evaluation after the limit.
+            self._synchronize()
+            if self._deadline_reached():
+                break
             if self.cfg.eval_every > 0 and step % self.cfg.eval_every == 0:
                 eval_metrics = self.evaluate()
                 eval_metrics["step"] = step
                 if self.manager and self.manager.metric_logger:
                     self.manager.metric_logger.log(eval_metrics)
 
-            self._maybe_save_best(step, metrics, min_step=self.cfg.n_warmup_iter)
-
+        self._synchronize()
+        self.training_elapsed_seconds = time.monotonic() - self._start_time
         if self.manager is not None:
+            budget = _time_budget(self.cfg)
+            self.manager.event_logger.info(
+                f"Stopped: {self.stop_reason}; {self.completed_iterations} iterations, "
+                f"{self.training_elapsed_seconds:.3f}s before final serialization; "
+                f"budget={budget}s, "
+                f"overrun={max(0.0, self.training_elapsed_seconds - budget):.3f}s."
+            )
             torch.save(
-                {
-                    "design_net": self.model.state_dict(),
-                    "step": self.cfg.n_train_iter - 1,
-                },
+                self.build_checkpoint(),
                 self.manager.path("final_step.pt"),
             )
             if self.manager.metric_logger is not None:
                 self.manager.metric_logger.close()
 
 
+def _time_budget(cfg) -> float:
+    """Returns the cumulative time limit; null means unlimited training."""
+    budget = getattr(cfg, "train_time_budget_seconds", None)
+    return float("inf") if budget is None else float(budget)
+
+
+def load_checkpoint(
+    path,
+    *,
+    device=None,
+    train_time_budget_seconds=None,
+    n_train_iter=None,
+    manager=None,
+) -> Trainer:
+    """Reconstructs an ALINE trainer from a full ``final_step.pt`` checkpoint.
+
+    Call ``train()`` on the result to resume. Limits are cumulative: pass a
+    larger total ``train_time_budget_seconds`` or ``n_train_iter`` if exhausted.
+    Use ``float("inf")`` for an unlimited time budget. Time spent between runs
+    is excluded; loading and reconstruction count toward the resumed budget.
+    Optimizer phase, scheduler and global RNGs are restored; exact continuation
+    requires the same device/RNG setup. Supply a manager for automatic saving
+    and logging, or save ``build_checkpoint()`` manually. Policy-only snapshots
+    (including ``best.pt``) cannot resume training.
+    """
+    start_time = time.monotonic()
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    required = {
+        "config",
+        "design_net",
+        "optimizer",
+        "scheduler",
+        "joint_optimizer_started",
+        "best_metric",
+        "rng_state",
+        "completed_iterations",
+        "elapsed_seconds",
+    }
+    if (
+        not isinstance(state, dict)
+        or state.get("checkpoint_version") != 1
+        or state.get("method") != "aline"
+        or not required.issubset(state)
+    ):
+        raise ValueError(
+            "Resuming requires a full ALINE checkpoint (final_step.pt), including "
+            "optimizer, scheduler and RNG state; policy-only checkpoints cannot "
+            "resume training."
+        )
+    cfg = OmegaConf.create(state["config"])
+    if device is not None:
+        cfg.device = str(device)
+    if train_time_budget_seconds is not None:
+        cfg.train_time_budget_seconds = train_time_budget_seconds
+    if n_train_iter is not None:
+        cfg.n_train_iter = n_train_iter
+    elapsed = state["elapsed_seconds"]
+    if not isfinite(elapsed) or elapsed < 0:
+        raise ValueError("Checkpoint elapsed_seconds must be finite and non-negative.")
+    if _time_budget(cfg) <= elapsed:
+        raise ValueError(
+            "The saved training time budget is exhausted; pass "
+            "train_time_budget_seconds greater than the checkpoint's "
+            f"elapsed_seconds ({elapsed}). This is a total, not additional, budget."
+        )
+    if cfg.n_train_iter <= state["completed_iterations"]:
+        raise ValueError(
+            "The saved iteration limit is exhausted; pass n_train_iter greater "
+            "than the checkpoint's completed_iterations."
+        )
+    task = instantiate(cfg.task).to(cfg.device)
+    model = instantiate_design_net(cfg.design_net, task).to(cfg.device)
+    model.load_state_dict(state["design_net"])
+    trainer = Trainer(task, model, cfg, manager, start_time=start_time - elapsed)
+    # AdamW's parameter groups differ between phases. Recreate the saved phase
+    # before loading its moments and the original cosine schedule.
+    if state["joint_optimizer_started"]:
+        trainer._start_joint_optimizer()
+    trainer.optimizer.load_state_dict(state["optimizer"])
+    trainer.scheduler.load_state_dict(state["scheduler"])
+    trainer.completed_iterations = state["completed_iterations"]
+    trainer.best_metric = state["best_metric"]
+    restore_rng(state["rng_state"])
+    return trainer
+
+
 def validate_config(task, cfg) -> None:
     """Rejects unsupported tasks and invalid ALINE settings."""
+    budget = getattr(cfg, "train_time_budget_seconds", None)
+    if (
+        isinstance(budget, bool)
+        or not isinstance(budget, (int, float, type(None)))
+        or (budget is not None and not budget > 0)
+    ):
+        raise ValueError(
+            "train_time_budget_seconds must be a positive number of seconds, "
+            "or null for no time limit."
+        )
+    interval = getattr(cfg, "checkpoint_every", 0)
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval < 0:
+        raise ValueError("checkpoint_every must be a non-negative integer.")
     if task.discrete_theta:
         raise ValueError(
             "ALINE's Gaussian-mixture posterior requires continuous theta."
@@ -263,10 +436,11 @@ def validate_config(task, cfg) -> None:
 @hydra.main(version_base="1.3", config_path="../recipes", config_name="method/aline")
 def main(cfg) -> None:
     """Runs ALINE training from a Hydra recipe."""
-    torch.manual_seed(cfg.seed)
+    start_time = time.monotonic()
+    seed_all(cfg.seed)
     manager, task = setup(cfg)
     model = instantiate_design_net(cfg.design_net, task).to(cfg.device)
-    trainer = Trainer(task, model, cfg, manager=manager)
+    trainer = Trainer(task, model, cfg, manager=manager, start_time=start_time)
     trainer.train()
 
 

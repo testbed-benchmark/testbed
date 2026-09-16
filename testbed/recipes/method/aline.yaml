@@ -30,6 +30,8 @@ design_net:
   outcome_scale: 1.0
 
 # training
+train_time_budget_seconds: null  # no wall-clock limit by default
+checkpoint_every: 1_000  # policy snapshots; 0 disables periodic saving
 n_train_iter: 200_000
 n_warmup_iter: 20_000
 n_outer: 200

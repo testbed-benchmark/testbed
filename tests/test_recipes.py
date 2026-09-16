@@ -134,6 +134,27 @@ def test_dad_recipe_wires_design_net():
     assert cfg.objective.name == "spce"
 
 
+@pytest.mark.parametrize(
+    "recipe",
+    [
+        "method/aline",
+        "experiments/location_finding_2src/aline",
+        "experiments/constant_elasticity_of_substitution/aline",
+    ],
+)
+def test_aline_recipes_wire_checkpoint_and_time_limits(recipe):
+    cfg = _compose(recipe)
+    assert cfg.train_time_budget_seconds is None
+    assert cfg.checkpoint_every == 1_000
+    with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
+        cfg = compose(
+            config_name=recipe,
+            overrides=["train_time_budget_seconds=3600", "checkpoint_every=100"],
+        )
+    assert cfg.train_time_budget_seconds == 3600
+    assert cfg.checkpoint_every == 100
+
+
 def test_actionbed_recipe_wires_design_and_action_nets():
     cfg = _compose("method/actionbed")
     assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"

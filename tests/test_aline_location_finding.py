@@ -4,11 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 
 from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.rollout import Rollout
 from testbed.design_nets import AlineModel, AlineOutput
-from testbed.methods.aline import Trainer
+from testbed.methods.aline import Trainer, load_checkpoint
 from testbed.tasks import LocationFinding
 
 
@@ -327,3 +328,167 @@ def test_rollout_passes_history_and_trains_every_posterior_state():
         dim=1,
     )
     torch.testing.assert_close(rollout.extra["posterior_log_probs"], expected)
+
+
+def _checkpoint_cfg(**overrides):
+    values = vars(_make_cfg()).copy()
+    values["optimizer"] = vars(values["optimizer"])
+    values.update(
+        device="cpu",
+        train_time_budget_seconds=None,
+        checkpoint_every=1,
+        n_train_iter=4,
+        task={
+            "_target_": "testbed.tasks.LocationFinding",
+            "n_sources": 1,
+            "dim_theta": 2,
+            "design_space": {
+                "_target_": "testbed.core.design_spaces.BoxDesignSpace",
+                "low": -4.0,
+                "high": 4.0,
+                "event_shape": [2],
+            },
+        },
+        design_net={
+            "_target_": "testbed.design_nets.AlineModel",
+            "embedding_dim": 8,
+            "feedforward_dim": 16,
+            "n_heads": 2,
+            "n_layers": 1,
+            "n_components": 3,
+        },
+    )
+    values.update(overrides)
+    return OmegaConf.create(values)
+
+
+def _checkpoint_manager(tmp_path):
+    return SimpleNamespace(
+        path=lambda name: tmp_path / name,
+        event_logger=SimpleNamespace(info=lambda message: None),
+        metric_logger=None,
+    )
+
+
+@pytest.mark.parametrize("stop_after", [1, 2])
+def test_checkpoint_resumes_exactly_across_optimizer_phases(
+    tmp_path, monkeypatch, stop_after
+):
+    import testbed.methods.aline as module
+
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    module.seed_all(13)
+    baseline, _ = _make_trainer(_checkpoint_cfg())
+    baseline.train()
+    expected_rng = module.rng_state()
+
+    module.seed_all(13)
+    trainer, _ = _make_trainer(
+        _checkpoint_cfg(train_time_budget_seconds=10),
+        manager=_checkpoint_manager(tmp_path),
+    )
+    original_step = trainer.train_step
+
+    def timed_step(step):
+        result = original_step(step)
+        if step + 1 == stop_after:
+            clock[0] = 12.0
+        return result
+
+    monkeypatch.setattr(trainer, "train_step", timed_step)
+    trainer.train()
+    saved = torch.load(tmp_path / "final_step.pt", weights_only=True)
+    assert saved["stop_reason"] == "time_budget"
+    assert saved["completed_iterations"] == stop_after
+    assert saved["step"] == stop_after - 1
+    assert saved["elapsed_seconds"] == 12.0
+    assert saved["joint_optimizer_started"] == (stop_after > 1)
+    policy = torch.load(tmp_path / f"step_{stop_after:08d}.pt", weights_only=True)
+    assert "optimizer" not in policy
+    torch.testing.assert_close(policy["design_net"], saved["design_net"])
+    with pytest.raises(ValueError, match="time budget is exhausted"):
+        load_checkpoint(tmp_path / "final_step.pt")
+    with pytest.raises(ValueError, match="policy-only"):
+        load_checkpoint(tmp_path / f"step_{stop_after:08d}.pt")
+
+    # Downtime is excluded, while the already-used 12 seconds are retained.
+    clock[0] = 100.0
+    resumed = load_checkpoint(
+        tmp_path / "final_step.pt", train_time_budget_seconds=float("inf")
+    )
+    assert resumed.best_metric == trainer.best_metric
+    assert resumed._start_time == 88.0
+    resumed.train()
+    assert resumed.completed_iterations == 4
+    torch.testing.assert_close(
+        resumed.model.state_dict(), baseline.model.state_dict(), rtol=0, atol=0
+    )
+    assert resumed.scheduler.state_dict() == baseline.scheduler.state_dict()
+    torch.testing.assert_close(
+        resumed.optimizer.state_dict(), baseline.optimizer.state_dict(), rtol=0, atol=0
+    )
+    actual_rng = module.rng_state()
+    assert actual_rng["python"] == expected_rng["python"]
+    assert actual_rng["numpy"] == expected_rng["numpy"]
+    torch.testing.assert_close(actual_rng["torch"], expected_rng["torch"])
+
+
+@pytest.mark.parametrize("expired_before_start", [False, True])
+def test_deadline_skips_evaluation_and_saves_full_state(
+    tmp_path, monkeypatch, expired_before_start
+):
+    import testbed.methods.aline as module
+
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    trainer, _ = _make_trainer(
+        _checkpoint_cfg(train_time_budget_seconds=10, eval_every=1, checkpoint_every=0),
+        manager=_checkpoint_manager(tmp_path),
+    )
+
+    def step(index):
+        clock[0] = 11.0
+        return {"inference_loss": 1.0}
+
+    monkeypatch.setattr(trainer, "train_step", step)
+    monkeypatch.setattr(
+        trainer, "evaluate", lambda: pytest.fail("unexpected evaluation")
+    )
+    if expired_before_start:
+        clock[0] = 11.0
+    trainer.train()
+    state = torch.load(tmp_path / "final_step.pt", weights_only=True)
+    assert state["completed_iterations"] == int(not expired_before_start)
+    assert state["step"] == (-1 if expired_before_start else 0)
+    assert state["stop_reason"] == "time_budget"
+    assert not list(tmp_path.glob("step_*.pt"))
+
+
+@pytest.mark.parametrize("budget", [None, float("inf")])
+def test_unlimited_training_and_iteration_limit_override(tmp_path, budget):
+    trainer, _ = _make_trainer(
+        _checkpoint_cfg(train_time_budget_seconds=budget),
+        manager=_checkpoint_manager(tmp_path),
+    )
+    trainer.train()
+    assert trainer.completed_iterations == 4
+    assert trainer.stop_reason == "iteration_limit"
+    with pytest.raises(ValueError, match="iteration limit is exhausted"):
+        load_checkpoint(tmp_path / "final_step.pt")
+    resumed = load_checkpoint(tmp_path / "final_step.pt", n_train_iter=5)
+    assert resumed.scheduler.state_dict() == trainer.scheduler.state_dict()
+    resumed.train()
+    assert resumed.completed_iterations == 5
+
+
+@pytest.mark.parametrize("budget", [0, -1, float("nan"), True, "10"])
+def test_invalid_time_budget(budget):
+    with pytest.raises(ValueError, match="train_time_budget_seconds"):
+        _make_trainer(_make_cfg(train_time_budget_seconds=budget))
+
+
+@pytest.mark.parametrize("interval", [-1, 1.5, True, None])
+def test_invalid_checkpoint_interval(interval):
+    with pytest.raises(ValueError, match="checkpoint_every"):
+        _make_trainer(_make_cfg(checkpoint_every=interval))
