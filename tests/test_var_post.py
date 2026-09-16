@@ -1,5 +1,6 @@
 """Tests for the variational-posterior (Barber-Agakov) EIG estimator."""
 
+import json
 from functools import partial
 from pathlib import Path
 
@@ -798,6 +799,56 @@ def test_resume_into_the_policy_phase_refreezes_the_posterior(tmp_path, monkeypa
     assert not resumed.posterior_net.training
     assert all(not p.requires_grad for p in resumed.posterior_net.parameters())
     assert not _any_changed(posterior_before, resumed.posterior_net)
+
+
+def _last_metrics(tmp_path, name):
+    return json.loads((tmp_path / name / "metrics.jsonl").read_text().splitlines()[-1])
+
+
+def test_train_logs_how_far_it_got(tmp_path, monkeypatch):
+    """A time-stopped run has to say how far it got, in both phases' terms.
+
+    The step counter spans pretraining and policy training, so the raw count is
+    not comparable with methods that have only one phase.
+    """
+    cfg = _budget_cfg()
+    _run(cfg, tmp_path, "whole")
+
+    whole = _last_metrics(tmp_path, "whole")
+    total = cfg.n_posterior_pretrain_iter + cfg.n_train_iter
+    assert whole["train/steps_completed"] == total
+    assert whole["train/policy_steps_completed"] == cfg.n_train_iter
+    assert whole["train/stop_reason"] == "iteration_limit"
+    assert whole["step"] == total - 1
+
+    # Stop on step 2, the first one past the two pretraining steps.
+    _run(
+        _budget_cfg(train_time_budget_seconds=50.0),
+        tmp_path,
+        "part",
+        clock=[0.0, 0.0, 0.0, 99.0],
+        monkeypatch=monkeypatch,
+    )
+
+    part = _last_metrics(tmp_path, "part")
+    assert part["train/steps_completed"] == 3
+    assert part["train/policy_steps_completed"] == 1
+    assert part["train/stop_reason"] == "time_budget"
+
+
+def test_pretraining_only_run_reports_no_policy_steps(tmp_path, monkeypatch):
+    """Stopping inside pretraining must floor the policy count at zero, not go negative."""
+    _run(
+        _budget_cfg(train_time_budget_seconds=50.0),
+        tmp_path,
+        "early",
+        clock=[0.0, 99.0],
+        monkeypatch=monkeypatch,
+    )
+
+    early = _last_metrics(tmp_path, "early")
+    assert early["train/steps_completed"] == 1
+    assert early["train/policy_steps_completed"] == 0
 
 
 # ============================================================================

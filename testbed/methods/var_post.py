@@ -186,7 +186,30 @@ class Trainer:
         )
 
         if self.manager.metric_logger is not None:
+            self._log_summary()
             self.manager.metric_logger.close()
+
+    def _log_summary(self):
+        """Logs how far training got, as metrics rather than only to the event log.
+
+        steps_completed spans both phases, matching the step counter, so the
+        policy steps are broken out separately to stay comparable with methods
+        that have no pretraining phase.
+        """
+        if self.step < 0:
+            return
+        completed = self.step + 1
+        self.manager.metric_logger.log(
+            {
+                "step": self.step,
+                "train/steps_completed": completed,
+                "train/policy_steps_completed": max(
+                    0, completed - self.cfg.n_posterior_pretrain_iter
+                ),
+                "train/elapsed_seconds": self.elapsed_seconds,
+                "train/stop_reason": self.stop_reason,
+            }
+        )
 
     def _policy_state(self, step):
         state = {

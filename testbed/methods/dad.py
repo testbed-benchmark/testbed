@@ -108,7 +108,22 @@ class Trainer:
         )
 
         if self.manager.metric_logger is not None:
+            self._log_summary()
             self.manager.metric_logger.close()
+
+    def _log_summary(self):
+        """Logs how far training got, as metrics rather than only to the event log.
+        """
+        if self.step < 0:
+            return
+        self.manager.metric_logger.log(
+            {
+                "step": self.step,
+                "train/steps_completed": self.step + 1,
+                "train/elapsed_seconds": self.elapsed_seconds,
+                "train/stop_reason": self.stop_reason,
+            }
+        )
 
     def _policy_state(self, step):
         return {
