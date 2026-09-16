@@ -17,8 +17,8 @@ pool_size: 200
 design_net:
   _target_: testbed.design_nets.AlineModel
   canonicalize_theta: false
-  embedding_dim: 32
-  feedforward_dim: 128
+  embedding_dim: 128
+  feedforward_dim: 384
   n_heads: 4
   n_layers: 3
   dropout: 0.0
@@ -31,7 +31,7 @@ design_net:
 
 # training
 train_time_budget_seconds: null  # no wall-clock limit by default
-checkpoint_every: 1_000  # policy snapshots; 0 disables periodic saving
+checkpoint_every: 7_500  # policy snapshots; 0 disables periodic saving
 n_train_iter: 200_000
 n_warmup_iter: 20_000
 n_outer: 200
@@ -57,6 +57,3 @@ final_eval:
     _target_: testbed.designers.AlineDesigner
     pool_size: ${eval_pool_size}
     deterministic: ${eval_deterministic}
-  n_contrastive: 100_000_000
-  outer_batch_size: ${eval_batch_size}
-  contrastive_chunk_size: ${eval_contrastive_chunk_size}

@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - /experiments/location_finding_2src/aline
+  - _self_
+
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 7_500
+# Evaluate the final checkpoint through scripts/sweep_run.py.
+eval_every: 0
+
+wandb:
+  project: benchmarking_location_finding_2src
+  group: aline-benchmark
