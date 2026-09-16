@@ -47,7 +47,7 @@ reward:
 # eval
 eval_every: 0  # no periodic eval during SAC training
 eval_n_contrastive: 1_000_000
-train_time_budget_seconds: 43_200  # 12 hours; null for no time limit
+train_time_budget_seconds: null
 checkpoint_every: 1_000
 # SAC hyperparameters
 sac:

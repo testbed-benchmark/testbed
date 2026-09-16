@@ -9,6 +9,10 @@ critic_architecture: deepset
 
 train_time_budget_seconds: 43_200
 
+sac:
+  num_training_iterations: 100_000
+  entropy_anneal_total: 1.429
+
 wandb:
   project: benchmarking_location_finding_2src
-  group: rlboed_benchmark
+  group: rlboed-benchmark

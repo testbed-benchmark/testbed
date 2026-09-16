@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - /experiments/constant_elasticity_of_substitution/rlboed
+  - _self_
+
+train_time_budget_seconds: 43_200
+
+sac:
+  num_training_iterations: 100_000
+  entropy_anneal_total: 1.429
+
+actor_architecture: attention
+critic_architecture: deepset
+
+wandb:
+  project: benchmarking_constant_elasticity_of_substitution
+  group: rlboed-benchmark
