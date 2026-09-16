@@ -2,7 +2,7 @@
 
 import inspect
 import time
-from math import inf
+from math import inf, isfinite
 
 import hydra
 import torch
@@ -97,7 +97,7 @@ class Trainer:
             if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
 
-            if self._checkpoint_or_stop(step):
+            if self._checkpoint_or_stop(step, metrics["action_warmup/loss"]):
                 return self._finish()
 
             # evaluation
@@ -124,7 +124,7 @@ class Trainer:
             if self.manager and self.manager.metric_logger:
                 self.manager.metric_logger.log(metrics)
 
-            if self._checkpoint_or_stop(step):
+            if self._checkpoint_or_stop(step, metrics["loss"]):
                 break
 
             # evaluation
@@ -143,9 +143,18 @@ class Trainer:
 
         self._finish()
 
-    def _checkpoint_or_stop(self, step):
-        """Saves a periodic policy checkpoint; returns True once the time budget is spent."""
+    def _checkpoint_or_stop(self, step, loss):
+        """Saves a periodic policy checkpoint; returns True once training should stop.
+
+        A non-finite loss is terminal: its gradient turns every parameter NaN on
+        the next optimizer step, and nothing recovers. Stopping there rather
+        than running out the budget is what keeps a diverged run from burning
+        its whole allocation.
+        """
         self.step = step
+        if not isfinite(loss):
+            self.stop_reason = "nan_loss"
+            return True
         interval = self.cfg.checkpoint_every
         if interval and (step + 1) % interval == 0:
             torch.save(

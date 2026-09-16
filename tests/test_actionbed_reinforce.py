@@ -1,9 +1,9 @@
-"""Tests for ActionBED's REINFORCE objective and its interaction with checkpointing.
+"""Tests for ActionBED's REINFORCE objective, checkpointing, and stop conditions.
 
 The HTD outcomes are discrete, so the plain loss only reaches the design net
 through the action net's input and misses the trajectory score term. These
-cover the wiring that puts that term back, and that a run using it still
-resumes exactly.
+cover the wiring that puts that term back, that a run using it still resumes
+exactly, and that a diverged run stops instead of spending its budget.
 """
 
 from pathlib import Path
@@ -95,6 +95,90 @@ def _run(cfg, tmp_path, name):
     trainer = build_trainer(cfg, instantiate(cfg.task), manager)
     trainer.train()
     return trainer, Path(manager.path("final_step.pt"))
+
+
+def _nan_after(trainer, n):
+    """Makes the loss non-finite from call ``n`` onwards."""
+    real, calls = trainer.loss_fn, []
+
+    def loss_fn(action, theta):
+        calls.append(1)
+        loss = real(action, theta)
+        return loss * float("nan") if len(calls) > n else loss
+
+    trainer.loss_fn = loss_fn
+
+
+def test_nan_during_joint_training_stops_the_run(tmp_path):
+    cfg = _cfg(n_action_warmup_iter=0, n_train_iter=200, **{"objective.name": "loss"})
+    manager = Manager(
+        cfg, root=str(tmp_path), name="nan", timestamp=False, console=False
+    )
+    trainer = build_trainer(cfg, instantiate(cfg.task), manager)
+    _nan_after(trainer, 2)
+
+    trainer.train()
+
+    assert trainer.stop_reason == "nan_loss"
+    assert trainer.step == 2, "should stop on the first non-finite loss, not run on"
+    state = torch.load(manager.path("final_step.pt"), weights_only=True)
+    assert state["stop_reason"] == "nan_loss"
+
+
+def test_nan_during_warmup_stops_the_run(tmp_path):
+    cfg = _cfg(n_action_warmup_iter=200, n_train_iter=200, **{"objective.name": "loss"})
+    manager = Manager(
+        cfg, root=str(tmp_path), name="nanwarm", timestamp=False, console=False
+    )
+    trainer = build_trainer(cfg, instantiate(cfg.task), manager)
+    _nan_after(trainer, 1)
+
+    trainer.train()
+
+    assert trainer.stop_reason == "nan_loss"
+    assert trainer.step == 1
+
+
+def test_finite_run_still_stops_on_the_iteration_limit(tmp_path):
+    cfg = _cfg()
+    manager = Manager(
+        cfg, root=str(tmp_path), name="ok", timestamp=False, console=False
+    )
+    trainer = build_trainer(cfg, instantiate(cfg.task), manager)
+
+    trainer.train()
+
+    assert trainer.stop_reason == "iteration_limit"
+
+
+def test_location_finding_truelogmse_recipe_stops_immediately(tmp_path):
+    """The known-NaN recipe must not spend its wall-clock budget.
+
+    Its Gaussian source prior puts ~50% of theta below zero, so the loss's
+    log(theta + eps) is NaN from the first step.
+    """
+    with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
+        cfg = compose(
+            config_name="experiments/benchmarking/location_finding_2src/actionbed_truelogmse",
+            overrides=[
+                "device=cpu",
+                "n_outer=32",
+                "n_action_warmup_iter=5",
+                "n_train_iter=5",
+                "eval_every=0",
+                "checkpoint_every=0",
+                "train_time_budget_seconds=null",
+            ],
+        )
+    manager = Manager(
+        cfg, root=str(tmp_path), name="lf", timestamp=False, console=False
+    )
+    trainer = build_trainer(cfg, instantiate(cfg.task), manager)
+
+    trainer.train()
+
+    assert trainer.stop_reason == "nan_loss"
+    assert trainer.step == 0
 
 
 def test_reinforce_run_resumes_to_the_same_weights(tmp_path):
