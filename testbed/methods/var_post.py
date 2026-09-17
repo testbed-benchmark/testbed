@@ -396,22 +396,37 @@ def build_objective(cfg, task, posterior_net):
     return objectives[name]()
 
 
+def schedule_horizon(cfg):
+    """Number of steps the LR schedules span.
+
+    Defaults to the whole run. Set cfg.lr_schedule_iters when n_train_iter is a
+    deliberately non-binding cap and train_time_budget_seconds ends the run:
+    the schedules then span the steps the run is expected to reach rather than
+    the cap. Keep it above that expectation, since a cosine turns back up past
+    its T_max.
+    """
+    return cfg.get("lr_schedule_iters") or (
+        cfg.n_posterior_pretrain_iter + cfg.n_train_iter
+    )
+
+
 def build_policy_optimizer(cfg, design_net):
     """Builds the policy Adam optimizer and its (optional) cosine-decay scheduler.
 
     cfg.betas: Adam (beta1, beta2); torch's (0.9, 0.999) default if null.
-    cfg.policy_cosine_alpha: if set, LR cosine-decays over the full run
-    (n_posterior_pretrain_iter + n_train_iter) from cfg.lr down to
-    cfg.lr * cfg.policy_cosine_alpha; no scheduler (constant LR) if null.
+    cfg.policy_cosine_alpha: if set, LR cosine-decays over schedule_horizon(cfg)
+    from cfg.lr down to cfg.lr * cfg.policy_cosine_alpha; no scheduler
+    (constant LR) if null.
     """
     betas = tuple(cfg.betas) if cfg.get("betas") else (0.9, 0.999)
     optimizer = torch.optim.Adam(design_net.parameters(), lr=cfg.lr, betas=betas)
 
     scheduler = None
     if cfg.get("policy_cosine_alpha") is not None:
-        total_iters = cfg.n_posterior_pretrain_iter + cfg.n_train_iter
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=total_iters, eta_min=cfg.lr * cfg.policy_cosine_alpha
+            optimizer,
+            T_max=schedule_horizon(cfg),
+            eta_min=cfg.lr * cfg.policy_cosine_alpha,
         )
     return optimizer, scheduler
 
@@ -419,10 +434,10 @@ def build_policy_optimizer(cfg, design_net):
 def build_posterior_optimizer(cfg, posterior_net):
     """Builds the posterior Adam optimizer and its (optional) warmup-cosine scheduler.
 
-    cfg.posterior_lr is the peak LR. cfg.posterior_warmup_frac (fraction of the full
-    run, n_posterior_pretrain_iter + n_train_iter) is the linear-warmup length;
-    no scheduler (constant LR) if null/0. After warmup, LR cosine-decays to
-    cfg.posterior_lr_floor over the remaining steps of the full run.
+    cfg.posterior_lr is the peak LR. cfg.posterior_warmup_frac (fraction of
+    schedule_horizon(cfg)) is the linear-warmup length; no scheduler (constant
+    LR) if null/0. After warmup, LR cosine-decays to cfg.posterior_lr_floor
+    over the rest of the horizon.
     """
     betas = tuple(cfg.posterior_betas) if cfg.get("posterior_betas") else (0.9, 0.999)
     optimizer = torch.optim.Adam(
@@ -433,7 +448,7 @@ def build_posterior_optimizer(cfg, posterior_net):
     if not warmup_frac:
         return optimizer, None
 
-    total_iters = cfg.n_posterior_pretrain_iter + cfg.n_train_iter
+    total_iters = schedule_horizon(cfg)
     warmup_iters = max(1, round(warmup_frac * total_iters))
     warmup = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lambda t: min(1.0, t / warmup_iters)

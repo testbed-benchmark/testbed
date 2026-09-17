@@ -31,7 +31,11 @@ n_posterior_outer: 2_048  # unused without pretraining; kept for completeness
 pretrain_design_distr: null
 
 # policy training
-n_train_iter: 200_000
+# n_train_iter is a cap, not the budget. A cosine turns back up past its T_max, so
+# the horizon is set ~1.4x the fastest seed's 12h extrapolation (~200k); a
+# typical seed lands near 69% of it, matching the other benchmark tasks.
+n_train_iter: 1_000_000
+lr_schedule_iters: 280_000
 n_outer: 2_048  # batch size, matching dad on this task
 
 # policy optimizer: Adam, grad clip 1.0 (global norm),

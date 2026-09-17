@@ -31,7 +31,14 @@ n_posterior_outer: 2_048  # unused without pretraining; kept for completeness
 pretrain_design_distr: null
 
 # policy training
-n_train_iter: 200_000
+# n_train_iter is a cap, not the budget: at the ~35k steps/hour this recipe
+# reached, 200k ran out after ~5.5h and ended the run on the iteration limit
+# rather than the 12h clock. lr_schedule_iters carries the LR horizon instead,
+# so raising the cap no longer stretches the two schedules below. A cosine
+# turns back up past its T_max, so the horizon is set well clear of the fastest
+# seed's 12h extrapolation (~464k).
+n_train_iter: 1_000_000
+lr_schedule_iters: 600_000
 n_outer: 2_048  # batch size, matching dad on this task
 
 # policy optimizer: Adam, grad clip 1.0 (global norm),

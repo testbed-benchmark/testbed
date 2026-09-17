@@ -44,6 +44,18 @@ ENTRY_POINT_RECIPES = [
     "experiments/benchmarking/temporal_discounting/joint_var_post_single_gaussian",
     "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post_single_gaussian",
     "experiments/benchmarking/michaelis_menten/joint_var_post_single_gaussian",
+    "experiments/benchmarking/pharmacokinetic/dad",
+    "experiments/benchmarking/pharmacokinetic/joint_var_post",
+    "experiments/benchmarking/pharmacokinetic/joint_var_post_single_gaussian",
+    "experiments/benchmarking/cart_pole/dad",
+    "experiments/benchmarking/cart_pole/joint_var_post",
+    "experiments/benchmarking/cart_pole/joint_var_post_single_gaussian",
+    "experiments/benchmarking/double_link/dad",
+    "experiments/benchmarking/double_link/joint_var_post",
+    "experiments/benchmarking/double_link/joint_var_post_single_gaussian",
+    "experiments/benchmarking/stochastic_pendulum/dad",
+    "experiments/benchmarking/stochastic_pendulum/joint_var_post",
+    "experiments/benchmarking/stochastic_pendulum/joint_var_post_single_gaussian",
     "experiments/benchmarking/location_finding_2src/static",
     "experiments/benchmarking/temporal_discounting/static",
     "experiments/benchmarking/constant_elasticity_of_substitution/static",
@@ -310,18 +322,30 @@ def test_var_post_recipes_actually_instantiate_their_posterior_net():
         assert sum(p.numel() for p in net.parameters()) > 0, recipe
 
 
+# DAD on these tasks OOMs at the suite's 2_048; see their recipes.
+HALF_BATCH_RECIPES = {
+    "experiments/benchmarking/cart_pole/dad",
+    "experiments/benchmarking/double_link/dad",
+}
+
+
 @pytest.mark.parametrize("recipe", BENCHMARK_RECIPES)
 def test_benchmark_recipes_share_one_configuration(recipe):
     """The benchmarking suite varies the task and the method, nothing else.
 
     Its whole point is that a table built from it compares methods rather than
     architectures or budgets, which holds only while these agree.
+
+    n_train_iter is deliberately not asserted to agree. The shared budget is the
+    wall clock (see the test below); n_train_iter is only the cap that must not
+    bind before it, and how many steps 12h buys differs by an order of magnitude
+    across these tasks. Pinning it to one number is what let recipes end on the
+    iteration limit at ~6h while claiming a 12h budget.
     """
     cfg = _compose(recipe)
 
     assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
-    assert cfg.n_train_iter == 200_000
-    assert cfg.n_outer == 2_048
+    assert cfg.n_outer == (1_024 if recipe in HALF_BATCH_RECIPES else 2_048)
     task = recipe.split("/")[-2]
     assert cfg.wandb.project == f"benchmarking_{task}"
 

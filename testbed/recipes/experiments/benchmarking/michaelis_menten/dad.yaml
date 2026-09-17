@@ -29,7 +29,8 @@ objective:
   baseline: null
   requires_policy_log_probs: false
 # training
-n_train_iter: 200_000
+# A cap, not the budget.
+n_train_iter: 1_000_000
 n_outer: 2_048
 
 # eval
