@@ -1297,12 +1297,6 @@ def main(cfg):
 
     trainer.train()
 
-    eval_metrics = trainer.evaluate()
-    manager.event_logger.info(
-        f"policy-mean SPCE with {cfg.eval_n_contrastive} contrastive samples: "
-        f"{eval_metrics['eval/spce']:.4f} ± {eval_metrics['eval/spce_se']:.4f}"
-    )
-
 
 if __name__ == "__main__":
     main()
