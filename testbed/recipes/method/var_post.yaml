@@ -11,6 +11,7 @@ defaults:
   - _self_
 # system (device/save_dir come from the system group)
 seed: 0
+torch_deterministic: true
 # frozen variant: pretrain the posterior, then freeze it while training the policy
 joint: false
 # objective
@@ -33,6 +34,10 @@ pretrain_design_distr: null
 # policy training
 n_train_iter: 25_000
 n_outer: 2_048
+
+# budget / checkpointing
+train_time_budget_seconds: null  # null for no time limit
+checkpoint_every: 0  # 0 to disable
 
 # optimizer
 lr: 1e-4

@@ -19,6 +19,11 @@ defaults:
 # policy to leave the saturated region. Hence REINFORCE.
 
 seed: 0
+
+# budget / checkpointing
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 5_000
+
 task:
   reparameterize_outcomes: false
 # designer
@@ -29,6 +34,7 @@ use_raw_history: true
 # objective
 objective:
   name: reinforce
+  fused: true  # false falls back to the per-step loop
   n_inner: 2_000  # contrastive samples for the sPCE reward
   reparameterize_policy: false
   baseline: leave_one_out  # the score term carries the gradient; keep its variance down

@@ -39,6 +39,12 @@ ENTRY_POINT_RECIPES = [
     "experiments/benchmarking/temporal_discounting/joint_var_post",
     "experiments/benchmarking/constant_elasticity_of_substitution/dad",
     "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post",
+    "experiments/benchmarking/michaelis_menten/dad",
+    "experiments/benchmarking/michaelis_menten/joint_var_post",
+    "experiments/benchmarking/location_finding_2src/joint_var_post_single_gaussian",
+    "experiments/benchmarking/temporal_discounting/joint_var_post_single_gaussian",
+    "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post_single_gaussian",
+    "experiments/benchmarking/michaelis_menten/joint_var_post_single_gaussian",
     "experiments/benchmarking/location_finding_2src/static",
     "experiments/benchmarking/temporal_discounting/static",
     "experiments/benchmarking/constant_elasticity_of_substitution/static",
@@ -340,6 +346,21 @@ def test_benchmark_recipes_share_one_configuration(recipe):
     assert cfg.n_outer == 2_048
     task = recipe.split("/")[-2]
     assert cfg.wandb.project == f"benchmarking_{task}"
+
+
+def test_benchmark_recipes_share_one_training_budget():
+    """Every benchmark run gets the same wall clock and the same checkpoint cadence.
+
+    Asserted as agreement rather than against fixed numbers, so retuning the
+    budget stays a one-line change per recipe.
+    """
+    budgets = {r: _compose(r).train_time_budget_seconds for r in BENCHMARK_RECIPES}
+    intervals = {r: _compose(r).checkpoint_every for r in BENCHMARK_RECIPES}
+
+    assert len(set(budgets.values())) == 1, budgets
+    assert len(set(intervals.values())) == 1, intervals
+    # A null budget here would mean the suite is iteration-bound again.
+    assert next(iter(budgets.values())) is not None
 
 
 @pytest.mark.parametrize("recipe", ACTIONBED_RECIPES)

@@ -16,6 +16,11 @@ defaults:
 # method-level settings carry over.
 
 seed: 0
+
+# budget / checkpointing
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 5_000
+
 joint: true
 # designer
 # No use_raw_history key here: unlike dad, var_post.py derives it from the net
@@ -27,6 +32,7 @@ joint: true
 # they are not reparameterizable and the score term carries the gradient.
 objective:
   name: barber_agakov_reinforce
+  fused: true  # false falls back to the per-step loop
   reparameterize_policy: false
   baseline: leave_one_out  # centre the score coefficient to keep its variance down
   requires_policy_log_probs: false

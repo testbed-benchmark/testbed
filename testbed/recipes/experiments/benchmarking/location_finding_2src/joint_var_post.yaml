@@ -15,12 +15,18 @@ defaults:
 # released code for this baseline.
 
 seed: 0
+
+# budget / checkpointing
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 5_000
+
 joint: true
 
 # objective: plain pathwise bound. The location-finding likelihood is
 # reparameterizable, so no score term is needed.
 objective:
   name: barber_agakov
+  fused: true  # false falls back to the per-step loop
 
 # no pretraining phase
 n_posterior_pretrain_iter: 0

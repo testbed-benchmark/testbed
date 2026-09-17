@@ -8,6 +8,11 @@ defaults:
 # Benchmark run of DAD on the cart pole (T = 50 force steps).
 
 seed: 0
+
+# budget / checkpointing
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 5_000
+
 # designer
 # Condition on the unconstrained designs the policy emits rather than on the
 # forces in [-5, 5]. The tanh squash makes the two bijective, and the raw
@@ -16,6 +21,7 @@ use_raw_history: true
 # objective
 objective:
   name: spce
+  fused: true  # false falls back to the per-step loop
   n_inner: 2_000  # contrastive samples for sPCE
   reparameterize_policy: false
   baseline: null
