@@ -16,6 +16,15 @@ torch_deterministic: true
 
 use_raw_history: true
 
+# objective
+# "loss": backprop the loss as-is; needs reparameterizable outcomes.
+# "reinforce": also add the trajectory score term, for discrete outcomes.
+objective:
+  name: loss
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false
+
 # loss
 loss:
   _target_: testbed.design_objectives.SortedMSELoss
