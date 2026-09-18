@@ -1,0 +1,24 @@
+# @package _global_
+
+# An action net trained on rollouts from a frozen designer. Name the run whose
+# designer to freeze; its task and T then override the ones below:
+#
+#   python scripts/sweep_run.py \
+#     --recipe experiments/location_finding_2src/action \
+#     seed=0 designer_run_dir=runs/<a finished run>
+#
+# Left unset, designs are drawn at random, which is the baseline this compares
+# against.
+
+defaults:
+  - /method: action
+  - override /task: location_finding_2src
+  - _self_
+
+designer_run_dir: null
+
+eval_every: 0  # the final_eval block handles it
+
+wandb:
+  project: location_finding_2src  # one project per task; methods separate by group
+  group: action
