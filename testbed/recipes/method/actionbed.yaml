@@ -27,7 +27,7 @@ objective:
 
 # loss
 loss:
-  _target_: testbed.design_objectives.SortedMSELoss
+  _target_: testbed.design_objectives.PermutationInvariantMSELoss
   reduction: mean
 # training
 n_train_iter: 150_000

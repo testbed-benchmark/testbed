@@ -23,6 +23,7 @@ block, so they are set in the recipe and overridden like any other Hydra value
 import inspect
 import math
 import sys
+from math import prod
 from pathlib import Path
 
 import torch
@@ -57,11 +58,13 @@ def build_losses(config, task):
 
 
 def per_rollout(loss_fn, action, theta):
-    """Returns one loss value per rollout, averaging over event dimensions.
+    """Returns one loss value per rollout, on the scale ``reduction="mean"`` reports.
 
-    A ``reduction="none"`` loss keeps whatever event shape it scores over --
-    elementwise for MSE, already reduced for the permutation-invariant losses
-    -- so flattening to the batch axis covers both.
+    A ``reduction="none"`` loss keeps whatever shape it scores over: element-wise
+    for MSE, but already summed to ``[b]`` for the permutation-invariant losses,
+    whose ``"mean"`` still normalizes by the event size. Dividing each rollout's
+    total by that event size reproduces ``"mean"`` for both, so a loss reported
+    here is directly comparable to the same loss reported during training.
     """
     value = loss_fn(action, theta)
     if value.ndim == 0:
@@ -69,7 +72,7 @@ def per_rollout(loss_fn, action, theta):
             f"{type(loss_fn).__name__} reduced over the batch; it needs to "
             "support reduction='none' to be scored per rollout."
         )
-    return value.reshape(value.shape[0], -1).mean(-1)
+    return value.reshape(value.shape[0], -1).sum(-1) / prod(action.shape[1:])
 
 
 def eval_losses(

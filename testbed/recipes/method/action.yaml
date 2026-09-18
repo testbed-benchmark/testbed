@@ -26,12 +26,15 @@ designer_run_dir: null
 use_raw_history: null
 
 # loss
+# Element-wise, so it holds for any task. A task whose parameters are a set of
+# exchangeable objects (location finding's sources) wants the sorted or
+# permutation-invariant variant instead; see experiments/<task>/action.yaml.
 loss:
-  _target_: testbed.design_objectives.PermutationInvariantMSELoss
+  _target_: testbed.design_objectives.MSELoss
   reduction: mean
 
 # training
-n_train_iter: 50_000
+n_train_iter: 25_000
 n_outer: 2_000
 
 # eval
@@ -43,7 +46,7 @@ lr: 5e-4
 betas: [0.8, 0.998]
 grad_clip: null # can help improve stability; try ~1.0 as a default
 lr_gamma: 0.95
-lr_period: 2000
+lr_period: 1000  # halved with n_train_iter, so the LR still anneals to the same place
 
 # evaluation of the saved checkpoint after training, run by
 # `python -m testbed.eval.eval_loss <run_dir>`. Every loss listed is scored on
@@ -52,18 +55,20 @@ lr_period: 2000
 final_eval:
   enabled: true
   checkpoint: final_step.pt
-  n_outer: 2_048
+  # These losses are heavy-tailed -- a few rollouts carry much of the mean --
+  # so 2_048 leaves a ~25% standard error on them.
+  n_outer: 8_192
   outer_batch_size: 256
-  # The losses below take a log of the squared error, so they hold for any
-  # task. The TrueLogMSE variants log theta itself and are NaN wherever it can
-  # be negative, so add those per experiment, on tasks with positive parameters.
+  # Element-wise, so they hold for any task. Losses reading the last two axes
+  # as (objects, dim_object) -- the sorted and permutation-invariant ones --
+  # belong to tasks whose parameters are a set of objects, and the TrueLogMSE
+  # variants log theta itself and are NaN wherever it can be negative; both are
+  # added per experiment. See experiments/location_finding_2src/action.yaml.
   losses:
-    permutation_invariant_mse:
-      _target_: testbed.design_objectives.PermutationInvariantMSELoss
-    permutation_invariant_log_mse:
-      _target_: testbed.design_objectives.PermutationInvariantLogMSELoss
-    permutation_invariant_true_log_mse:
-      _target_: testbed.design_objectives.PermutationInvariantTrueLogMSELoss
+    mse:
+      _target_: testbed.design_objectives.MSELoss
+    log_mse:
+      _target_: testbed.design_objectives.LogMSELoss
 
 # action network
 # The MLP flattens the whole history, so only the hidden widths are set here:

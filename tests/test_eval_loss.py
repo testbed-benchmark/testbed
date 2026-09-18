@@ -5,7 +5,13 @@ import torch
 from omegaconf import OmegaConf
 
 from testbed.design_nets import DeepSetPolicyNet
-from testbed.design_objectives import MSELoss
+from testbed.design_objectives import (
+    LogMSELoss,
+    MSELoss,
+    PermutationInvariantLogMSELoss,
+    PermutationInvariantMSELoss,
+    SortedMSELoss,
+)
 from testbed.designers import RandomDesigner
 from testbed.eval.eval_loss import (
     build_losses,
@@ -43,13 +49,29 @@ def test_build_losses_scores_one_rollout_at_a_time():
     assert all(loss.reduction == "none" for loss in losses.values())
 
 
-def test_per_rollout_keeps_one_value_per_rollout():
-    action, theta = torch.zeros(4, 2), torch.ones(4, 2)
+@pytest.mark.parametrize(
+    "cls",
+    [
+        MSELoss,
+        SortedMSELoss,
+        PermutationInvariantMSELoss,
+        LogMSELoss,
+        PermutationInvariantLogMSELoss,
+    ],
+)
+def test_per_rollout_matches_the_losss_own_mean_reduction(cls):
+    # The permutation-invariant losses reduce to [b] themselves, as a total
+    # over the event, while their "mean" normalizes by it; both must land on
+    # the same scale as the loss reported during training.
+    torch.manual_seed(0)
+    action, theta = torch.randn(64, 2, 2), torch.randn(64, 2, 2)
 
-    values = per_rollout(MSELoss(reduction="none"), action, theta)
+    values = per_rollout(cls(reduction="none"), action, theta)
 
-    assert values.shape == (4,)
-    assert torch.allclose(values, torch.ones(4))
+    assert values.shape == (64,)
+    assert values.mean() == pytest.approx(
+        cls(reduction="mean")(action, theta), rel=1e-5
+    )
 
 
 def test_per_rollout_rejects_a_loss_that_reduced_over_the_batch():
