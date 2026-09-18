@@ -1,21 +1,18 @@
 # @package _global_
 
-# An action net trained on rollouts from a frozen designer. Name the run whose
-# designer to freeze; its task and T then override the ones below:
+# An action net trained on rollouts from a frozen designer:
 #
-#   python scripts/sweep_run.py \
-#     --recipe experiments/location_finding_2src/action \
-#     seed=0 designer_run_dir=runs/<a finished run>
+#   python testbed/methods/action.py \
+#     --config-name experiments/location_finding_2src/action \
+#     designer_run_dir=runs/<a finished location_finding_2src run>
 #
-# Left unset, designs are drawn at random, which is the baseline this compares
-# against.
+# The run supplies the task, T and the frozen design policy; this supplies the
+# loss to train the action net with, and the losses to report.
 
 defaults:
   - /method: action
   - override /task: location_finding_2src
   - _self_
-
-designer_run_dir: null
 
 eval_every: 0  # the final_eval block handles it
 
@@ -23,13 +20,16 @@ wandb:
   project: location_finding_2src  # one project per task; methods separate by group
   group: action
 
-# Location finding's parameters are a set of exchangeable sources, so the
-# source ordering should not count against an estimate.
+# The sources are exchangeable, so their ordering must not count against an
+# estimate -- in training or in what is reported.
 loss:
   _target_: testbed.design_objectives.PermutationInvariantMSELoss
+  reduction: mean
 
 final_eval:
   losses:
+    mse: null
+    log_mse: null
     permutation_invariant_mse:
       _target_: testbed.design_objectives.PermutationInvariantMSELoss
     permutation_invariant_log_mse:

@@ -49,6 +49,9 @@ def build_losses(config, task):
     """
     losses = {}
     for name, loss_config in config.items():
+        # A recipe drops a loss it inherited, but cannot apply, by nulling it.
+        if loss_config is None:
+            continue
         parameters = inspect.signature(get_class(loss_config._target_)).parameters
         overrides = {"reduction": "none"} if "reduction" in parameters else {}
         if "task" in parameters:

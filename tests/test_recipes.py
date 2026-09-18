@@ -27,7 +27,6 @@ ENTRY_POINT_RECIPES = [
     "method/joint_var_post",
     "method/static",
     "experiments/location_finding/rlboed",
-    "experiments/location_finding_2src/action",
     "experiments/location_finding_2src/actionbed",
     "experiments/location_finding_2src/dad",
     "experiments/location_finding_2src/rlboed",
@@ -75,7 +74,23 @@ ACTIONBED_RECIPES = [
     for loss in ("logmse", "mse", "truelogmse")
 ]
 
+# The training loss an action net gets by default, per task: element-wise where
+# the parameters are a plain vector, permutation-invariant where they are a set
+# of exchangeable objects, and on a log scale where the net predicts log theta.
+ACTION_LOSSES = {
+    "location_finding": "PermutationInvariantMSELoss",
+    "location_finding_2src": "PermutationInvariantMSELoss",
+    "pharmacokinetic": "MSELoss",
+    "michaelis_menten": "MSELoss",
+    "stochastic_pendulum": "MSELoss",
+    "double_link": "MSELoss",
+    "cart_pole": "MSELoss",
+    "constant_elasticity_of_substitution": "TrueLogMSELoss",
+    "temporal_discounting": "TrueLogMSELoss",
+}
+
 ENTRY_POINT_RECIPES += ACTIONBED_RECIPES
+ENTRY_POINT_RECIPES += [f"experiments/{task}/action" for task in ACTION_LOSSES]
 
 
 # Static designs have no design net, and ActionBED runs to a wall-clock budget;
@@ -156,6 +171,22 @@ def test_action_recipe_wires_a_frozen_designer_and_action_net():
         event_shape_design=(dim_design,),
         event_shape_out=(cfg.action_net.dims[-1],),
     )
+
+
+@pytest.mark.parametrize(("task", "loss"), sorted(ACTION_LOSSES.items()))
+def test_action_recipes_train_on_the_loss_their_task_calls_for(task, loss):
+    cfg = _compose(f"experiments/{task}/action")
+
+    assert cfg.loss._target_ == f"testbed.design_objectives.{loss}"
+    assert cfg.wandb.project == task
+
+    # Every reported loss has to apply to what the action net actually outputs:
+    # a net trained on log theta is not scored on the raw scale, and only a task
+    # with an objects axis is scored permutation-invariantly.
+    reported = {k for k, v in cfg.final_eval.losses.items() if v is not None}
+    objects = len(instantiate(cfg.task).action_space.event_shape) > 1
+    assert any(loss.replace("Loss", "").lower() in k.replace("_", "") for k in reported)
+    assert all(("permutation_invariant" in k) == objects for k in reported)
 
 
 def test_rlboed_method_recipe_requires_environment_outcome_bounds():

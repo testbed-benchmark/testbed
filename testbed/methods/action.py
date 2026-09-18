@@ -231,10 +231,16 @@ def adopt_run_task(cfg):
 
     A frozen designer only means anything on the task it was trained for, and
     T fixes the history length, so the source run's config wins over ours.
+
+    Returns the task this config asked for, which the caller reports when the
+    run turns out to be for another one -- the recipe's loss was chosen for the
+    task it names, and would then be training against a different one.
     """
     src = run_config(cfg.designer_run_dir)
+    asked_for = cfg.task
     cfg.task = src.task
     cfg.T = src.T
+    return asked_for
 
 
 def build_designer(cfg, task, manager=None):
@@ -302,9 +308,16 @@ def main(cfg):
     Args:
         cfg: Composed Hydra configuration for the training run.
     """
+    asked_for = None
     if cfg.designer_run_dir is not None:
-        adopt_run_task(cfg)
+        asked_for = adopt_run_task(cfg)
     manager, task = setup(cfg)
+    if asked_for is not None and asked_for._target_ != cfg.task._target_:
+        manager.event_logger.warning(
+            f"This recipe is written for {asked_for._target_}, but "
+            f"{cfg.designer_run_dir} trained on {cfg.task._target_}, which wins. "
+            "Its loss was chosen for the other task."
+        )
     build_trainer(cfg, task, manager).train()
 
 
