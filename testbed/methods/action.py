@@ -1,5 +1,8 @@
 """Training an actions-only policy on top of a frozen designer."""
 
+import json
+from pathlib import Path
+
 import hydra
 import torch
 from hydra.utils import instantiate
@@ -8,6 +11,7 @@ from testbed.core.load import designer_from_run, run_config
 from testbed.core.setup import instantiate_action_net, setup
 from testbed.core.util import seed_all
 from testbed.designers import ActionHook, Designer
+from testbed.eval.eval_loss import evaluate_loss_checkpoint
 from testbed.methods.actionbed import build_loss_fn
 
 # ============================================================================
@@ -106,8 +110,42 @@ class Trainer:
         if self.manager:
             self.manager.event_logger.info("Training successfully completed")
 
+        self.final_eval()
+
         if self.manager.metric_logger is not None:
             self.manager.metric_logger.close()
+
+    def final_eval(self):
+        """Scores the saved checkpoint and writes eval.json beside it.
+
+        Runs here, before the metric logger closes, so the losses land on the
+        training run rather than a new one. The checkpoint is reloaded rather
+        than the live nets scored, so the number provably belongs to the file on
+        disk -- it is what ``scripts/eval_run.py`` would report later.
+        """
+        settings = getattr(self.cfg, "final_eval", None)
+        if self.manager is None or settings is None or not settings.enabled:
+            return
+
+        results = evaluate_loss_checkpoint(
+            self.manager.dir,
+            checkpoint=settings.checkpoint,
+            n_outer=settings.n_outer,
+            outer_batch_size=settings.outer_batch_size,
+            device=self.cfg.device,
+            verbose=False,
+        )
+        Path(self.manager.path("eval.json")).write_text(json.dumps(results, indent=2))
+        self.manager.event_logger.info(f"Final eval: {results}")
+
+        if self.manager.metric_logger is not None:
+            self.manager.metric_logger.log(
+                {
+                    f"eval/{k}": v
+                    for k, v in results.items()
+                    if isinstance(v, (int, float))
+                }
+            )
 
     def _policy_state(self, step):
         # The frozen designer rides along for the sake of completeness, under

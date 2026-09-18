@@ -48,9 +48,10 @@ grad_clip: null # can help improve stability; try ~1.0 as a default
 lr_gamma: 0.95
 lr_period: 1000  # halved with n_train_iter, so the LR still anneals to the same place
 
-# evaluation of the saved checkpoint after training, run by
-# `python -m testbed.eval.eval_loss <run_dir>`. Every loss listed is scored on
-# one shared set of rollouts. Distinct from `eval_every`/`n_outer_eval`, which
+# evaluation of the saved checkpoint, run at the end of training and repeatable
+# with `python -m testbed.eval.eval_loss <run_dir>`. Every loss listed is scored
+# on one shared set of rollouts, and the results are written to eval.json and
+# logged to the training run. Distinct from `eval_every`/`n_outer_eval`, which
 # control periodic eval during training.
 final_eval:
   enabled: true

@@ -1,12 +1,14 @@
 """Tests for the actions-only trainer on top of a frozen designer."""
 
 import copy
+import json
 from types import SimpleNamespace
 
 import pytest
 import torch
 from omegaconf import OmegaConf
 
+from testbed.core.manager import Manager
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import MSELoss
 from testbed.designers import (
@@ -209,3 +211,76 @@ def test_a_designer_that_skips_its_hooks_says_so():
 
     with pytest.raises(RuntimeError, match="never fired"):
         trainer.train_step()
+
+
+def test_train_scores_the_checkpoint_it_saved(tmp_path):
+    task = _make_task()
+    designer = _make_designer("random", task)
+    action_net = _make_net(task, task.action_space.event_shape)
+    cfg = OmegaConf.create(
+        {
+            "T": T,
+            "device": "cpu",
+            "n_outer": 4,
+            "n_outer_eval": 4,
+            "n_train_iter": 1,
+            "eval_every": 0,
+            "grad_clip": None,
+            "use_raw_history": None,
+            "task": {
+                "_target_": "testbed.tasks.LocationFinding",
+                "n_sources": 1,
+                "dim_theta": 2,
+            },
+            "designer": {"_target_": "testbed.designers.RandomDesigner"},
+            "action_net": {"_target_": "testbed.design_nets.DeepSetPolicyNet"},
+            "final_eval": {
+                "enabled": True,
+                "checkpoint": "final_step.pt",
+                "n_outer": 4,
+                "outer_batch_size": 4,
+                "losses": {"mse": {"_target_": "testbed.design_objectives.MSELoss"}},
+            },
+        }
+    )
+    manager = Manager(cfg, root=str(tmp_path), name="run", timestamp=False)
+    trainer = Trainer(
+        task,
+        designer,
+        action_net,
+        MSELoss(),
+        torch.optim.Adam(action_net.parameters()),
+        cfg,
+        manager=manager,
+    )
+
+    trainer.train()
+
+    results = json.loads((tmp_path / "run" / "eval.json").read_text())
+    assert results["n_outer"] == 4
+    assert results["mse"] > 0
+
+
+def test_train_skips_the_final_eval_when_it_is_disabled(tmp_path):
+    task = _make_task()
+    action_net = _make_net(task, task.action_space.event_shape)
+    cfg = SimpleNamespace(
+        n_outer=4,
+        n_outer_eval=4,
+        n_train_iter=1,
+        eval_every=0,
+        grad_clip=None,
+        use_raw_history=None,
+    )
+    manager = Manager(cfg, root=str(tmp_path), name="off", timestamp=False)
+    Trainer(
+        task,
+        _make_designer("random", task),
+        action_net,
+        MSELoss(),
+        torch.optim.Adam(action_net.parameters()),
+        cfg,
+        manager=manager,
+    ).train()
+
+    assert not (tmp_path / "off" / "eval.json").exists()
