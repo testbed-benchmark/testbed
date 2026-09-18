@@ -34,7 +34,8 @@ objective:
   baseline: leave_one_out  # leave_one_out for variance reduction
   requires_policy_log_probs: false
 # training
-n_train_iter: 200_000
+# A cap, not the budget. 
+n_train_iter: 1_000_000
 n_outer: 2_048
 
 # optimizer: as in experiments/temporal_discounting/dad

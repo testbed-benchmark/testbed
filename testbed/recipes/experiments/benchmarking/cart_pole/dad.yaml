@@ -27,8 +27,15 @@ objective:
   baseline: null
   requires_policy_log_probs: false
 # training
-n_train_iter: 200_000
-n_outer: 2_048
+# n_outer is halved from the 2_048 the rest of the suite uses, and from what
+# this task's joint_var_post uses. At 2_048 the sPCE backward needs more than
+# the 95 GiB card: every seed died in CUDA OOM on the first step, holding ~79
+# GiB of activations over the [n_outer * n_inner, T, ...] contrastive scoring.
+# joint_var_post has no contrastive axis, so it fits at 2_048 and is unchanged.
+# The LR is constant here, so n_train_iter is a free, deliberately non-binding
+# cap; the 12h clock ends the run. 
+n_train_iter: 1_000_000
+n_outer: 1_024
 
 # eval
 eval_every: 0  # the final_eval block handles it
