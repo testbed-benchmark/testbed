@@ -21,11 +21,13 @@ RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
 ENTRY_POINT_RECIPES = [
     "method/dad",
     "method/actionbed",
+    "method/action",
     "method/rlboed",
     "method/var_post",
     "method/joint_var_post",
     "method/static",
     "experiments/location_finding/rlboed",
+    "experiments/location_finding_2src/action",
     "experiments/location_finding_2src/actionbed",
     "experiments/location_finding_2src/dad",
     "experiments/location_finding_2src/rlboed",
@@ -132,6 +134,27 @@ def test_actionbed_recipe_wires_design_and_action_nets():
         event_shape_y=(1,),
         event_shape_design=(2,),
         event_shape_out=(2,),
+    )
+
+
+def test_action_recipe_wires_a_frozen_designer_and_action_net():
+    cfg = _compose("method/action")
+    # Designs come from the task's design space until a run dir says otherwise.
+    assert cfg.designer._target_ == "testbed.designers.RandomDesigner"
+    assert cfg.designer_run_dir is None
+    assert cfg.use_raw_history is None
+
+    # The MLP flattens the whole history; build_policy_net refits the first and
+    # last widths, but the recipe's own numbers should fit the default task.
+    assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
+    dim_y, dim_design = 1, 2
+    assert cfg.action_net.dims[0] == cfg.T * (dim_y + dim_design)
+
+    instantiate(
+        cfg.action_net,
+        event_shape_y=(dim_y,),
+        event_shape_design=(dim_design,),
+        event_shape_out=(cfg.action_net.dims[-1],),
     )
 
 
