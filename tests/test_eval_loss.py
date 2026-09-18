@@ -6,6 +6,7 @@ from omegaconf import OmegaConf
 
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import (
+    LogLoss,
     LogMSELoss,
     MSELoss,
     PermutationInvariantLogMSELoss,
@@ -74,6 +75,20 @@ def test_per_rollout_matches_the_losss_own_mean_reduction(cls):
     )
 
 
+def test_per_rollout_averages_log_loss_over_its_outer_samples():
+    task = _make_task()
+    theta = task.sample_prior(64)
+    action = theta + 0.1 * torch.randn_like(theta)
+
+    torch.manual_seed(0)
+    values = per_rollout(LogLoss(task, 8, reduction="none"), action, theta)
+    torch.manual_seed(0)
+    expected = LogLoss(task, 8, reduction="mean")(action, theta)
+
+    assert values.shape == (64,)
+    assert values.mean() == pytest.approx(expected, rel=1e-5)
+
+
 def test_per_rollout_rejects_a_loss_that_reduced_over_the_batch():
     with pytest.raises(ValueError, match="reduction='none'"):
         per_rollout(MSELoss(), torch.zeros(4, 2), torch.ones(4, 2))
@@ -112,6 +127,25 @@ def test_eval_losses_scores_every_loss_on_shared_rollouts():
         verbose=False,
     )
     assert not action_net.training
+
+
+def test_eval_losses_scores_in_eval_mode_and_restores_each_modules_mode():
+    task = _make_task()
+    designer = RandomDesigner(task, T)
+    action_net = _make_action_net(task)
+    # As freeze_designer leaves it: top level training, children in eval.
+    designer.task.eval()
+    seen = []
+
+    def spy(action, theta):
+        seen.append((designer.training, action_net.training))
+        return (action - theta) ** 2
+
+    eval_losses(task, designer, action_net, {"spy": spy}, n_outer=4, verbose=False)
+
+    assert seen == [(False, False)]
+    assert designer.training and action_net.training
+    assert not designer.task.training
 
 
 def test_evaluate_loss_checkpoint_rebuilds_the_run(tmp_path):

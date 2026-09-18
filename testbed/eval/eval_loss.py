@@ -63,11 +63,12 @@ def build_losses(config, task):
 def per_rollout(loss_fn, action, theta):
     """Returns one loss value per rollout, on the scale ``reduction="mean"`` reports.
 
-    A ``reduction="none"`` loss keeps whatever shape it scores over: element-wise
-    for MSE, but already summed to ``[b]`` for the permutation-invariant losses,
-    whose ``"mean"`` still normalizes by the event size. Dividing each rollout's
-    total by that event size reproduces ``"mean"`` for both, so a loss reported
-    here is directly comparable to the same loss reported during training.
+    A ``reduction="none"`` loss keeps whatever shape it scores over, and its
+    ``"mean"`` averages over all of it: element-wise for MSE, ``[b, n_outer_samples]``
+    for ``LogLoss``. The exception is the permutation-invariant losses, already
+    summed to ``[b]`` while their ``"mean"`` still normalizes by the event size.
+    Either way a loss reported here is directly comparable to the same loss
+    reported during training.
     """
     value = loss_fn(action, theta)
     if value.ndim == 0:
@@ -75,7 +76,9 @@ def per_rollout(loss_fn, action, theta):
             f"{type(loss_fn).__name__} reduced over the batch; it needs to "
             "support reduction='none' to be scored per rollout."
         )
-    return value.reshape(value.shape[0], -1).sum(-1) / prod(action.shape[1:])
+    if value.ndim == 1:
+        return value / prod(action.shape[1:])
+    return value.reshape(value.shape[0], -1).mean(-1)
 
 
 def eval_losses(
@@ -96,8 +99,8 @@ def eval_losses(
 
     Args:
         task: The task to draw parameters and outcomes from.
-        designer: The designer producing rollouts; its hooks and the action
-            net's mode are left as they were found.
+        designer: The designer producing rollouts, scored in eval mode; its
+            hooks and every module's mode are left as they were found.
         action_net: The action net scored on those rollouts.
         losses: Mapping of name to a per-rollout loss (see ``build_losses``).
         n_outer: Total rollouts to score.
@@ -111,8 +114,10 @@ def eval_losses(
     # Borrowed for the duration only: the designer is handed back as it came,
     # so one designer can score several action nets in turn.
     designer.hooks.append(ActionHook(action_net, use_raw_history=use_raw_history))
-    was_training = action_net.training
-    action_net.eval()
+    # Per module, not one flag: a frozen designer is in eval mode below the top
+    # level only, and designer.train(mode) would flatten that.
+    modes = {module: module.training for module in designer.modules()}
+    designer.eval()
 
     values = {name: [] for name in losses}
     remaining = n_outer
@@ -134,8 +139,9 @@ def eval_losses(
                 remaining -= b
                 progress.update(1)
     finally:
+        for module, mode in modes.items():
+            module.training = mode
         del designer.hooks[-1]
-        action_net.train(was_training)
 
     out = {}
     for name, batches in values.items():
