@@ -13,6 +13,13 @@ task:
     high: [200.0, 99.0]
     event_shape: [2]
 
+# Map delay [0.5, 200], reward [1, 99], and binary outcomes to [-1, 1].
+design_net:
+  design_center: [100.25, 50.0]
+  design_scale: [99.75, 49.0]
+  outcome_center: 0.5
+  outcome_scale: 0.5
+
 train_time_budget_seconds: 43_200  # 12 hours
 checkpoint_every: 2_500
 eval_every: 0
