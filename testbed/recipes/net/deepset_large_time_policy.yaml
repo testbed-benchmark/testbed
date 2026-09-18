@@ -5,7 +5,8 @@
 #
 # The embedding is concatenated onto each token.
 #
-#
+# net/deepset_small_time_policy is the same switch applied at DAD's own network
+# size, against net/deepset_policy.
 _target_: testbed.design_nets.TimeEmbeddedDeepSetPolicyNet
 encoder_dim_h: [528, 528, 528]
 dim_emb: 128
