@@ -262,7 +262,7 @@ TAIL_KEYS = ("percentile", "threshold", "n_pilot", "pilot_seed")
 def rare_settings(cfg):
     """Reads a run config's `rare_eval` block, or None when it is not enabled."""
     settings = OmegaConf.select(cfg, "rare_eval")
-    if settings is None or not settings.get("enabled", False):
+    if settings is None or not settings.enabled:
         return None
     return OmegaConf.to_container(settings, resolve=True)
 
