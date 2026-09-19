@@ -21,6 +21,9 @@ task:
     event_shape:
       - ${task.dim_theta}
 
+sac:
+  num_training_iterations: 20_001
+
 wandb:
   project: location_finding_2src  # one project per task; methods separate by group
   group: rlboed

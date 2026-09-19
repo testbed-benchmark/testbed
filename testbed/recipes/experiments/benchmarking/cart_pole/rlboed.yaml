@@ -1,0 +1,19 @@
+# @package _global_
+
+defaults:
+  - /experiments/cart_pole/rlboed
+  - _self_
+
+actor_architecture: attention
+critic_architecture: deepset
+
+train_time_budget_seconds: 43_200  # 12 hours
+
+sac:
+  gamma: 0.99
+  num_training_iterations: 100_000
+  entropy_anneal_total: 1.429  # 20_001 / 1.4e4
+
+wandb:
+  project: benchmarking_cart_pole
+  group: rlboed-benchmark

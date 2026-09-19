@@ -13,7 +13,7 @@ defaults:
 seed: 0
 torch_deterministic: true
 # Independently selectable history encoders for the actor and critics.
-# Each may be either deepset or attention.
+# Each may be deepset, deepset_time, or attention.
 actor_architecture: deepset
 critic_architecture: deepset
 # complete deployable policy
@@ -47,7 +47,7 @@ reward:
 # eval
 eval_every: 0  # no periodic eval during SAC training
 eval_n_contrastive: 1_000_000
-train_time_budget_seconds: 43_200  # 12 hours; null for no time limit
+train_time_budget_seconds: null
 checkpoint_every: 1_000
 # SAC hyperparameters
 sac:
@@ -68,9 +68,6 @@ sac:
   initial_alpha: 1.0
   target_entropy: null
   entropy_anneal_rate: 7.143e-05  # 1 / 1.4e4, per iteration
-  # RL-BOED has no floor: it just stops annealing when its 20_001 iterations
-  # run out, having dropped 20_001 / 1.4e4. Training here can run much longer
-  # (and stops on the clock), so pin that same endpoint explicitly, otherwise
-  # the setpoint lands wherever the host's speed reached. null -> unbounded.
-  entropy_anneal_total: 1.429  # 20_001 / 1.4e4
+  # No cap by default; time-limited benchmark recipes set an explicit endpoint.
+  entropy_anneal_total: null
   log_frequency: 100
