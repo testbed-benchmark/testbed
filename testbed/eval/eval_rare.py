@@ -68,6 +68,10 @@ MAX_PROPOSE_PER_ROUND = 1_000_000
 MAX_PROPOSE_FACTOR = 100_000
 # torch.quantile rejects inputs beyond this many elements.
 QUANTILE_LIMIT = 16_000_000
+# The recipe group holding the rare-tail settings, read at evaluation time.
+RARE_EVAL_DEFAULTS = (
+    Path(__file__).resolve().parents[1] / "recipes" / "rare_eval" / "default.yaml"
+)
 
 
 class TailTruncated(Distribution):
@@ -259,11 +263,24 @@ def rare_metrics(tail: TailTruncated, percentile=None) -> dict:
 TAIL_KEYS = ("percentile", "threshold", "n_pilot", "pilot_seed")
 
 
-def rare_settings(cfg):
-    """Reads a run config's `rare_eval` block, or None when it is not enabled."""
-    settings = OmegaConf.select(cfg, "rare_eval")
-    if settings is None or not settings.enabled:
-        return None
+def rare_settings(percentile=None, threshold=None, **overrides):
+    """The rare-tail settings, from the recipe group with `overrides` applied.
+
+    Read from `recipes/rare_eval/default.yaml`: a rare evaluation is done to a
+    finished run and every re-eval of every method reads the same
+    file.
+
+    `percentile` and `threshold` are a pair, since exactly one may be set.
+    Giving either replaces both, so asking for a threshold on the command line
+    cannot collide with the percentile the file happens to carry.
+    """
+    settings = OmegaConf.load(RARE_EVAL_DEFAULTS)
+    if percentile is not None or threshold is not None:
+        settings.percentile = percentile
+        settings.threshold = threshold
+    for key, value in overrides.items():
+        if value is not None:
+            settings[key] = value
     return OmegaConf.to_container(settings, resolve=True)
 
 
@@ -313,12 +330,8 @@ if __name__ == "__main__":
 
     run_dir = Path(sys.argv[1])
     cfg = OmegaConf.load(run_dir / ".hydra" / "config.yaml")
-    rare = rare_settings(cfg)
-    if rare is None:
-        raise SystemExit(
-            f"{run_dir} has no enabled rare_eval block; add "
-            f"`- /rare_eval: default` to the method recipe's defaults and set "
-            f"rare_eval.enabled=true."
+    print(
+        evaluate_rare_policy_checkpoint(
+            str(run_dir), rare_settings(), device=cfg.device
         )
-
-    print(evaluate_rare_policy_checkpoint(str(run_dir), rare, device=cfg.device))
+    )

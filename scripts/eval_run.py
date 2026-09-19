@@ -68,37 +68,26 @@ from testbed.eval import (
 )
 
 
-def rare_eval_request(args, cfg) -> dict | None:
-    """The rare_eval block to evaluate with, or None for an ordinary evaluation.
+def rare_eval_request(args) -> dict | None:
+    """The rare-tail settings to evaluate with, or None for an ordinary evaluation.
 
-    Passing --rare-percentile or --rare-threshold turns the rare route on, so a
-    one-off does not need a config edit. Either flag sets both fields, clearing
-    the one it was not given: exactly one of the two may be set, so overwriting
-    the pair together is what stops a flag colliding with the config.
+    A rare flag is the only trigger, and nothing about the rare set is read from
+    the run being scored: the settings come from the recipe group, so this works
+    on any finished checkpoint regardless of when it was trained.
+
+    Either flag sets both fields, clearing the one it was not given, because
+    exactly one of percentile and threshold may be set.
     """
-    settings = OmegaConf.select(cfg, "rare_eval")
-    asked = args.rare_percentile is not None or args.rare_threshold is not None
-    if settings is None:
-        if not asked:
-            return None
-        raise SystemExit(
-            f"{args.run_dir} has no rare_eval block; add "
-            f"`- /rare_eval: default` to the method recipe's defaults."
-        )
-    settings = settings.copy()
-    if asked:
-        settings.enabled = True
-        settings.percentile = args.rare_percentile
-        settings.threshold = args.rare_threshold
-    if args.rare_pilot is not None:
-        settings.n_pilot = args.rare_pilot
-    if args.n_outer is not None:
-        settings.n_outer = args.n_outer
-    if args.n_contrastive is not None:
-        settings.n_contrastive = args.n_contrastive
-    if args.checkpoint is not None:
-        settings.checkpoint = args.checkpoint
-    return rare_settings(OmegaConf.create({"rare_eval": settings}))
+    if args.rare_percentile is None and args.rare_threshold is None:
+        return None
+    return rare_settings(
+        percentile=args.rare_percentile,
+        threshold=args.rare_threshold,
+        n_pilot=args.rare_pilot,
+        n_outer=args.n_outer,
+        n_contrastive=args.n_contrastive,
+        checkpoint=args.checkpoint,
+    )
 
 
 def rare_prefix(rare: dict) -> str:
@@ -216,8 +205,9 @@ def main() -> None:
     cfg = run_config(run_dir)
 
     # A rare evaluation bounds a different quantity from the headline one, so it
-    # is its own route: its own sizes, its own prefix, and no final_eval.
-    rare = rare_eval_request(args, cfg)
+    # is its own route: its own settings from the recipe group, its own prefix,
+    # and no final_eval.
+    rare = rare_eval_request(args)
     if rare is not None:
         results = evaluate_rare_policy_checkpoint(
             str(run_dir), rare, device=args.device or cfg.device

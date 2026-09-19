@@ -14,6 +14,7 @@ from testbed.eval.base import chunked_spce_snmc
 from testbed.eval.eval_rare import (
     rare_eval_kwargs,
     rare_metrics,
+    rare_settings,
     rare_spce_snmc,
     rare_tail_prior,
 )
@@ -142,6 +143,26 @@ def test_bounds_sandwich_and_restore_the_prior(task, tail):
     )
     assert lower.mean() <= upper.mean()
     assert task.current_prior is task.prior
+
+
+def test_settings_come_from_the_recipe_group_not_the_run():
+    """Settings are read post hoc, so any finished checkpoint can be scored."""
+    assert rare_settings()["percentile"] is not None
+
+
+def test_asking_for_a_threshold_clears_the_percentile():
+    """The two are a pair: a flag replaces both, so they cannot both end up set."""
+    settings = rare_settings(threshold=-7.5)
+    assert settings["threshold"] == -7.5
+    assert settings["percentile"] is None
+
+
+def test_overrides_leave_unmentioned_settings_alone():
+    """Only what was asked for changes; the rest stays as the group has it."""
+    default = rare_settings()
+    overridden = rare_settings(percentile=1, n_outer=64)
+    assert overridden["n_outer"] == 64
+    assert overridden["n_contrastive"] == default["n_contrastive"]
 
 
 def test_eval_kwargs_draw_outer_theta_from_the_tail(task):

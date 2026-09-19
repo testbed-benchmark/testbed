@@ -5,7 +5,6 @@ defaults:
   - /task: location_finding
   - /wandb: default
   - /final_eval: default
-  - /rare_eval: default
   - /hydra_run: default
   - _self_
 

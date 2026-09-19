@@ -1,4 +1,8 @@
-enabled: false
+# Settings for a post-hoc rare-tail evaluation. This group is deliberately not
+# in any method recipe's defaults: rare evaluation is something done to a
+# finished run, so runs never save a copy of it and every re-eval reads this
+# file. Changing it here changes it for every run scored afterwards.
+#
 # The rare set. Set exactly one of percentile / threshold; both, or neither, is
 # an error.
 percentile: 10  # tail fraction of the prior, by prior log-density
