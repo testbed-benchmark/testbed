@@ -1,0 +1,15 @@
+# @package _global_
+
+# experiments/benchmarking/location_finding_2src/actionbed_logmse with the design
+# net's time embeddings switched off; everything else is inherited.
+
+defaults:
+  - /experiments/benchmarking/location_finding_2src/actionbed_logmse
+  - _self_
+
+design_net:
+  use_time_embedding: false
+
+wandb:
+  project: architecture_location_finding_2src
+  group: actionbed_logmse_attention_no_time
