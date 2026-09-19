@@ -7,8 +7,10 @@ import torch
 from omegaconf import OmegaConf
 
 from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core.hooks import ActionHook, PosteriorUpdateHook
 from testbed.core.rollout import Rollout
 from testbed.design_nets import AlineModel, AlineOutput
+from testbed.designers import AlineDesigner
 from testbed.methods.aline import Trainer, load_checkpoint
 from testbed.tasks import LocationFinding
 
@@ -492,3 +494,37 @@ def test_invalid_time_budget(budget):
 def test_invalid_checkpoint_interval(interval):
     with pytest.raises(ValueError, match="checkpoint_every"):
         _make_trainer(_make_cfg(checkpoint_every=interval))
+
+
+class _SumActionNet(torch.nn.Module):
+    """Stands in for an action net: one number per rollout from the history."""
+
+    def forward(self, y_history, design_history):
+        return y_history.sum(dim=(1, 2))
+
+
+def _make_aline_designer(task):
+    return AlineDesigner(task, T=3, model=_make_model(task), pool_size=4)
+
+
+def test_rollout_runs_a_terminal_action_hook():
+    task = _make_task()
+    designer = _make_aline_designer(task)
+    designer.hooks.append(ActionHook(_SumActionNet()))
+
+    rollout = designer.rollout(task.sample_prior(2))
+
+    assert rollout.extra["action"].shape == (2,)
+
+
+@pytest.mark.parametrize(
+    "hook",
+    [PosteriorUpdateHook(), ActionHook(_SumActionNet(), every_step=True)],
+)
+def test_rollout_rejects_hooks_it_cannot_run(hook):
+    task = _make_task()
+    designer = _make_aline_designer(task)
+    designer.hooks.append(hook)
+
+    with pytest.raises(NotImplementedError, match="per-step callbacks"):
+        designer.rollout(task.sample_prior(2))

@@ -6,7 +6,7 @@ from collections.abc import Sequence
 import torch
 from torch import Tensor, nn
 
-from testbed.core.hooks import RolloutHook, check_hooks
+from testbed.core.hooks import RolloutHook, apply_rollout_end, check_hooks
 from testbed.core.rollout import Rollout, RolloutState
 
 
@@ -205,15 +205,6 @@ class Designer(ABC, nn.Module):
             extra=extra,
         )
 
-        for hook in hooks:
-            extra_update = hook.on_rollout_end(state)
-            if extra_update is None:
-                continue
-            colliding_keys = rollout.extra.keys() & extra_update.keys()
-            if colliding_keys:
-                raise ValueError(
-                    f"Multiple hooks wrote the same Rollout.extra key(s): {colliding_keys}"
-                )
-            rollout.extra.update(extra_update)
+        apply_rollout_end(hooks, state, rollout)
 
         return rollout

@@ -31,6 +31,22 @@ def check_hooks(hooks: Sequence["RolloutHook"]) -> list["RolloutHook"]:
     return hooks
 
 
+def apply_rollout_end(
+    hooks: Sequence["RolloutHook"], state: "RolloutState", rollout
+) -> None:
+    """Runs every hook's ``on_rollout_end``, merging what they return into ``rollout.extra``."""
+    for hook in hooks:
+        extra_update = hook.on_rollout_end(state)
+        if extra_update is None:
+            continue
+        colliding_keys = rollout.extra.keys() & extra_update.keys()
+        if colliding_keys:
+            raise ValueError(
+                f"Multiple hooks wrote the same Rollout.extra key(s): {colliding_keys}"
+            )
+        rollout.extra.update(extra_update)
+
+
 class RolloutHook(nn.Module):
     """Interface for rollout callbacks.
 

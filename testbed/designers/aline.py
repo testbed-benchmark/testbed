@@ -5,7 +5,8 @@ from torch import Tensor
 from torch.distributions import Categorical
 
 from testbed.core.design_spaces import BoxDesignSpace
-from testbed.core.rollout import Rollout
+from testbed.core.hooks import ActionHook, apply_rollout_end
+from testbed.core.rollout import Rollout, RolloutState
 from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets import AlineOutput
 
@@ -91,6 +92,21 @@ class AlineDesigner(Designer):
         )
         return action, policy.log_prob(action)
 
+    def _check_hooks(self) -> None:
+        """Rejects hooks this rollout cannot run.
+
+        TODO: follow the base class's hook protocol. Until then only the
+        terminal ActionHook fires, and anything working step by step would
+        attach and silently never run.
+        """
+        for hook in self.hooks:
+            if isinstance(hook, ActionHook) and not hook.every_step:
+                continue
+            raise NotImplementedError(
+                f"{type(self).__name__}.rollout() runs a terminal ActionHook "
+                f"only; {type(hook).__name__} needs the per-step callbacks."
+            )
+
     def rollout(
         self,
         theta: Tensor,
@@ -111,7 +127,12 @@ class AlineDesigner(Designer):
         for D_0 through D_T, shaped [batch, T + 1], when requested.
         ``extra["policy_log_probs"]`` holds [batch, T] acquisition log
         probabilities and is absent during random-policy warm-up.
+
+        Selection over a fixed pool does not fit the base class's per-step
+        template, so only ``on_rollout_end`` hooks run here; a hook needing any
+        other callback is rejected rather than silently skipped.
         """
+        self._check_hooks()
         theta = self._as_theta_batch(theta)
         pool_size = self.pool_size if pool_size is None else pool_size
         if pool_size < self.T:
@@ -168,4 +189,15 @@ class AlineDesigner(Designer):
             extra["posterior_log_probs"] = torch.stack(posterior_log_probs, dim=1)
         if policy_log_probs:
             extra["policy_log_probs"] = torch.stack(policy_log_probs, dim=1)
-        return Rollout(theta, y_history, design_history, extra=extra)
+        rollout = Rollout(theta, y_history, design_history, extra=extra)
+
+        state = RolloutState(
+            task=self.task,
+            theta=theta,
+            T=self.T,
+            y_history=y_history,
+            design_history=design_history,
+            t=self.T,
+        )
+        apply_rollout_end(self.hooks, state, rollout)
+        return rollout
