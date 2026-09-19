@@ -1,0 +1,18 @@
+# Seed sweep for experiments/benchmarking/constant_elasticity_of_substitution/aline
+
+name: constant_elasticity_of_substitution-aline-benchmark-seeds
+program: scripts/sweep_run.py
+method: grid
+entity: rainml-testbed
+project: benchmarking_constant_elasticity_of_substitution
+
+parameters:
+  seed:
+    values: [0, 1, 2, 3, 4]
+
+command:
+  - ${interpreter}
+  - ${program}
+  - --recipe
+  - experiments/benchmarking/constant_elasticity_of_substitution/aline
+  - ${args_no_hyphens}

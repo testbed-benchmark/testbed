@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - /method: aline
+  - override /task: pharmacokinetic
+  - _self_
+
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 2_500
+eval_every: 0
+
+wandb:
+  project: benchmarking_pharmacokinetic
+  group: aline-benchmark

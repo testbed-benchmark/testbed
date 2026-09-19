@@ -1,0 +1,21 @@
+# @package _global_
+
+defaults:
+  - /method: aline
+  - override /task: michaelis_menten
+  - _self_
+
+# Normalize physical inputs to approximately [-1, 1] before embedding.
+design_net:
+  design_center: 200.0
+  design_scale: 200.0
+  outcome_center: 100.0
+  outcome_scale: 100.0
+
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 2_500
+eval_every: 0
+
+wandb:
+  project: benchmarking_michaelis_menten
+  group: aline-benchmark

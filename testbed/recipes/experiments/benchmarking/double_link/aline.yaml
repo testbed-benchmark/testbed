@@ -1,0 +1,23 @@
+# @package _global_
+
+defaults:
+  - /method: aline
+  - override /task: double_link
+  - _self_
+
+# Fixed input scales; outcomes are unbounded and are not clipped.
+# Outcome order: q1, q2, q1dot, q2dot.
+design_net:
+  design_center: [0.0, 0.0]
+  design_scale: [4.0, 2.0]
+  outcome_center: 0.0
+  outcome_scale: [8.0, 10.0, 12.0, 25.0]
+
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 2_500
+# Evaluate the final checkpoint through scripts/sweep_run.py.
+eval_every: 0
+
+wandb:
+  project: benchmarking_double_link
+  group: aline-benchmark
