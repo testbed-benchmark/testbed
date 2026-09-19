@@ -10,12 +10,18 @@ defaults:
 # with no separate posterior-pretraining phase.
 
 seed: 0
+
+# budget / checkpointing
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 5_000
+
 joint: true
 
 # objective: plain pathwise bound. The Euler-Maruyama step is a differentiable
 # drift plus Gaussian noise, so no score term is needed.
 objective:
   name: barber_agakov
+  fused: true  # false falls back to the per-step loop
 
 # no pretraining phase
 n_posterior_pretrain_iter: 0
@@ -23,7 +29,12 @@ n_posterior_outer: 2_048  # unused without pretraining; kept for completeness
 pretrain_design_distr: null
 
 # policy training
-n_train_iter: 200_000
+# n_train_iter is a cap, not the budget, raised only so the 12h clock is the
+# sole stop condition. lr_schedule_iters pins the LR horizon to the 200k this
+# task's completed runs already used, so both schedules below are unchanged and
+# those runs stay valid.
+n_train_iter: 1_000_000
+lr_schedule_iters: 200_000
 n_outer: 2_048  # batch size, matching dad on this task
 
 # policy optimizer: Adam, grad clip 1.0 (global norm),

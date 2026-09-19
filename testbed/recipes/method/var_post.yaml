@@ -11,6 +11,7 @@ defaults:
   - _self_
 # system (device/save_dir come from the system group)
 seed: 0
+torch_deterministic: true
 # frozen variant: pretrain the posterior, then freeze it while training the policy
 joint: false
 # objective
@@ -34,11 +35,16 @@ pretrain_design_distr: null
 n_train_iter: 25_000
 n_outer: 2_048
 
+# budget / checkpointing
+train_time_budget_seconds: null  # null for no time limit
+checkpoint_every: 0  # 0 to disable
+
 # optimizer
 lr: 1e-4
 grad_clip: 1.0
 betas: null  # null -> torch Adam default (0.9, 0.999)
 policy_cosine_alpha: null  # null -> constant lr; else cosine decay to lr * policy_cosine_alpha
+lr_schedule_iters: null  # null -> schedules span the whole run; else their horizon in steps
 ema_decay: null  # null -> no EMA tracking of design_net
 
 # eval

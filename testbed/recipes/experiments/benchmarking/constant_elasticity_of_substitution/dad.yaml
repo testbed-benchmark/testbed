@@ -19,6 +19,11 @@ defaults:
 # policy to leave the saturated region. Hence REINFORCE.
 
 seed: 0
+
+# budget / checkpointing
+train_time_budget_seconds: 43_200  # 12 hours
+checkpoint_every: 5_000
+
 task:
   reparameterize_outcomes: false
 # designer
@@ -29,21 +34,27 @@ use_raw_history: true
 # objective
 objective:
   name: reinforce
+  fused: true  # false falls back to the per-step loop
   n_inner: 2_000  # contrastive samples for the sPCE reward
   reparameterize_policy: false
   baseline: leave_one_out  # the score term carries the gradient; keep its variance down
   requires_policy_log_probs: false
 # training
-n_train_iter: 200_000
+# A cap, not the budget: at the ~31k steps/hour this recipe reached, 200k ran
+# out after ~6.4h and ended the run on the iteration limit rather than the 12h
+# clock. Set high enough that train_time_budget_seconds is always what stops it.
+n_train_iter: 1_000_000
 n_outer: 2_048
 
 # optimizer: as in experiments/constant_elasticity_of_substitution/dad, with the
-# decay stretched over the longer run (0.9886 ** 200 ~= 0.1, i.e. 1e-4 -> 1e-5).
+# decay stretched over the longer run (0.9938 ** 375 ~= 0.1, i.e. 1e-4 -> 1e-5).
+# StepLR has no horizon and keeps decaying, so the gamma is set from the steps
+# 12h actually buys (~375k) rather than from n_train_iter. 
 lr: 1e-4
 betas: [0.9, 0.999]
 grad_clip: 1.0
 lr_anneal_every: 1_000
-lr_gamma: 0.9886
+lr_gamma: 0.9938
 
 # eval
 eval_every: 0  # eval is expensive here; the final_eval block handles it

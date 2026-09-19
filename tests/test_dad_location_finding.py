@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 
 from testbed.core.manager import Manager
 from testbed.design_nets import DeepSetPolicyNet
@@ -26,9 +27,24 @@ def _make_design_net(task):
     )
 
 
+def _make_cfg(**overrides):
+    """A minimal training config; train() reads the budget keys off it."""
+    return OmegaConf.create(
+        {
+            "n_outer": 4,
+            "grad_clip": None,
+            "n_train_iter": 3,
+            "eval_every": 0,
+            "train_time_budget_seconds": None,
+            "checkpoint_every": 0,
+            **overrides,
+        }
+    )
+
+
 def _make_trainer(task=None, cfg=None, manager=None):
     task = task or _make_task()
-    cfg = cfg or SimpleNamespace(n_outer=4, grad_clip=None)
+    cfg = _make_cfg() if cfg is None else cfg
     policy_net = _make_design_net(task)
     designer = PolicyDesigner(task, T=3, design_net=policy_net)
     objective = SNMC(task, n_contrastive=4)
@@ -137,7 +153,7 @@ def test_train_runs_with_periodic_evaluation(tmp_path):
         timestamp=False,
         console=False,
     )
-    cfg = SimpleNamespace(n_outer=4, grad_clip=None, n_train_iter=3, eval_every=1)
+    cfg = _make_cfg(eval_every=1)
     trainer, _ = _make_trainer(cfg=cfg, manager=manager)
 
     trainer.train()
@@ -153,3 +169,31 @@ def test_train_runs_with_periodic_evaluation(tmp_path):
     ]
     assert any("gain" in record for record in records)
     assert any("eval/spce" in record for record in records)
+
+
+def test_train_logs_how_far_it_got(tmp_path):
+    """The step count has to be a metric, not just an event-log line.
+
+    wandb takes ``step`` as the x-axis rather than a column, so without this the
+    only record of a time-stopped run's length is wandb's internal ``_step``.
+    """
+    manager = Manager(
+        SimpleNamespace(),
+        root=str(tmp_path),
+        name="summary_test",
+        timestamp=False,
+        console=False,
+    )
+    cfg = _make_cfg()
+    trainer, _ = _make_trainer(cfg=cfg, manager=manager)
+
+    trainer.train()
+
+    last = json.loads(
+        (tmp_path / "summary_test" / "metrics.jsonl").read_text().splitlines()[-1]
+    )
+    assert last["train/steps_completed"] == cfg.n_train_iter
+    assert last["train/stop_reason"] == "iteration_limit"
+    assert last["train/elapsed_seconds"] >= 0
+    # Merged into the final step's row, so the x-axis does not advance past it.
+    assert last["step"] == cfg.n_train_iter - 1

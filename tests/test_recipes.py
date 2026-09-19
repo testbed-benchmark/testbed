@@ -11,6 +11,7 @@ a user launches `python testbed/methods/<x>.py`.
 from pathlib import Path
 
 import pytest
+import torch
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
@@ -20,6 +21,7 @@ RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
 ENTRY_POINT_RECIPES = [
     "method/dad",
     "method/actionbed",
+    "method/action",
     "method/rlboed",
     "method/var_post",
     "method/joint_var_post",
@@ -38,6 +40,24 @@ ENTRY_POINT_RECIPES = [
     "experiments/benchmarking/temporal_discounting/joint_var_post",
     "experiments/benchmarking/constant_elasticity_of_substitution/dad",
     "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post",
+    "experiments/benchmarking/michaelis_menten/dad",
+    "experiments/benchmarking/michaelis_menten/joint_var_post",
+    "experiments/benchmarking/location_finding_2src/joint_var_post_single_gaussian",
+    "experiments/benchmarking/temporal_discounting/joint_var_post_single_gaussian",
+    "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post_single_gaussian",
+    "experiments/benchmarking/michaelis_menten/joint_var_post_single_gaussian",
+    "experiments/benchmarking/pharmacokinetic/dad",
+    "experiments/benchmarking/pharmacokinetic/joint_var_post",
+    "experiments/benchmarking/pharmacokinetic/joint_var_post_single_gaussian",
+    "experiments/benchmarking/cart_pole/dad",
+    "experiments/benchmarking/cart_pole/joint_var_post",
+    "experiments/benchmarking/cart_pole/joint_var_post_single_gaussian",
+    "experiments/benchmarking/double_link/dad",
+    "experiments/benchmarking/double_link/joint_var_post",
+    "experiments/benchmarking/double_link/joint_var_post_single_gaussian",
+    "experiments/benchmarking/stochastic_pendulum/dad",
+    "experiments/benchmarking/stochastic_pendulum/joint_var_post",
+    "experiments/benchmarking/stochastic_pendulum/joint_var_post_single_gaussian",
     "experiments/benchmarking/location_finding_2src/static",
     "experiments/benchmarking/temporal_discounting/static",
     "experiments/benchmarking/constant_elasticity_of_substitution/static",
@@ -48,12 +68,49 @@ ENTRY_POINT_RECIPES = [
     "experiments/benchmarking/michaelis_menten/static",
 ]
 
+BENCHMARK_TASKS = [
+    "cart_pole",
+    "constant_elasticity_of_substitution",
+    "double_link",
+    "location_finding_2src",
+    "michaelis_menten",
+    "pharmacokinetic",
+    "stochastic_pendulum",
+    "temporal_discounting",
+]
 
-# Static designs have no design net and their own training budget.
+# One ActionBED recipe per (task, loss); the whole grid is an entry point.
+ACTIONBED_RECIPES = [
+    f"experiments/benchmarking/{task}/actionbed_{loss}"
+    for task in BENCHMARK_TASKS
+    for loss in ("logmse", "mse", "truelogmse")
+]
+
+# The training loss an action net gets by default, per task: element-wise where
+# the parameters are a plain vector, permutation-invariant where they are a set
+# of exchangeable objects, and on a log scale where the net predicts log theta.
+ACTION_LOSSES = {
+    "location_finding": "PermutationInvariantMSELoss",
+    "location_finding_2src": "PermutationInvariantMSELoss",
+    "pharmacokinetic": "MSELoss",
+    "michaelis_menten": "MSELoss",
+    "stochastic_pendulum": "MSELoss",
+    "double_link": "MSELoss",
+    "cart_pole": "MSELoss",
+    "constant_elasticity_of_substitution": "TrueLogMSELoss",
+    "temporal_discounting": "TrueLogMSELoss",
+}
+
+ENTRY_POINT_RECIPES += ACTIONBED_RECIPES
+ENTRY_POINT_RECIPES += [f"experiments/{task}/action" for task in ACTION_LOSSES]
+
+
+# Static designs have no design net, and ActionBED runs to a wall-clock budget;
+# both sit outside the shared step-budget configuration below.
 BENCHMARK_RECIPES = [
     r
     for r in ENTRY_POINT_RECIPES
-    if "/benchmarking/" in r and not r.endswith("/static")
+    if "/benchmarking/" in r and not r.endswith("/static") and "/actionbed_" not in r
 ]
 
 
@@ -105,6 +162,43 @@ def test_actionbed_recipe_wires_design_and_action_nets():
         event_shape_design=(2,),
         event_shape_out=(2,),
     )
+
+
+def test_action_recipe_wires_a_frozen_designer_and_action_net():
+    cfg = _compose("method/action")
+    # Designs come from the task's design space until a run dir says otherwise.
+    assert cfg.designer._target_ == "testbed.designers.RandomDesigner"
+    assert cfg.designer_run_dir is None
+    assert cfg.use_raw_history is None
+
+    # The MLP flattens the whole history; build_policy_net refits the first and
+    # last widths, but the recipe's own numbers should fit the default task.
+    assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
+    dim_y, dim_design = 1, 2
+    assert cfg.action_net.dims[0] == cfg.T * (dim_y + dim_design)
+
+    instantiate(
+        cfg.action_net,
+        event_shape_y=(dim_y,),
+        event_shape_design=(dim_design,),
+        event_shape_out=(cfg.action_net.dims[-1],),
+    )
+
+
+@pytest.mark.parametrize(("task", "loss"), sorted(ACTION_LOSSES.items()))
+def test_action_recipes_train_on_the_loss_their_task_calls_for(task, loss):
+    cfg = _compose(f"experiments/{task}/action")
+
+    assert cfg.loss._target_ == f"testbed.design_objectives.{loss}"
+    assert cfg.wandb.project == task
+
+    # Every reported loss has to apply to what the action net actually outputs:
+    # a net trained on log theta is not scored on the raw scale, and only a task
+    # with an objects axis is scored permutation-invariantly.
+    reported = {k for k, v in cfg.final_eval.losses.items() if v is not None}
+    objects = len(instantiate(cfg.task).action_space.event_shape) > 1
+    assert any(loss.replace("Loss", "").lower() in k.replace("_", "") for k in reported)
+    assert all(("permutation_invariant" in k) == objects for k in reported)
 
 
 def test_rlboed_method_recipe_requires_environment_outcome_bounds():
@@ -304,20 +398,82 @@ def test_var_post_recipes_actually_instantiate_their_posterior_net():
         assert sum(p.numel() for p in net.parameters()) > 0, recipe
 
 
+# DAD on these tasks OOMs at the suite's 2_048; see their recipes.
+HALF_BATCH_RECIPES = {
+    "experiments/benchmarking/cart_pole/dad",
+    "experiments/benchmarking/double_link/dad",
+}
+
+
 @pytest.mark.parametrize("recipe", BENCHMARK_RECIPES)
 def test_benchmark_recipes_share_one_configuration(recipe):
     """The benchmarking suite varies the task and the method, nothing else.
 
     Its whole point is that a table built from it compares methods rather than
     architectures or budgets, which holds only while these agree.
+
+    n_train_iter is deliberately not asserted to agree. The shared budget is the
+    wall clock (see the test below); n_train_iter is only the cap that must not
+    bind before it, and how many steps 12h buys differs by an order of magnitude
+    across these tasks. Pinning it to one number is what let recipes end on the
+    iteration limit at ~6h while claiming a 12h budget.
     """
     cfg = _compose(recipe)
 
     assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
-    assert cfg.n_train_iter == 200_000
-    assert cfg.n_outer == 2_048
+    assert cfg.n_outer == (1_024 if recipe in HALF_BATCH_RECIPES else 2_048)
     task = recipe.split("/")[-2]
     assert cfg.wandb.project == f"benchmarking_{task}"
+
+
+def test_benchmark_recipes_share_one_training_budget():
+    """Every benchmark run gets the same wall clock and the same checkpoint cadence.
+
+    Asserted as agreement rather than against fixed numbers, so retuning the
+    budget stays a one-line change per recipe.
+    """
+    budgets = {r: _compose(r).train_time_budget_seconds for r in BENCHMARK_RECIPES}
+    intervals = {r: _compose(r).checkpoint_every for r in BENCHMARK_RECIPES}
+
+    assert len(set(budgets.values())) == 1, budgets
+    assert len(set(intervals.values())) == 1, intervals
+    # A null budget here would mean the suite is iteration-bound again.
+    assert next(iter(budgets.values())) is not None
+
+
+@pytest.mark.parametrize("recipe", ACTIONBED_RECIPES)
+def test_actionbed_benchmark_recipes_share_one_configuration(recipe):
+    """The ActionBED grid varies the task and the loss, nothing else."""
+    cfg = _compose(recipe)
+    task, loss = recipe.split("/")[-2], recipe.split("_")[-1]
+
+    assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
+    assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
+    assert cfg.train_time_budget_seconds == 43_200
+    assert cfg.n_action_warmup_iter == 50_000
+    assert cfg.n_outer == 2_000
+    assert cfg.eval_every == 0  # the final_eval block handles it
+    assert cfg.wandb.project == f"benchmarking_{task}"
+    assert cfg.wandb.group == f"actionbed_{loss}"
+
+
+@pytest.mark.parametrize("recipe", ACTIONBED_RECIPES)
+def test_actionbed_recipes_size_their_action_net_to_the_task(recipe):
+    """Runs the nets, rather than only asserting on the composed config.
+
+    MLPPolicyNet flattens the whole history, so its first and last `dims` are
+    fixed by the task. A stale pair composes cleanly and only fails on the
+    first training step; this is the only thing that catches it.
+    """
+    from testbed.methods.actionbed import build_policy_nets
+
+    cfg = _compose(recipe)
+    task = instantiate(cfg.task)
+    _, action_net = build_policy_nets(cfg, task)
+
+    y = torch.zeros(2, cfg.T, *task.event_shape_y)
+    designs = torch.zeros(2, cfg.T, *task.event_shape_design)
+    assert action_net(y, designs).shape == (2, *task.action_space.event_shape)
 
 
 def test_ces_posterior_transform_matches_the_task_theta_width():

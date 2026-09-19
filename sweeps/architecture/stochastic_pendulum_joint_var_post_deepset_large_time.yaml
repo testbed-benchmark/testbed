@@ -1,12 +1,12 @@
-# Seed sweep for experiments/architecture/stochastic_pendulum/dad_deepset_time.
+# Seed sweep for experiments/architecture/stochastic_pendulum/joint_var_post_deepset_large_time.
 #
 # Part of the architecture ablation: every recipe under
 # experiments/architecture inherits its benchmarking counterpart and swaps only
 # the policy net, so the architecture is the only thing that varies.
 #
-# wandb sweep sweeps/architecture/stochastic_pendulum_dad_deepset_time.yaml
+# wandb sweep sweeps/architecture/stochastic_pendulum_joint_var_post_deepset_large_time.yaml
 
-name: architecture-stochastic_pendulum-dad_deepset_time-seeds
+name: architecture-stochastic_pendulum-joint_var_post_deepset_large_time-seeds
 program: scripts/sweep_run.py
 method: grid
 entity: rainml-testbed
@@ -24,5 +24,5 @@ command:
   - ${interpreter}
   - ${program}
   - --recipe
-  - experiments/architecture/stochastic_pendulum/dad_deepset_time
+  - experiments/architecture/stochastic_pendulum/joint_var_post_deepset_large_time
   - ${args_no_hyphens}

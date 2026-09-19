@@ -28,7 +28,7 @@ columns instead of overwriting them::
 
 ``--checkpoint`` scores a file other than the recipe's
 ``final_eval.checkpoint``, such as one of the periodic ``step_*.pt`` policies
-RL-BOED writes when ``checkpoint_every`` is set. Scoring a non-default
+a run writes when ``checkpoint_every`` is set. Scoring a non-default
 checkpoint namespaces its own output (``eval_step_00010000.json`` and
 ``eval_step_00010000/*``), so a mid-training score cannot overwrite the run's
 headline ``eval/*`` columns; pass ``--prefix`` to choose the namespace
@@ -48,8 +48,13 @@ from pathlib import Path
 from hydra.utils import get_class
 from omegaconf import OmegaConf
 
+from testbed.core.load import run_config
 from testbed.designers import StaticDesigner
-from testbed.eval import evaluate_checkpoint, evaluate_static_checkpoint
+from testbed.eval import (
+    evaluate_checkpoint,
+    evaluate_loss_checkpoint,
+    evaluate_static_checkpoint,
+)
 
 
 def log_to_wandb(run_dir: Path, run_id: str, results: dict, prefix: str) -> None:
@@ -70,6 +75,27 @@ def log_to_wandb(run_dir: Path, run_id: str, results: dict, prefix: str) -> None
     # Summary is what surfaces as a column in the runs table.
     run.summary.update(scalars)
     run.finish()
+
+
+def record(args, run_dir: Path, checkpoint: str, results: dict, prefix: str) -> None:
+    """Writes the results beside the run, and adds them to its W&B run."""
+    results_path = run_dir / f"{prefix}.json"
+    results_path.write_text(json.dumps(results, indent=2))
+    print(f"{checkpoint} -> {results_path}")
+    print(results)
+
+    run_id = args.wandb_run_id
+    if run_id is None:
+        id_path = run_dir / "wandb_run_id"
+        run_id = id_path.read_text().strip() if id_path.exists() else None
+    if not args.no_wandb and run_id:
+        try:
+            log_to_wandb(run_dir, run_id, results, prefix)
+        except Exception as error:
+            print(
+                f"could not add eval metrics to wandb run {run_id}: {error}",
+                file=sys.stderr,
+            )
 
 
 def main() -> None:
@@ -115,7 +141,7 @@ def main() -> None:
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
-    cfg = OmegaConf.load(run_dir / ".hydra" / "config.yaml")
+    cfg = run_config(run_dir)
 
     # Settings come from the run's own config, so they are set and overridden
     settings = OmegaConf.select(cfg, "final_eval")
@@ -139,6 +165,19 @@ def main() -> None:
             else f"eval_{Path(checkpoint).stem}"
         )
 
+    # A run listing losses is scored by them: an action net has no design of
+    # its own to bound, and the losses are the point of training it.
+    if OmegaConf.select(settings, "losses") is not None:
+        results = evaluate_loss_checkpoint(
+            str(run_dir),
+            checkpoint=checkpoint,
+            n_outer=args.n_outer or settings.n_outer,
+            outer_batch_size=settings.outer_batch_size,
+            device=args.device or cfg.device,
+        )
+        record(args, run_dir, checkpoint, results, prefix)
+        return
+
     kwargs = {
         "checkpoint": checkpoint,
         "n_outer": args.n_outer or settings.n_outer,
@@ -156,23 +195,7 @@ def main() -> None:
         results = evaluate_checkpoint(
             str(run_dir), use_raw_weights=settings.use_raw_weights, **kwargs
         )
-    results_path = run_dir / f"{prefix}.json"
-    results_path.write_text(json.dumps(results, indent=2))
-    print(f"{checkpoint} -> {results_path}")
-    print(results)
-
-    run_id = args.wandb_run_id
-    if run_id is None:
-        id_path = run_dir / "wandb_run_id"
-        run_id = id_path.read_text().strip() if id_path.exists() else None
-    if not args.no_wandb and run_id:
-        try:
-            log_to_wandb(run_dir, run_id, results, prefix)
-        except Exception as error:
-            print(
-                f"could not add eval metrics to wandb run {run_id}: {error}",
-                file=sys.stderr,
-            )
+    record(args, run_dir, checkpoint, results, prefix)
 
 
 if __name__ == "__main__":
