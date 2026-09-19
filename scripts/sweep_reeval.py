@@ -9,16 +9,20 @@ The run directory is the W&B run's display name under the run's own
 basename into the W&B run name, so the two always agree. The W&B run id comes
 from the API rather than ``<run_dir>/wandb_run_id``.
 
-Pass ``--n-contrastive`` / ``--n-outer`` / ``--prefix`` straight through to
-``eval_run.py``: the prefix namespaces the new metrics, so re-scoring at a
-larger L sits beside the original ``eval/*`` columns instead of overwriting
-them.
+Pass ``--n-contrastive`` / ``--n-outer`` / ``--prefix`` and the ``--rare-*``
+flags straight through to ``eval_run.py``. The prefix namespaces the new
+metrics, so re-scoring at a larger L sits beside the original ``eval/*``
+columns instead of overwriting them; left unset, ``eval_run.py`` chooses it,
+which is how a rare re-eval lands under ``eval_rare_*``.
 
 Usage (whole sweep in one process, or one run per SLURM array task via
 ``--index``; see ``scripts/reeval.sbatch``)::
 
     python scripts/sweep_reeval.py 1dpl3rg2 --project location_finding_2src \
         --n-contrastive 10000000 --n-outer 512 --prefix eval_L1e7
+
+    python scripts/sweep_reeval.py 1dpl3rg2 --project location_finding_2src \
+        --rare-percentile 5
 
     python scripts/sweep_reeval.py 1dpl3rg2 --project location_finding_2src --list
 """

@@ -40,8 +40,9 @@ yourself::
 ``--rare-percentile`` (or ``--rare-threshold``) instead bounds the information
 gain conditioned on theta landing in the rare tail of the prior, which is a
 different quantity from the headline bounds and so takes its own route: its
-sizes come from the run's ``rare_eval`` block rather than ``final_eval``, and
-its results land under ``eval_rare_p<percentile>``. See
+settings come from ``recipes/rare_eval/default.yaml`` rather than from the run
+or from ``final_eval``, and its results land under ``eval_rare_p<percentile>``.
+Nothing is read off the run, so this works on any finished checkpoint. See
 ``testbed.eval.eval_rare``::
 
     python scripts/eval_run.py --run-dir runs/<run_name> --rare-percentile 5

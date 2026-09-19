@@ -10,6 +10,7 @@ from .eval_rare import (
     rare_settings,
     rare_spce_snmc,
     rare_tail_prior,
+    tail_settings,
 )
 from .eval_static import evaluate_static_checkpoint
 
@@ -29,4 +30,5 @@ __all__ = [
     "rare_settings",
     "rare_spce_snmc",
     "rare_tail_prior",
+    "tail_settings",
 ]

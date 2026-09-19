@@ -35,10 +35,10 @@ comparison fair, since every method then sees the same rare set.
 Usage:
     python -m testbed.eval.eval_rare <run_dir>
 
-<run_dir> is a training run's output directory. Everything comes from its saved
-`rare_eval` block: the rare set, the sizes and the checkpoint. `final_eval` is
-not consulted, so a rare evaluation can be sized independently of the headline
-one it is usually run alongside.
+<run_dir> is a training run's output directory. Nothing about the evaluation is
+read from it: the rare set, the sizes and the checkpoint all come from
+`recipes/rare_eval/default.yaml`, because a rare evaluation is done to a
+finished run rather than being a property of it.
 """
 
 import math
