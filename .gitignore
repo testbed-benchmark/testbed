@@ -130,6 +130,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.hf_env
 env/
 venv/
 ENV/
@@ -197,6 +198,7 @@ temp/
 tmp/
 runs/
 wandb/
+.hf_download/
 
 # SLURM opens --output=logs/... before the job script runs, so the directory
 # has to exist in a fresh clone; its contents do not belong in git.
