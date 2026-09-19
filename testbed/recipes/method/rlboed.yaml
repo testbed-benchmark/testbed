@@ -13,7 +13,7 @@ defaults:
 seed: 0
 torch_deterministic: true
 # Independently selectable history encoders for the actor and critics.
-# Each may be either deepset or attention.
+# Each may be deepset, deepset_time, or attention.
 actor_architecture: deepset
 critic_architecture: deepset
 # complete deployable policy

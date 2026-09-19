@@ -1,0 +1,13 @@
+# @package _global_
+
+defaults:
+  - /experiments/benchmarking/location_finding_2src/rlboed_deepsets
+  - _self_
+
+# Add learned time embeddings only to the design network's DeepSets encoder.
+# Preserve its hidden widths and embedding width, and all critic settings.
+actor_architecture: deepset_time
+
+wandb:
+  project: architecture_location_finding_2src
+  group: rlboed_deepsets_time

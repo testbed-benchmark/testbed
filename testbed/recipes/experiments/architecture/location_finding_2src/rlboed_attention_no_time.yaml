@@ -1,0 +1,15 @@
+# @package _global_
+
+defaults:
+  - /experiments/benchmarking/location_finding_2src/rlboed
+  - _self_
+
+# Disable time embeddings only in the design network's attention encoder.
+# The inherited critics remain plain DeepSets.
+design_net:
+  attention:
+    use_time_embedding: false
+
+wandb:
+  project: architecture_location_finding_2src
+  group: rlboed_attention_no_time
