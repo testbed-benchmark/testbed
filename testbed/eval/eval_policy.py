@@ -34,7 +34,7 @@ from omegaconf import OmegaConf
 
 from testbed.core.setup import instantiate_design_net
 from testbed.designers import PolicyDesigner
-from testbed.eval import eval_spce_snmc
+from testbed.eval.base import eval_spce_snmc
 
 
 def build_design_net(cfg, task):
@@ -42,18 +42,22 @@ def build_design_net(cfg, task):
     return instantiate_design_net(cfg.design_net, task)
 
 
-def evaluate_checkpoint(
+def load_policy_designer(
     run_dir: str,
     checkpoint: str = "final_step.pt",
-    n_outer: int = 2048,
-    n_contrastive: int = 500_000,
-    outer_batch_size: int = 256,
-    contrastive_chunk_size: int = 2_000,
     use_raw_weights: bool = False,
     device: str = "cpu",
-    fused: bool = True,
+    designer_config=None,
 ):
-    """Computes mean +/- SEM sPCE/sNMC bounds for a saved policy checkpoint."""
+    """Rebuilds the task and designer that a policy checkpoint was trained with.
+
+    Split out so another evaluation of the same checkpoint (`eval_rare`) can
+    reuse it without inheriting this module's sizes. `designer_config` overrides
+    the run's `final_eval.designer`, so a caller driven by a different config
+    block supplies its own rather than this reaching into `final_eval`.
+
+    Returns `(task, designer, weights_key)`.
+    """
     run_dir = Path(run_dir)
     cfg = OmegaConf.load(run_dir / ".hydra" / "config.yaml")
 
@@ -68,7 +72,8 @@ def evaluate_checkpoint(
     design_net.load_state_dict(state[key])
     design_net.eval()
 
-    designer_config = OmegaConf.select(cfg, "final_eval.designer")
+    if designer_config is None:
+        designer_config = OmegaConf.select(cfg, "final_eval.designer")
     if designer_config is None:
         # Run configs saved before final_eval.designer became configurable used
         # PolicyDesigner unconditionally. Preserve that behavior so finished
@@ -83,6 +88,24 @@ def evaluate_checkpoint(
             "use_raw_history", not design_net.produces_policy_log_probs
         )
     designer = instantiate(designer_config, task, cfg.T, design_net, **designer_kwargs)
+    return task, designer, key
+
+
+def evaluate_checkpoint(
+    run_dir: str,
+    checkpoint: str = "final_step.pt",
+    n_outer: int = 2048,
+    n_contrastive: int = 500_000,
+    outer_batch_size: int = 256,
+    contrastive_chunk_size: int = 2_000,
+    use_raw_weights: bool = False,
+    device: str = "cpu",
+    fused: bool = True,
+):
+    """Computes mean +/- SEM sPCE/sNMC bounds for a saved policy checkpoint."""
+    task, designer, key = load_policy_designer(
+        run_dir, checkpoint, use_raw_weights, device
+    )
 
     out = eval_spce_snmc(
         task,

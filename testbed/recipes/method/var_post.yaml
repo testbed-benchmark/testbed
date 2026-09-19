@@ -7,6 +7,7 @@ defaults:
   - /net@posterior_net: mixture_posterior
   - /wandb: default
   - /final_eval: default
+  - /rare_eval: default
   - /hydra_run: default
   - _self_
 # system (device/save_dir come from the system group)

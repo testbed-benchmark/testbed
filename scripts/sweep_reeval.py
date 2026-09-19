@@ -68,13 +68,21 @@ def eval_command(run, run_dir: str, args) -> list[str]:
         run_dir,
         "--wandb-run-id",
         run.id,
-        "--prefix",
-        args.prefix,
     ]
+    # Left unset, eval_run.py picks the prefix itself, which is how a rare
+    # re-eval lands under eval_rare_* rather than being forced back to eval.
+    if args.prefix is not None:
+        command += ["--prefix", args.prefix]
     if args.n_contrastive is not None:
         command += ["--n-contrastive", str(args.n_contrastive)]
     if args.n_outer is not None:
         command += ["--n-outer", str(args.n_outer)]
+    if args.rare_percentile is not None:
+        command += ["--rare-percentile", str(args.rare_percentile)]
+    if args.rare_threshold is not None:
+        command += ["--rare-threshold", str(args.rare_threshold)]
+    if args.rare_pilot is not None:
+        command += ["--rare-pilot", str(args.rare_pilot)]
     if args.device is not None:
         command += ["--device", args.device]
     if args.force:
@@ -116,7 +124,19 @@ def main() -> None:
     )
     parser.add_argument("--n-contrastive", type=int, default=None)
     parser.add_argument("--n-outer", type=int, default=None)
-    parser.add_argument("--prefix", default="eval")
+    parser.add_argument(
+        "--rare-percentile",
+        type=float,
+        default=None,
+        help="Re-score on this tail fraction of the prior; see eval_run.py.",
+    )
+    parser.add_argument("--rare-threshold", type=float, default=None)
+    parser.add_argument("--rare-pilot", type=int, default=None)
+    parser.add_argument(
+        "--prefix",
+        default=None,
+        help="Default: whatever eval_run.py would choose for the evaluation.",
+    )
     parser.add_argument("--device", default=None)
     parser.add_argument(
         "--force",

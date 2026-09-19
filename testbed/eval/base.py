@@ -32,10 +32,17 @@ def eval_spce_snmc(
     contrastive_chunk_size: int = 2_000,
     verbose: bool = True,
     fused: bool = True,
+    theta_sampler=None,
+    bounds_fn=chunked_spce_snmc,
 ):
     """Evaluates the SPCE/SNMC bounds on the EIG.
 
     This is both batched (outer theta samples) and chunked (inner samples).
+
+    `theta_sampler` and `bounds_fn` are the two places the rare-prior evaluation
+    in `testbed.eval.eval_rare` differs: where the outer theta come from, and
+    how the rollout is turned into the two bounds. Their defaults are the
+    ordinary prior and the single-pass `chunked_spce_snmc`.
 
     If verbose, shows a progress bar over the outer batches. `disable=None`
     lets tqdm silence itself when stderr is not a terminal, so batch jobs
@@ -59,9 +66,9 @@ def eval_spce_snmc(
     with torch.no_grad(), progress:
         while remaining > 0:
             b = min(outer_batch_size, remaining)
-            theta0 = task.sample_prior(b)
+            theta0 = (theta_sampler or task.sample_prior)(b)
             rollout = designer.rollout(theta0)
-            lower, upper = chunked_spce_snmc(
+            lower, upper = bounds_fn(
                 task, rollout, n_contrastive, contrastive_chunk_size, fused=fused
             )
             lower_gains.append(lower)

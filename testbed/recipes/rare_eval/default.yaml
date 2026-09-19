@@ -1,0 +1,16 @@
+enabled: false
+# The rare set. Set exactly one of percentile / threshold; both, or neither, is
+# an error.
+percentile: 10  # tail fraction of the prior, by prior log-density
+threshold: null  # or pin the log-density cutoff directly
+n_pilot: 1_000_000  # pilot draws used to estimate the threshold
+pilot_seed: 0  # seeded so every method sees the same rare set
+checkpoint: final_step.pt
+n_outer: 2_048
+n_contrastive: 100_000_000
+outer_batch_size: 256
+contrastive_chunk_size: 200_000
+fused: true
+use_raw_weights: false
+designer:
+  _target_: testbed.designers.PolicyDesigner

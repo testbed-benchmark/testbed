@@ -36,6 +36,15 @@ yourself::
 
     python scripts/eval_run.py --run-dir runs/<run_name> \
         --checkpoint step_00010000.pt
+
+``--rare-percentile`` (or ``--rare-threshold``) instead bounds the information
+gain conditioned on theta landing in the rare tail of the prior, which is a
+different quantity from the headline bounds and so takes its own route: its
+sizes come from the run's ``rare_eval`` block rather than ``final_eval``, and
+its results land under ``eval_rare_p<percentile>``. See
+``testbed.eval.eval_rare``::
+
+    python scripts/eval_run.py --run-dir runs/<run_name> --rare-percentile 5
 """
 
 from __future__ import annotations
@@ -53,8 +62,51 @@ from testbed.designers import StaticDesigner
 from testbed.eval import (
     evaluate_checkpoint,
     evaluate_loss_checkpoint,
+    evaluate_rare_policy_checkpoint,
     evaluate_static_checkpoint,
+    rare_settings,
 )
+
+
+def rare_eval_request(args, cfg) -> dict | None:
+    """The rare_eval block to evaluate with, or None for an ordinary evaluation.
+
+    Passing --rare-percentile or --rare-threshold turns the rare route on, so a
+    one-off does not need a config edit. Either flag sets both fields, clearing
+    the one it was not given: exactly one of the two may be set, so overwriting
+    the pair together is what stops a flag colliding with the config.
+    """
+    settings = OmegaConf.select(cfg, "rare_eval")
+    asked = args.rare_percentile is not None or args.rare_threshold is not None
+    if settings is None:
+        if not asked:
+            return None
+        raise SystemExit(
+            f"{args.run_dir} has no rare_eval block; add "
+            f"`- /rare_eval: default` to the method recipe's defaults."
+        )
+    settings = settings.copy()
+    if asked:
+        settings.enabled = True
+        settings.percentile = args.rare_percentile
+        settings.threshold = args.rare_threshold
+    if args.rare_pilot is not None:
+        settings.n_pilot = args.rare_pilot
+    if args.n_outer is not None:
+        settings.n_outer = args.n_outer
+    if args.n_contrastive is not None:
+        settings.n_contrastive = args.n_contrastive
+    if args.checkpoint is not None:
+        settings.checkpoint = args.checkpoint
+    return rare_settings(OmegaConf.create({"rare_eval": settings}))
+
+
+def rare_prefix(rare: dict) -> str:
+    """Namespaces rare results, by percentile when one was asked for."""
+    percentile = rare.get("percentile")
+    if percentile is None:
+        return "eval_rare"
+    return f"eval_rare_p{percentile}".replace(".", "_")
 
 
 def log_to_wandb(run_dir: Path, run_id: str, results: dict, prefix: str) -> None:
@@ -132,6 +184,26 @@ def main() -> None:
         "--n-outer", type=int, default=None, help="Override final_eval.n_outer."
     )
     parser.add_argument(
+        "--rare-percentile",
+        type=float,
+        default=None,
+        help="Restrict the bounds to this tail fraction of the prior, by prior "
+        "log-density. Overrides the run's rare_eval block.",
+    )
+    parser.add_argument(
+        "--rare-threshold",
+        type=float,
+        default=None,
+        help="Restrict the bounds to theta below this prior log-density. "
+        "Alternative to --rare-percentile; set one, not both.",
+    )
+    parser.add_argument(
+        "--rare-pilot",
+        type=int,
+        default=None,
+        help="Pilot draws used to turn --rare-percentile into a threshold.",
+    )
+    parser.add_argument(
         "--prefix",
         default=None,
         help="Namespace for the metric keys and the JSON file. Default: "
@@ -142,6 +214,18 @@ def main() -> None:
 
     run_dir = Path(args.run_dir)
     cfg = run_config(run_dir)
+
+    # A rare evaluation bounds a different quantity from the headline one, so it
+    # is its own route: its own sizes, its own prefix, and no final_eval.
+    rare = rare_eval_request(args, cfg)
+    if rare is not None:
+        results = evaluate_rare_policy_checkpoint(
+            str(run_dir), rare, device=args.device or cfg.device
+        )
+        record(
+            args, run_dir, rare["checkpoint"], results, args.prefix or rare_prefix(rare)
+        )
+        return
 
     # Settings come from the run's own config, so they are set and overridden
     settings = OmegaConf.select(cfg, "final_eval")
