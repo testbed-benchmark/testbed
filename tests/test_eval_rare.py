@@ -17,6 +17,7 @@ from testbed.eval.eval_rare import (
     rare_settings,
     rare_spce_snmc,
     rare_tail_prior,
+    tail_settings,
 )
 from testbed.tasks import LocationFinding
 
@@ -163,6 +164,14 @@ def test_overrides_leave_unmentioned_settings_alone():
     overridden = rare_settings(percentile=1, n_outer=64)
     assert overridden["n_outer"] == 64
     assert overridden["n_contrastive"] == default["n_contrastive"]
+
+
+def test_the_rare_set_survives_a_round_trip_through_the_settings(task):
+    """Settings read post hoc build the same tail as calling the prior directly."""
+    settings = rare_settings(percentile=PERCENTILE, n_pilot=N_PILOT)
+    from_settings = rare_tail_prior(task.prior, **tail_settings(settings))
+    direct = rare_tail_prior(task.prior, percentile=PERCENTILE, n_pilot=N_PILOT)
+    assert from_settings.threshold == direct.threshold
 
 
 def test_eval_kwargs_draw_outer_theta_from_the_tail(task):

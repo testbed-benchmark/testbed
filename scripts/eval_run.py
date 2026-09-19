@@ -95,7 +95,9 @@ def rare_prefix(rare: dict) -> str:
     percentile = rare.get("percentile")
     if percentile is None:
         return "eval_rare"
-    return f"eval_rare_p{percentile}".replace(".", "_")
+    # A percentile reaches here as a float from the CLI but an int from the
+    # config, and "5" and "5.0" would otherwise be two different columns.
+    return f"eval_rare_p{percentile:g}".replace(".", "_")
 
 
 def log_to_wandb(run_dir: Path, run_id: str, results: dict, prefix: str) -> None:
