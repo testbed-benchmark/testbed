@@ -82,6 +82,23 @@ def test_log_mse_loss_matches_hand_computed_value():
     torch.testing.assert_close(loss, expected)
 
 
+def test_log_mse_loss_transforms_theta_to_a_log_scale():
+    """The CES/temporal-discounting report: log-scale theta, LogMSE formula."""
+    input = torch.tensor(
+        [1.0, 2.0, 3.0]
+    )  # already log-scale, as the action net's output is
+    target = torch.tensor([2.0, 2.0, 5.0])
+    epsilon = 1e-6
+    sq = (input - torch.log(target + epsilon)).pow(2)
+    expected = (sq + torch.log(sq + epsilon)).mean()
+
+    loss = LogMSELoss(transform_input=False, transform_target=True, epsilon=epsilon)(
+        input, target
+    )
+
+    torch.testing.assert_close(loss, expected)
+
+
 def test_log_mse_loss_zero_error_equals_log_epsilon():
     x = torch.randn(5, 2)
     epsilon = 1e-4
