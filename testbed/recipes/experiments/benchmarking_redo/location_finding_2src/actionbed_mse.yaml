@@ -30,7 +30,7 @@ loss:
   _target_: testbed.design_objectives.PermutationInvariantMSELoss
 # training
 n_train_iter: 1_000_000 # very high to avoid quitting before spending the train time budget
-n_action_warmup_iter: 50_000
+n_action_warmup_iter: 25_000
 n_outer: 2_000
 
 # optimizer
