@@ -158,7 +158,8 @@ class Trainer:
         interval = self.cfg.checkpoint_every
         if interval and (step + 1) % interval == 0:
             torch.save(
-                self._policy_state(step), self.manager.path(f"step_{step + 1:08d}.pt")
+                self._resumable_state(step),
+                self.manager.path(f"step_{step + 1:08d}.pt"),
             )
         if time.monotonic() - self._start_time >= self._budget:
             self.stop_reason = "time_budget"
@@ -173,20 +174,24 @@ class Trainer:
             f"{self.elapsed_seconds:.1f}s."
         )
         torch.save(
-            {
-                **self._policy_state(self.step),
-                "optimizer": self.optimizer.state_dict(),
-                "scheduler": self.scheduler and self.scheduler.state_dict(),
-                "best_metric": self.best_metric,
-                "stop_reason": self.stop_reason,
-                "config": OmegaConf.to_container(self.cfg, resolve=True),
-                "rng_state": rng_state(),
-            },
+            self._resumable_state(self.step, self.stop_reason),
             self.manager.path("final_step.pt"),
         )
 
         if self.manager.metric_logger is not None:
             self.manager.metric_logger.close()
+
+    def _resumable_state(self, step, stop_reason=None):
+        """Policy weights plus the optimizer/schedule/RNG a warm start needs."""
+        return {
+            **self._policy_state(step),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler and self.scheduler.state_dict(),
+            "best_metric": self.best_metric,
+            "stop_reason": stop_reason,
+            "config": OmegaConf.to_container(self.cfg, resolve=True),
+            "rng_state": rng_state(),
+        }
 
     def _policy_state(self, step):
         return {
