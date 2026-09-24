@@ -24,7 +24,7 @@ set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR:?Submit this job from the repository root}"
 
-OUT=runs/eval_bench/${1:?usage: sbatch scripts/eval_bench.sbatch <name>}/points
+DIR=runs/eval_bench/${1:?usage: sbatch scripts/eval_bench.sbatch <name>}
 LS=${LS:-"1000 10000 100000 200000 400000 1000000 2000000 4000000 10000000"}
 CHUNK=${CHUNK:-100000}  # largest round chunk the eager path fits in 24 GB at b=256
 PYTHON=/home/kerrigag/miniconda3/envs/wbed/bin/python  # conda activate hits a pyenv shim
@@ -32,16 +32,27 @@ PYTHON=/home/kerrigag/miniconda3/envs/wbed/bin/python  # conda activate hits a p
 echo "job=$SLURM_JOB_ID host=$(hostname) commit=$(git rev-parse --short HEAD)"
 nvidia-smi
 
+# Runs eval_bench.py with an empty inductor cache, so its compile is cold.
+bench() {
+  local cache status=0
+  cache=$(mktemp -d -p /home/kerrigag/claude/scratch inductor.XXXXXX)
+  TORCHINDUCTOR_CACHE_DIR=$cache TRITON_CACHE_DIR=$cache/triton "$PYTHON" scripts/eval_bench.py "$@" || status=$?
+  rm -rf "$cache"
+  return "$status"
+}
+
+# Pages in the lazily imported compile stack, which a cold filesystem otherwise
+# bills to whichever fused point runs first.
+bench --n-contrastive 1000 --out /dev/null >/dev/null || echo "warmup failed"
+
 for L in $LS; do
   for chunk in $CHUNK none; do
     for fused in fused no-fused; do
-      out=$OUT/L${L}_chunk${chunk}_${fused}.json
+      out=$DIR/points/L${L}_chunk${chunk}_${fused}.json
       [[ -f $out ]] && continue
-      cache=$(mktemp -d -p /home/kerrigag/claude/scratch inductor.XXXXXX)
-      TORCHINDUCTOR_CACHE_DIR=$cache TRITON_CACHE_DIR=$cache/triton "$PYTHON" scripts/eval_bench.py \
-        --n-contrastive "$L" --chunk-size "$chunk" --"$fused" --out "$out" \
-        || echo "failed: $out"
-      rm -rf "$cache"
+      bench --n-contrastive "$L" --chunk-size "$chunk" --"$fused" --out "$out" || echo "failed: $out"
     done
   done
 done
+
+"$PYTHON" scripts/plot_eval_bench.py "$DIR" || echo "plotting failed; run scripts/plot_eval_bench.py $DIR by hand"

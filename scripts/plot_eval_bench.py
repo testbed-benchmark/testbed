@@ -31,8 +31,8 @@ def curve(fused, chunked):
 
 
 def ran(fused, chunked=True):
-    """``curve`` without the runs that ran out of memory."""
-    return [r for r in curve(fused, chunked) if not r.get("oom")]
+    """``curve`` without the runs that failed (out of memory or a size limit)."""
+    return [r for r in curve(fused, chunked) if "lower_bound" in r]
 
 
 def fit(rows):
@@ -64,9 +64,9 @@ for fused in (True, False):
         )
         ax_mem.plot(L, [r["peak_gb"] for r in ok], **style)
         ax_time.plot(L, [r["seconds"] for r in ok], **style)
-        oom = [r["n_contrastive"] for r in rows if r.get("oom")]
-        if oom:
-            ax_mem.plot(min(oom), GPU_GB, "x", color=COLOR[fused], ms=7, mew=1.5)
+        failed = [r["n_contrastive"] for r in rows if "lower_bound" not in r]
+        if failed:
+            ax_mem.plot(min(failed), GPU_GB, "x", color=COLOR[fused], ms=7, mew=1.5)
 
 (c_f, a_f), (c_e, a_e) = fit(ran(True)), fit(ran(False))
 breakeven = (c_f - c_e) / (a_e - a_f)
@@ -74,7 +74,7 @@ ax_mem.axhline(GPU_GB, color="0.6", lw=0.8, ls=":")
 ax_mem.text(
     1.2 * min(r["n_contrastive"] for r in points),
     GPU_GB * 1.15,
-    "GPU memory (× = OOM)",
+    "GPU memory (× = fails)",
     color="0.4",
 )
 ax_time.axvline(breakeven, color="0.6", lw=0.8, ls=":")

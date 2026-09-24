@@ -2,7 +2,7 @@
 
 Run each point in a fresh process with an empty TORCHINDUCTOR_CACHE_DIR, so a
 fused run pays a cold compile; scripts/eval_bench.sbatch does both. Writes one
-JSON record to --out, recording an OOM rather than failing.
+JSON record to --out, recording an OOM or size-limit error rather than failing.
 """
 
 import argparse
@@ -56,8 +56,10 @@ try:
         fused=args.fused,
     )
     torch.cuda.synchronize()
-except torch.cuda.OutOfMemoryError:
-    result = {"oom": True}
+except (
+    RuntimeError
+) as e:  # scoring all L at once hits OOM or a kernel's int32 size limit
+    result = {"error": str(e).splitlines()[0]}
 
 record = {
     **{k: v for k, v in vars(args).items() if k != "out"},
