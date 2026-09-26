@@ -66,3 +66,5 @@ extend-select = ["I", "D"]
 convention = "google"
 
 [tool.setuptools_scm]
+# Used when there is no git metadata, e.g. when installing from a source archive.
+fallback_version = "0.1.0"

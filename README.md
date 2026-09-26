@@ -44,6 +44,8 @@ python scripts/eval_run.py --run-dir <run_dir> --no-wandb
 
 The entry point is `testbed/methods/<method>.py`, where `joint_var_post*` recipes use `var_post.py` and `actionbed_*` recipes use `actionbed.py`. Any config value can be overridden Hydra-style after the recipe, e.g. `lr=1e-3` or `final_eval.n_outer=32`. The run directory is printed at startup, and the bounds land in `<run_dir>/eval.json`.
 
+Recipes run on `device=cuda` by default; add `device=cpu` to run without a GPU.
+
 By default, each recipe trains for 12 hours (`train_time_budget_seconds=43200`). For a quick check that a recipe runs end to end, shorten training and the final evaluation:
 
 ```sh
