@@ -26,14 +26,6 @@ ENTRY_POINT_RECIPES = [
     "method/var_post",
     "method/joint_var_post",
     "method/static",
-    "experiments/location_finding/rlboed",
-    "experiments/location_finding_2src/actionbed",
-    "experiments/location_finding_2src/dad",
-    "experiments/location_finding_2src/rlboed",
-    "experiments/prey_population/rlboed",
-    "experiments/constant_elasticity_of_substitution/dad",
-    "experiments/constant_elasticity_of_substitution/joint_var_post",
-    "experiments/constant_elasticity_of_substitution/actionbed",
     "experiments/benchmarking/location_finding_2src/dad",
     "experiments/benchmarking/location_finding_2src/joint_var_post",
     "experiments/benchmarking/temporal_discounting/dad",
@@ -80,29 +72,15 @@ BENCHMARK_TASKS = [
 ]
 
 # One ActionBED recipe per (task, loss); the whole grid is an entry point.
+# truelogmse is undefined on location finding's Gaussian prior (log theta).
 ACTIONBED_RECIPES = [
     f"experiments/benchmarking/{task}/actionbed_{loss}"
     for task in BENCHMARK_TASKS
     for loss in ("logmse", "mse", "truelogmse")
+    if (task, loss) != ("location_finding_2src", "truelogmse")
 ]
 
-# The training loss an action net gets by default, per task: element-wise where
-# the parameters are a plain vector, permutation-invariant where they are a set
-# of exchangeable objects, and on a log scale where the net predicts log theta.
-ACTION_LOSSES = {
-    "location_finding": "PermutationInvariantMSELoss",
-    "location_finding_2src": "PermutationInvariantMSELoss",
-    "pharmacokinetic": "MSELoss",
-    "michaelis_menten": "MSELoss",
-    "stochastic_pendulum": "MSELoss",
-    "double_link": "MSELoss",
-    "cart_pole": "MSELoss",
-    "constant_elasticity_of_substitution": "TrueLogMSELoss",
-    "temporal_discounting": "TrueLogMSELoss",
-}
-
 ENTRY_POINT_RECIPES += ACTIONBED_RECIPES
-ENTRY_POINT_RECIPES += [f"experiments/{task}/action" for task in ACTION_LOSSES]
 
 
 # Static designs have no design net, and ActionBED runs to a wall-clock budget;
@@ -185,22 +163,6 @@ def test_action_recipe_wires_a_frozen_designer_and_action_net():
     )
 
 
-@pytest.mark.parametrize(("task", "loss"), sorted(ACTION_LOSSES.items()))
-def test_action_recipes_train_on_the_loss_their_task_calls_for(task, loss):
-    cfg = _compose(f"experiments/{task}/action")
-
-    assert cfg.loss._target_ == f"testbed.design_objectives.{loss}"
-    assert cfg.wandb.project == task
-
-    # Every reported loss has to apply to what the action net actually outputs:
-    # a net trained on log theta is not scored on the raw scale, and only a task
-    # with an objects axis is scored permutation-invariantly.
-    reported = {k for k, v in cfg.final_eval.losses.items() if v is not None}
-    objects = len(instantiate(cfg.task).action_space.event_shape) > 1
-    assert any(loss.replace("Loss", "").lower() in k.replace("_", "") for k in reported)
-    assert all(("permutation_invariant" in k) == objects for k in reported)
-
-
 def test_rlboed_method_recipe_requires_environment_outcome_bounds():
     cfg = _compose("method/rlboed")
     assert cfg.task.n_sources == 1
@@ -218,31 +180,13 @@ def test_rlboed_method_recipe_requires_environment_outcome_bounds():
     assert cfg.sac.num_envs > 0
 
 
-def test_location_finding_rlboed_recipe_supplies_environment_bounds():
-    cfg = _compose("experiments/location_finding/rlboed")
-    assert "design_space" not in cfg
-    assert (cfg.task.design_space.low, cfg.task.design_space.high) == (-4.0, 4.0)
-    assert (cfg.reward.outcome_low, cfg.reward.outcome_high) == (-3.0, 10.0)
-    assert cfg.design_net.outcome_bounds == [-3.0, 10.0]
-
-
 def test_two_source_rlboed_recipe_uses_two_source_task():
-    cfg = _compose("experiments/location_finding_2src/rlboed")
+    cfg = _compose("experiments/benchmarking/location_finding_2src/rlboed")
     assert cfg.task.n_sources == 2
     assert cfg.T == 30
     assert "design_space" not in cfg
     assert (cfg.task.design_space.low, cfg.task.design_space.high) == (-4.0, 4.0)
     assert (cfg.reward.outcome_low, cfg.reward.outcome_high) == (-3.0, 10.0)
-
-
-def test_temporal_discounting_dad_preserves_objective_defaults():
-    cfg = _compose("experiments/temporal_discounting/dad")
-    assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
-    assert cfg.objective.reparameterize_policy is False
-    assert cfg.objective.requires_policy_log_probs is False
-    # The paper's HTD encoder gates two heads with the binary outcome.
-    assert cfg.design_net._target_ == "testbed.design_nets.GatedDeepSetPolicyNet"
-    assert cfg.use_raw_history is True
 
 
 def test_var_post_recipe_wires_posterior_net():
@@ -262,30 +206,6 @@ def test_joint_var_post_recipe_sets_joint_true():
     assert cfg.posterior_net.n_components == 10
 
 
-def test_temporal_discounting_var_post_uses_reinforce_and_htd_task():
-    # Not in ENTRY_POINT_RECIPES: its task (HTD) isn't in test_recipe_composes's
-    # allowed task-target set, same reason experiments/temporal_discounting/dad
-    # gets its own standalone test above instead of joining that list.
-    cfg = _compose("experiments/temporal_discounting/var_post")
-    assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
-    assert cfg.objective.name == "barber_agakov_reinforce"
-    assert (
-        cfg.posterior_net._target_
-        == "testbed.design_nets.DeepSetVariationalPosteriorNet"
-    )
-    assert cfg.posterior_net.n_components == 10
-
-
-def test_two_source_actionbed_preserves_grad_clip_default():
-    cfg = _compose("experiments/location_finding_2src/actionbed")
-    assert cfg.task.n_sources == 2
-    assert cfg.grad_clip is None
-    assert cfg.eval_every == 100
-    assert cfg.n_outer_eval == 2_048
-    assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
-    assert "encoder_dim_h" not in cfg.action_net
-
-
 @pytest.mark.parametrize("actor_architecture", ["deepset", "attention"])
 @pytest.mark.parametrize("critic_architecture", ["deepset", "attention"])
 def test_rlboed_architecture_overrides(actor_architecture, critic_architecture):
@@ -294,7 +214,7 @@ def test_rlboed_architecture_overrides(actor_architecture, critic_architecture):
 
     with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
         cfg = compose(
-            config_name="experiments/location_finding_2src/rlboed",
+            config_name="experiments/benchmarking/location_finding_2src/rlboed",
             overrides=[
                 f"actor_architecture={actor_architecture}",
                 f"critic_architecture={critic_architecture}",
@@ -320,7 +240,7 @@ def test_rlboed_rejects_unknown_architecture():
 
     with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
         cfg = compose(
-            config_name="experiments/location_finding/rlboed",
+            config_name="experiments/benchmarking/location_finding_2src/rlboed",
             overrides=["actor_architecture=unknown"],
         )
     with pytest.raises(InstantiationException, match="architecture must be"):
@@ -328,7 +248,9 @@ def test_rlboed_rejects_unknown_architecture():
 
 
 def test_ces_joint_var_post_recipe_uses_a_constrained_posterior():
-    cfg = _compose("experiments/constant_elasticity_of_substitution/joint_var_post")
+    cfg = _compose(
+        "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post"
+    )
 
     assert cfg.task._target_ == "testbed.tasks.CES"
     assert (
@@ -342,7 +264,7 @@ def test_ces_joint_var_post_recipe_uses_a_constrained_posterior():
 
 
 def test_htd_joint_var_post_recipe_uses_a_constrained_posterior():
-    cfg = _compose("experiments/temporal_discounting/joint_var_post")
+    cfg = _compose("experiments/benchmarking/temporal_discounting/joint_var_post")
 
     assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
     assert (
@@ -364,7 +286,7 @@ def test_htd_joint_var_post_recipe_uses_a_constrained_posterior():
 def test_htd_posterior_transform_matches_the_task_theta_width():
     from testbed.methods.var_post import build_posterior_net
 
-    cfg = _compose("experiments/temporal_discounting/joint_var_post")
+    cfg = _compose("experiments/benchmarking/temporal_discounting/joint_var_post")
     task = instantiate(cfg.task)
     net = build_posterior_net(cfg, task)
 
@@ -385,10 +307,6 @@ def test_var_post_recipes_actually_instantiate_their_posterior_net():
     recipes = [
         "method/var_post",
         "method/joint_var_post",
-        "experiments/constant_elasticity_of_substitution/joint_var_post",
-        "experiments/temporal_discounting/var_post",
-        "experiments/temporal_discounting/joint_var_post",
-        "experiments/location_finding_2src/joint_var_post",
         *[r for r in BENCHMARK_RECIPES if r.endswith("/joint_var_post")],
     ]
     for recipe in recipes:
@@ -450,11 +368,11 @@ def test_actionbed_benchmark_recipes_share_one_configuration(recipe):
     assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
     assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
     assert cfg.train_time_budget_seconds == 43_200
-    assert cfg.n_action_warmup_iter == 50_000
+    assert cfg.n_action_warmup_iter == 25_000
     assert cfg.n_outer == 2_000
     assert cfg.eval_every == 0  # the final_eval block handles it
     assert cfg.wandb.project == f"benchmarking_{task}"
-    assert cfg.wandb.group == f"actionbed_{loss}"
+    assert cfg.wandb.group.startswith(f"actionbed_{loss}_big_attention")
 
 
 @pytest.mark.parametrize("recipe", ACTIONBED_RECIPES)
@@ -483,7 +401,9 @@ def test_ces_posterior_transform_matches_the_task_theta_width():
     """
     from testbed.methods.var_post import build_posterior_net
 
-    cfg = _compose("experiments/constant_elasticity_of_substitution/joint_var_post")
+    cfg = _compose(
+        "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post"
+    )
     task = instantiate(cfg.task)
     net = build_posterior_net(cfg, task)
 

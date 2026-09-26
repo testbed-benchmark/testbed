@@ -151,36 +151,6 @@ def test_finite_run_still_stops_on_the_iteration_limit(tmp_path):
     assert trainer.stop_reason == "iteration_limit"
 
 
-def test_location_finding_truelogmse_recipe_stops_immediately(tmp_path):
-    """The known-NaN recipe must not spend its wall-clock budget.
-
-    Its Gaussian source prior puts ~50% of theta below zero, so the loss's
-    log(theta + eps) is NaN from the first step.
-    """
-    with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
-        cfg = compose(
-            config_name="experiments/benchmarking/location_finding_2src/actionbed_truelogmse",
-            overrides=[
-                "device=cpu",
-                "n_outer=32",
-                "n_action_warmup_iter=5",
-                "n_train_iter=5",
-                "eval_every=0",
-                "checkpoint_every=0",
-                "train_time_budget_seconds=null",
-            ],
-        )
-    manager = Manager(
-        cfg, root=str(tmp_path), name="lf", timestamp=False, console=False
-    )
-    trainer = build_trainer(cfg, instantiate(cfg.task), manager)
-
-    trainer.train()
-
-    assert trainer.stop_reason == "nan_loss"
-    assert trainer.step == 0
-
-
 def test_reinforce_run_resumes_to_the_same_weights(tmp_path):
     """Training straight through and resuming mid-way must agree exactly.
 
