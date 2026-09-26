@@ -1523,7 +1523,7 @@ def test_htd_constrained_posterior_keeps_k_positive():
 
 
 def test_htd_log_prob_is_tame_for_a_near_zero_alpha():
-    """Regression test for the NaN that killed sweep 3tu0ab2h.
+    """Regression test for the NaN that killed an earlier sweep.
 
     alpha ~ HalfNormal(2) has its mode at zero, so draws near zero are routine.
     Under exp on both coordinates such a draw landed ~13 spreads into a tail no

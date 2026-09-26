@@ -350,7 +350,7 @@ def test_htd_joint_var_post_recipe_uses_a_constrained_posterior():
         == "testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet"
     )
     # Two width-1 blocks: exp on k, identity on alpha. alpha must NOT go
-    # through a log; that is what NaN'd sweep 3tu0ab2h.
+    # through a log; that is what NaN'd an earlier sweep.
     assert cfg.posterior_net.transform.raw_sizes == [1, 1]
     assert cfg.posterior_net.transform.theta_sizes == [1, 1]
     targets = [t._target_ for t in cfg.posterior_net.transform.transforms]
