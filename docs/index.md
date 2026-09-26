@@ -89,7 +89,6 @@ guides/custom_methods
 guides/using_designers
 guides/using_tasks
 guides/wandb
-guides/sweeps
 ```
 
 ```{toctree}

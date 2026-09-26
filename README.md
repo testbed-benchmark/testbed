@@ -50,6 +50,27 @@ To do a basic check of your installation, run `pytest`. A more extensive test ca
 
 Check out the [Location Finding](docs/examples/location_finding.md) example for a quick overview of the package.
 
+# Running experiments
+
+Every experiment in the paper is a Hydra recipe under `testbed/recipes/experiments/`. The benchmark recipes live at `benchmarking/<task>/<method>.yaml`, e.g. `benchmarking/cart_pole/dad.yaml`.
+
+To train one seed of a recipe and then evaluate its final checkpoint (sPCE/sNMC bounds, sizes set by the recipe's `final_eval` block), run from the repo root:
+
+```sh
+python scripts/sweep_run.py --recipe experiments/benchmarking/cart_pole/dad seed=0
+```
+
+This logs to W&B (set `WANDB_ENTITY` to choose the team). Any config value can be overridden Hydra-style after the recipe, e.g. `lr=1e-3` or `final_eval.n_outer=32`, and `final_eval.enabled=false` skips evaluation. The run directory is written under `save_dir`, and the bounds land in `<run_dir>/eval.json`.
+
+To run without W&B, call the method's entry point directly and then evaluate the run directory:
+
+```sh
+python testbed/methods/dad.py --config-name experiments/benchmarking/cart_pole/dad seed=0
+python scripts/eval_run.py --run-dir <run_dir> --no-wandb
+```
+
+`eval_run.py` can also re-score an existing run, e.g. at a larger contrastive sample size (`--n-contrastive`), or at an intermediate checkpoint (`--checkpoint step_00010000.pt`). See `python scripts/eval_run.py --help`.
+
 ## Docs
 
 You can launch a local version of the documentation with `cd docs && make livehtml`. 

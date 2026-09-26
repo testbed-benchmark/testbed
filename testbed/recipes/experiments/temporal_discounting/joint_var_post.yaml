@@ -126,9 +126,5 @@ wandb:
   project: temporal_discounting  # one project per task; methods separate by group
   # One group per posterior family, so a table grouped by method never averages
   # across them: theta modelled in R^2 directly (valid, loose), then exp on both
-  # coordinates (sweep 3tu0ab2h, NaN'd), now exp on k alone.
-  #
-  # The group belongs here rather than in the sweep's parameters:
-  # generate_seed_sweeps.py reads it from the recipe to decide which seeds are
-  # already done, and rewrites the sweep YAML from scratch.
+  # coordinates (NaN'd), now exp on k alone.
   group: joint_var_post_constrained_k

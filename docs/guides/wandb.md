@@ -104,5 +104,6 @@ which case the `Manager` uses it as-is and skips the `wandb:`-block wiring.
 
 ## Running a recipe across seeds
 
-W&B also coordinates multi-seed runs: see [](sweeps.md) for the sweep setup that hands
-each unrun seed to the next available agent and rebuilds the queue after crashes.
+Each seed is a separate run, launched with a `seed=<n>` override (see the README's
+"Running experiments" section). Runs from the same recipe share a W&B project and
+group, so seeds line up as rows of one table.
