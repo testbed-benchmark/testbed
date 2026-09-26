@@ -1,11 +1,11 @@
 # @package _global_
 
-# experiments/benchmarking_redo/location_finding_2src/actionbed_logmse with the
+# experiments/benchmarking/location_finding_2src/actionbed_logmse with the
 # design net's time embeddings switched off; everything else is inherited, so
 # the pair isolates what the step embedding contributes.
 
 defaults:
-  - /experiments/benchmarking_redo/location_finding_2src/actionbed_logmse
+  - /experiments/benchmarking/location_finding_2src/actionbed_logmse
   - _self_
 
 design_net:

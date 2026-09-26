@@ -2,6 +2,11 @@
 
 # Hyperparameter settings for ActionBED on Cart Pole problem
 # Uses the TrueLogMSELoss
+#
+# The design net is left at the net/attentive_policy default (~663k params), so
+# ActionBED is matched on policy capacity with the dad recipe. lr_period is set
+# so the LR annealing stays on schedule under the 12h wall-clock budget;
+# grad_clip trims the late-training gradient spikes that budget leaves unannealed.
 
 defaults:
   - /method: actionbed
@@ -16,7 +21,7 @@ eval_every: 0  # the final_eval block handles it
 
 wandb:
   project: benchmarking_cart_pole  # project = task
-  group: actionbed_truelogmse # group = method
+  group: actionbed_truelogmse_big_attention # group = method
 
 # loss
 loss:
@@ -27,22 +32,19 @@ loss:
 
 # training
 n_train_iter: 1_000_000 # very high to avoid quitting before spending the train time budget
-n_action_warmup_iter: 50_000
+n_action_warmup_iter: 25_000
 n_outer: 2_000
 
 # optimizer
 lr: 5e-4
 betas: [0.8, 0.998]
-grad_clip: null
+grad_clip: 750
 lr_gamma: 0.95
-lr_period: 2500
+lr_period: 2000
 # policy networks
-design_net:
-  _target_: testbed.design_nets.AttentivePolicyNet
-  encoder_dim_h: [64]
-  dim_emb: 64
-  num_heads: 4
-  num_blocks: 2
+# design_net is intentionally absent: /method: actionbed already pulls
+# /net@design_net: attentive_policy (encoder_dim_h=256, dim_emb=128,
+# num_blocks=3).
 action_net:
   _target_: testbed.design_nets.MLPPolicyNet
   # input dim: T * (dim_y + dim_design) = 50 * (4 + 1)
