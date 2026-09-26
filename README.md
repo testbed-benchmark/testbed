@@ -15,7 +15,7 @@ Our goals are to:
 
 TestBED is intentionally lightweight and highly customizable. Rather than prescribing a full pipeline, it provides core components that users can build on top of. Users are encouraged to roll their own training loops, logging, and experiment management pipelines towards their particular use cases. 
 
-The current focus of TestBED is on policy-based approaches to Bayesian experimental design. Support for more traditional sequential BED methods may be added in future versions.
+The current focus of TestBED is on policy-based approaches to Bayesian experimental design. 
 
 # Installation and Getting Started
 
