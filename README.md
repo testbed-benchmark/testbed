@@ -1,9 +1,5 @@
 # TestBED
 
-> [!WARNING]
-> TestBED is still early in its development.
-> We welcome all suggestions and contributions!
-
 TestBED is a PyTorch library for Bayesian Experimental Design (BED).
 
 It is designed to support the development, evaluation, and application of BED methods by providing a set of modular building blocks that can be easily combined and extended.
@@ -13,20 +9,19 @@ Our goals are to:
 - Offer an extensible framework for developing new BED methods and applying them to new problems
 - Enable reproducible training recipes for common and state-of-the-art BED approaches, supporting fair benchmarking and methodological development
 
-TestBED is intentionally lightweight and highly customizable. Rather than prescribing a full pipeline, it provides core components that users can build on top of. Users are encouraged to roll their own training loops, logging, and experiment management pipelines towards their particular use cases. 
+TestBED is intentionally lightweight and highly customizable. Users are encouraged to roll their own training loops, logging, and experiment management pipelines towards their particular use cases. 
 
-The current focus of TestBED is on policy-based approaches to Bayesian experimental design. 
+The current focus of TestBED is on policy-based approaches to Bayesian experimental design.
+
+TestBED will be publicly releated on PyPI after publication.
 
 # Installation and Getting Started
-
-TestBED is still in development. 
 
 Requirements:
 - Python>=3.10
 - PyTorch>=2.0
 
-
-You can install an editable version of the current library as follows:
+We recommend first installing a system-compatible version of PyTorch into your environment, before installing TestBED. You can install an editable version of the current library as follows:
 
 ```
 git clone <repository URL anonymised for review>
@@ -34,39 +29,34 @@ cd testbed
 pip install -e .[full,dev,docs]
 ```
 
-## Installing with conda
-
-If you prefer conda, create and activate an environment first, then install the package into it with pip:
-
-```
-conda create -n testbed python=3.11
-conda activate testbed
-git clone <repository URL anonymised for review>
-cd testbed
-pip install -e .[full,dev]
-```
-
-To do a basic check of your installation, run `pytest`. A more extensive test can be run with `python tests/manual/location_finding.py` (nb: this second test requires the `stepdad` [package](https://github.com/marcelhedman/stepdad/tree/master)).
-
-Check out the [Location Finding](docs/examples/location_finding.md) example for a quick overview of the package.
+To do a basic check of your installation, run `pytest`.
 
 # Running experiments
 
-Experiments in the paper are Hydra recipes under `testbed/recipes/experiments/`. The benchmark recipes live at `benchmarking/<task>/<method>.yaml`, e.g. `benchmarking/cart_pole/dad.yaml`.
+Experiments in the paper are Hydra recipes under `testbed/recipes/`. The benchmark recipes live at `experiments/benchmarking/<task>/<method>.yaml`, e.g. `benchmarking/cart_pole/dad.yaml`.
 
-To train one seed of a recipe and then evaluate its final checkpoint (sPCE/sNMC bounds, sizes set by the recipe's `final_eval` block), run from the repo root:
-
-```sh
-python scripts/sweep_run.py --recipe experiments/benchmarking/cart_pole/dad seed=0
-```
-
-This logs to W&B (set `WANDB_ENTITY` to choose the team). Any config value can be overridden Hydra-style after the recipe, e.g. `lr=1e-3` or `final_eval.n_outer=32`, and `final_eval.enabled=false` skips evaluation. The run directory is written under `save_dir`, and the bounds land in `<run_dir>/eval.json`.
-
-To run without W&B, call the method's entry point directly and then evaluate the run directory:
+To train one seed of a recipe, call its method's entry point from the repo root, then evaluate the final checkpoint (sPCE/sNMC bounds, sizes set by the recipe's `final_eval` block):
 
 ```sh
 python testbed/methods/dad.py --config-name experiments/benchmarking/cart_pole/dad seed=0
 python scripts/eval_run.py --run-dir <run_dir> --no-wandb
+```
+
+The entry point is `testbed/methods/<method>.py`, where `joint_var_post*` recipes use `var_post.py` and `actionbed_*` recipes use `actionbed.py`. Any config value can be overridden Hydra-style after the recipe, e.g. `lr=1e-3` or `final_eval.n_outer=32`. The run directory is printed at startup, and the bounds land in `<run_dir>/eval.json`.
+
+By default, each recipe trains for 12 hours (`train_time_budget_seconds=43200`). For a quick check that a recipe runs end to end, shorten training and the final evaluation:
+
+```sh
+python testbed/methods/dad.py --config-name experiments/benchmarking/cart_pole/dad seed=0 \
+    train_time_budget_seconds=60 final_eval.n_contrastive=10000
+```
+
+The static baseline has no time budget and instead runs a fixed number of steps (`n_train_iter`).
+
+Optionally, to log to W&B, `scripts/sweep_run.py` runs both steps in one go (set `WANDB_ENTITY` to choose the team; `final_eval.enabled=false` skips evaluation):
+
+```sh
+python scripts/sweep_run.py --recipe experiments/benchmarking/cart_pole/dad seed=0
 ```
 
 `eval_run.py` can also re-score an existing run, e.g. at a larger contrastive sample size (`--n-contrastive`), or at an intermediate checkpoint (`--checkpoint step_00010000.pt`). See `python scripts/eval_run.py --help`.
@@ -74,6 +64,8 @@ python scripts/eval_run.py --run-dir <run_dir> --no-wandb
 ## Docs
 
 You can launch a local version of the documentation with `cd docs && make livehtml`. 
+
+Check out the [Location Finding](docs/examples/location_finding.md) example for a quick overview of the package.
 
 # Contributing
 
