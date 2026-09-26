@@ -52,7 +52,7 @@ Check out the [Location Finding](docs/examples/location_finding.md) example for 
 
 # Running experiments
 
-Every experiment in the paper is a Hydra recipe under `testbed/recipes/experiments/`. The benchmark recipes live at `benchmarking/<task>/<method>.yaml`, e.g. `benchmarking/cart_pole/dad.yaml`.
+Experiments in the paper are a Hydra recipe under `testbed/recipes/experiments/`. The benchmark recipes live at `benchmarking/<task>/<method>.yaml`, e.g. `benchmarking/cart_pole/dad.yaml`.
 
 To train one seed of a recipe and then evaluate its final checkpoint (sPCE/sNMC bounds, sizes set by the recipe's `final_eval` block), run from the repo root:
 
