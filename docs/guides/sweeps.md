@@ -175,7 +175,7 @@ names the run. To sweep learning rate across seeds, write the YAML by hand:
 name: location_finding_2src-actionbed-lr
 program: scripts/sweep_run.py
 method: grid
-entity: rainml-testbed
+entity: anonymised-for-review
 project: location_finding_2src
 
 parameters:

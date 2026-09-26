@@ -29,7 +29,7 @@ Requirements:
 You can install an editable version of the current library as follows:
 
 ```
-git clone git@github.com:testbed-benchmark/testbed.git
+git clone <repository URL anonymised for review>
 cd testbed
 pip install -e .[full,dev,docs]
 ```
@@ -41,7 +41,7 @@ If you prefer conda, create and activate an environment first, then install the 
 ```
 conda create -n testbed python=3.11
 conda activate testbed
-git clone git@github.com:testbed-benchmark/testbed.git
+git clone <repository URL anonymised for review>
 cd testbed
 pip install -e .[full,dev]
 ```
