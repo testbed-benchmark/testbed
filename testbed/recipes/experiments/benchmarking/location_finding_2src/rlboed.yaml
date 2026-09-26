@@ -1,7 +1,8 @@
 # @package _global_
 
 defaults:
-  - /experiments/location_finding_2src/rlboed
+  - /method: rlboed
+  - override /task: location_finding_2src
   - _self_
 
 actor_architecture: attention
@@ -9,9 +10,25 @@ critic_architecture: deepset
 
 train_time_budget_seconds: 43_200  # 12 hours
 
+# Reference range used to normalize outcome histories for RL-BOED's policy and
+# critic networks. This does not constrain or clip task outcomes; observations
+# outside the range are simply mapped outside [0, 1].
+reward:
+  outcome_low: -3.0
+  outcome_high: 10.0
+
+# RL-BOED requires a bounded design space for this otherwise unbounded task.
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: -4.0
+    high: 4.0
+    event_shape:
+      - ${task.dim_theta}
+
 sac:
   num_training_iterations: 100_000
-  # Cap the entropy reduction at the original 20_001-iteration endpoint.
+  # Cap the entropy reduction at the 20_001-iteration endpoint.
   entropy_anneal_total: 1.429  # 20_001 / 1.4e4
 
 wandb:

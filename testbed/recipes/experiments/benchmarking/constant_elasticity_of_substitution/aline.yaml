@@ -1,8 +1,16 @@
 # @package _global_
 
 defaults:
-  - /experiments/constant_elasticity_of_substitution/aline
+  - /method: aline
+  - override /task: constant_elasticity_of_substitution
   - _self_
+
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: 0.0
+    high: 100.0
+    event_shape: [6]
 
 # Map physical designs [0, 100] and outcomes [0, 1] to [-1, 1].
 design_net:

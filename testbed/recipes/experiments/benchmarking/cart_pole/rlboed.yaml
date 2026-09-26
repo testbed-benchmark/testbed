@@ -1,7 +1,8 @@
 # @package _global_
 
 defaults:
-  - /experiments/cart_pole/rlboed
+  - /method: rlboed
+  - override /task: cart_pole
   - _self_
 
 actor_architecture: attention
@@ -9,9 +10,17 @@ critic_architecture: deepset
 
 train_time_budget_seconds: 43_200  # 12 hours
 
+# Initial normalization reference for state observations, not physical bounds.
+# States outside this range are not clipped; shared task settings are unchanged.
+reward:
+  outcome_low: -10.0
+  outcome_high: 10.0
+
 sac:
   gamma: 0.99
   num_training_iterations: 100_000
+  buffer_size: 1_000_000
+  policy_lr: 0.0003
   entropy_anneal_total: 1.429  # 20_001 / 1.4e4
 
 wandb:

@@ -1,7 +1,8 @@
 # @package _global_
 
 defaults:
-  - /experiments/pharmacokinetic/rlboed
+  - /method: rlboed
+  - override /task: pharmacokinetic
   - _self_
 
 actor_architecture: attention
@@ -9,9 +10,22 @@ critic_architecture: deepset
 
 train_time_budget_seconds: 43_200  # 12 hours
 
+# Use the task's standard sampling-time box [0, 24] hours.
+# Normalization reference only: the log-normal prior and Gaussian observations
+# are unbounded, and observations outside this range are not clipped.
+# At four log-space standard deviations below the prior median V, D_V / V
+# is about 49; allowing four observation-noise standard deviations gives < 70.
+reward:
+  outcome_low: -2.0
+  outcome_high: 70.0
+  n_contrastive: 100_000
+
 sac:
   num_training_iterations: 100_000
-  # Cap the entropy reduction at the experiment's 20_001-iteration endpoint.
+  buffer_size: 1_000_000
+  tau: 0.005
+  policy_lr: 0.0003
+  # Cap the entropy reduction at the 20_001-iteration endpoint.
   entropy_anneal_total: 1.429  # 20_001 / 1.4e4
 
 wandb:

@@ -1,14 +1,23 @@
 # @package _global_
 
 defaults:
-  - /experiments/michaelis_menten/rlboed
+  - /method: rlboed
+  - override /task: michaelis_menten
   - _self_
+
+reward:
+  outcome_low: -10.0
+  outcome_high: 210.0
+  n_contrastive: 100_000
 
 train_time_budget_seconds: 43_200  # 12 hours
 
 sac:
   num_training_iterations: 100_000
-  # Cap the entropy reduction at the original 20_001-iteration endpoint.
+  buffer_size: 1_000_000
+  tau: 0.005
+  policy_lr: 0.0003
+  # Cap the entropy reduction at the 20_001-iteration endpoint.
   entropy_anneal_total: 1.429  # 20_001 / 1.4e4
 
 actor_architecture: attention
