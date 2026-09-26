@@ -37,3 +37,9 @@ final_eval:
       _target_: testbed.design_objectives.TrueLogMSELoss
       transform_input: false
       transform_target: true
+    # The same log-scale theta as true_log_mse, scored with the ActionBED
+    # element-wise mse + log(mse) formula rather than a plain mse.
+    log_mse_log_scale:
+      _target_: testbed.design_objectives.LogMSELoss
+      transform_input: false
+      transform_target: true
