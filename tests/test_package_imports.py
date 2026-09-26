@@ -29,13 +29,11 @@ TASKS = [
     "CES",
     "CartPole",
     "DoubleLink",
-    "Gravimetry",
     "HyperbolicTemporalDiscounting",
     "LinearRegression",
     "LocationFinding",
     "MichaelisMenten",
     "PharmacoKinetic",
-    "PreyPopulation",
     "StochasticPendulum",
     "Task",
 ]

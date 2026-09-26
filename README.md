@@ -13,7 +13,7 @@ TestBED is intentionally lightweight and highly customizable. Users are encourag
 
 The current focus of TestBED is on policy-based approaches to Bayesian experimental design.
 
-TestBED will be publicly releated on PyPI after publication.
+TestBED will be publicly released on PyPI after publication.
 
 # Installation and Getting Started
 

@@ -7,7 +7,7 @@ from testbed.core.design_spaces import DefaultDesignSpace
 from testbed.core.distributions import TorchDistribution
 from testbed.core.hooks import RolloutHook
 from testbed.designers import RandomDesigner
-from testbed.tasks import CES, LocationFinding, PreyPopulation
+from testbed.tasks import CES, LocationFinding
 
 
 def make_task():
@@ -35,18 +35,6 @@ def test_defaults_to_the_design_space_and_produces_valid_designs():
     rollout = designer.rollout(task.sample_prior(4))
 
     assert rollout.design_history.shape == (4, 3, *task.event_shape_design)
-    assert task.design_space.contains(rollout.design_history)
-
-
-def test_design_space_default_works_for_a_discrete_space():
-    # RandomDesigner is the one designer that works with a finite space: it
-    # samples the space directly instead of going through to_design.
-    torch.manual_seed(0)
-    task = PreyPopulation()
-    designer = RandomDesigner(task, T=3)
-
-    rollout = designer.rollout(task.sample_prior(4))
-
     assert task.design_space.contains(rollout.design_history)
 
 

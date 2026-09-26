@@ -111,7 +111,6 @@ def test_recipe_composes(recipe):
     # Shared task/wandb groups land under their expected keys.
     assert cfg.task._target_ in {
         "testbed.tasks.LocationFinding",
-        "testbed.tasks.PreyPopulation",
         "testbed.tasks.CES",
         "testbed.tasks.HyperbolicTemporalDiscounting",
         "testbed.tasks.CartPole",

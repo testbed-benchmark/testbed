@@ -43,7 +43,7 @@ from testbed.methods.rlboed import (
     make_networks,
     validate_config,
 )
-from testbed.tasks import LocationFinding, PreyPopulation
+from testbed.tasks import LocationFinding
 
 SoftQNetwork = RLBOEDQNetwork
 
@@ -510,19 +510,6 @@ def test_validate_config_accepts_categorical_design_space():
     validate_config(task, cfg, design_space)
 
 
-def test_rlboed_uses_a_tasks_categorical_design_space():
-    cfg = _tiny_cfg()
-    task = PreyPopulation()
-    cfg.task = {
-        "_target_": "testbed.tasks.PreyPopulation",
-    }
-    design_space = make_networks(task, cfg, task.device).design_space
-
-    assert isinstance(design_space, FiniteDesignSpace)
-    torch.testing.assert_close(design_space.values, task.design_space.values)
-    validate_config(task, cfg, design_space)
-
-
 def test_validate_config_rejects_inverted_outcome_bounds():
     cfg = _tiny_cfg()
     cfg.reward.outcome_low = 10.0
@@ -543,70 +530,6 @@ def test_train_step_updates_actor_parameters():
     assert any(
         not torch.equal(b, a) for b, a in zip(before, trainer.nets.actor.parameters())
     )
-
-
-def test_categorical_train_step_updates_networks_with_finite_losses():
-    cfg = _tiny_cfg()
-    cfg.reward.outcome_low = 0.0
-    cfg.reward.outcome_high = 300.0
-    task = PreyPopulation().to(cfg.device)
-    cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
-    _set_seed(cfg.seed, cfg.torch_deterministic)
-    nets = make_networks(task, cfg, task.device)
-    design_space = nets.design_space
-    validate_config(task, cfg, design_space)
-    trainer = Trainer(
-        task,
-        PolicyDesigner(task, cfg.T, nets.actor),
-        build_env(cfg, task),
-        build_replay_buffer(cfg, task),
-        nets,
-        cfg,
-    )
-    actor_before = [parameter.clone() for parameter in trainer.nets.actor.parameters()]
-    critic_before = [parameter.clone() for parameter in trainer.nets.qf1.parameters()]
-
-    trainer.train_step()
-
-    assert isinstance(trainer.nets.actor, CategoricalPolicyNet)
-    assert torch.isfinite(trainer._qf_loss)
-    assert torch.isfinite(trainer._actor_loss)
-    assert any(
-        not torch.equal(before, after)
-        for before, after in zip(actor_before, trainer.nets.actor.parameters())
-    )
-    assert any(
-        not torch.equal(before, after)
-        for before, after in zip(critic_before, trainer.nets.qf1.parameters())
-    )
-
-
-def test_categorical_temperature_increases_when_entropy_is_below_target():
-    cfg = _tiny_cfg()
-    cfg.reward.outcome_low = 0.0
-    cfg.reward.outcome_high = 300.0
-    task = PreyPopulation().to(cfg.device)
-    cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
-    nets = make_networks(task, cfg, task.device)
-    design_space = nets.design_space
-    with torch.no_grad():
-        for parameter in nets.actor.parameters():
-            parameter.zero_()
-        nets.actor.actor.head.logits_head.bias[0] = 10.0
-    trainer = Trainer(
-        task,
-        PolicyDesigner(task, cfg.T, nets.actor),
-        build_env(cfg, task),
-        build_replay_buffer(cfg, task),
-        nets,
-        cfg,
-    )
-    alpha_before = trainer.nets.log_alpha.exp().item()
-    assert trainer.target_entropy == pytest.approx(0.98 * log(design_space.n_designs))
-
-    trainer.train_step()
-
-    assert trainer.nets.log_alpha.exp().item() > alpha_before
 
 
 def test_train_is_reproducible_with_fixed_seed():
@@ -1251,7 +1174,7 @@ def test_entropy_anneal_floor_survives_a_resume(tmp_path):
         ("attention", AttentiveEncoder),
     ],
 )
-@pytest.mark.parametrize("design_kind", ["box", "finite", "unconstrained"])
+@pytest.mark.parametrize("design_kind", ["box", "unconstrained"])
 def test_independent_architectures_train_and_reload(
     actor_architecture,
     actor_encoder_type,
@@ -1268,11 +1191,7 @@ def test_independent_architectures_train_and_reload(
     cfg.design_net.dim_h = [16, 16]
     cfg.design_net.dim_emb = 16
     cfg.design_net.attention = {"num_heads": 2, "num_blocks": 1, "max_T": cfg.T}
-    if design_kind == "finite":
-        cfg.task = {"_target_": "testbed.tasks.PreyPopulation"}
-        cfg.reward.outcome_low = 0.0
-        cfg.reward.outcome_high = 300.0
-    elif design_kind == "unconstrained":
+    if design_kind == "unconstrained":
         del cfg.task.design_space
     if design_kind == "unconstrained":
         with pytest.warns(RuntimeWarning, match="unconstrained"):
@@ -1280,10 +1199,7 @@ def test_independent_architectures_train_and_reload(
     else:
         trainer = _build_trainer(cfg)
     nets = trainer.nets
-    actor_type = (
-        CategoricalPolicyActor if design_kind == "finite" else GaussianPolicyActor
-    )
-    assert type(nets.actor.actor) is actor_type
+    assert type(nets.actor.actor) is GaussianPolicyActor
     actor_encoder = nets.actor.actor.encoder
     critic_encoders = [
         nets.qf1.encoder,

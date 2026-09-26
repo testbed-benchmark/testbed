@@ -11,7 +11,6 @@ from testbed.tasks import (
     LinearRegression,
     LocationFinding,
     MichaelisMenten,
-    PreyPopulation,
 )
 from testbed.tasks.base import Task
 
@@ -98,7 +97,6 @@ _PATHWISE_TASKS = [
 
 # Tasks with no pathwise sampler, which must reject an explicit True.
 _NON_PATHWISE_TASKS = [
-    lambda **kw: PreyPopulation(**kw),
     lambda **kw: HyperbolicTemporalDiscounting(temperature=0.0, **kw),
 ]
 

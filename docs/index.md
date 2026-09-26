@@ -30,22 +30,18 @@ rollout = designer.rollout(theta)
 
 ## Tasks
 
-Every task implemented in TestBED is listed below. See our guide on [Using Tasks](guides/using_tasks.md).
-
-TestBED was designed to allow you to implement your own task easily. For some pointers on how to do this, see our guide on [Implementing New Tasks](guides/custom_tasks.md).
+Every task implemented in TestBED is listed below.
 
 | `testbed.tasks.X` | Description | API |
 |---|---|---|
 | `CartPole` | Stochastic cart-pole with unknown masses/length (note: non-memoryless likelihood) | [API](autoapi/testbed/tasks/cart_pole/index) |
 | `CES` | Constant elasticity of substitution | [API](autoapi/testbed/tasks/constant_elasticity_of_substitution/index) |
 | `DoubleLink` | Stochastic double-link with unknown masses/lengths (note: non-memoryless likelihood) | [API](autoapi/testbed/tasks/double_link/index) |
-| `Gravimetry` | Buried void detection from surface gravity readings | [API](autoapi/testbed/tasks/gravimetry/index) |
 | `HyperbolicTemporalDiscounting` | Hyperbolic temporal discounting (note: discrete outcomes) | [API](autoapi/testbed/tasks/hyperbolic_temporal_discounting/index) |
 | `LinearRegression` | Linear regression | [API](autoapi/testbed/tasks/linear_regression/index) |
 | `LocationFinding` | Source location finding | [API](autoapi/testbed/tasks/location_finding/index) |
 | `MichaelisMenten` | Michaelis-Menten| [API](autoapi/testbed/tasks/michaelis_menten/index) |
 | `PharmacoKinetic` | Drug concentration over time (note: concentration-dependent noise) | [API](autoapi/testbed/tasks/pharmacokinetic/index) |
-| `PreyPopulation` | Predator-prey population (note: discrete designs and outcomes) | [API](autoapi/testbed/tasks/prey_population/index) |
 | `StochasticPendulum` | Stochastic pendulum with unknown mass/length (note: non-memoryless likelihood) | [API](autoapi/testbed/tasks/stochastic_pendulum/index) |
 
 ## Designers
@@ -53,7 +49,7 @@ TestBED was designed to allow you to implement your own task easily. For some po
 TestBED also provides a number of implementations of commonly used experimental design methods. See our guide on [Using Designers](guides/using_designers.md).
 
 
-Note that some of these are meant only as references or reasonable defaults; for many tasks, you may be interested in customizing the behavior of your {py:class}`~testbed.designers.Designer` to the specific {py:class}`~testbed.tasks.Task` at hand. For a guide on how to do this and how to implement your own custom methods, see [Implementing Custom Methods](guides/custom_methods.md).
+Note that some of these are meant only as references or reasonable defaults; for many tasks, you may be interested in customizing the behavior of your {py:class}`~testbed.designers.Designer` to the specific {py:class}`~testbed.tasks.Task` at hand.
 
 | `testbed.designers.X` | Description | API |
 |---|---|---|
@@ -84,10 +80,7 @@ maxdepth: 1
 ---
 
 guides/configuration
-guides/custom_tasks
-guides/custom_methods
 guides/using_designers
-guides/using_tasks
 guides/wandb
 ```
 

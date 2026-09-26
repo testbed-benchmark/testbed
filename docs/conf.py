@@ -58,7 +58,6 @@ exclude_patterns = ["_build", ".DS_Store"]
 
 html_theme = "sphinx_book_theme"
 html_theme_options = {
-    "repository_url": "https://anonymised-for-review",  # anonymised for double-blind review
     "use_repository_button": False,
     "use_download_button": False,
     "show_toc_level": 2,

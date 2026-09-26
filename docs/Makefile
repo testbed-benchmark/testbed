@@ -5,8 +5,8 @@ SPHINXBUILD ?= sphinx-build
 SOURCEDIR   = .
 BUILDDIR    = _build
 
-HOST ?= 127.0.0.1
-PORT ?= 8080
+HOST = 127.0.0.1
+PORT = 8080
 
 .PHONY: help livehtml Makefile
 

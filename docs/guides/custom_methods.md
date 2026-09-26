@@ -1,3 +1,0 @@
-# Implementing Custom Methods
-
-#TODO
