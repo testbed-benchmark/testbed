@@ -158,9 +158,17 @@ class LogMSELoss(nn.Module):
         \mathrm{mse} = (\mathrm{input} - \mathrm{target})^2, \qquad
         \ell = \mathrm{mse} + \log(\mathrm{mse} + \epsilon)
 
+    ``transform_input``/``transform_target`` take the loss to a log scale, as
+    :class:`TrueLogMSELoss` does: theta is logged first, and the formula above
+    is then applied to the logged values.
+
     Args:
         reduction (str):
             One of ``"sum"``, ``"mean"``, or ``"none"`` (default: ``"mean"``).
+        transform_input (bool, optional):
+            Should we take a log of the input before calculating the loss? (default: False)
+        transform_target (bool, optional):
+            Should we take a log of the target before calculating the loss? (default: False)
         epsilon (float):
             Small constant added before taking the log, for numerical
             stability (default: ``1e-6``).
@@ -173,11 +181,15 @@ class LogMSELoss(nn.Module):
     def __init__(
         self,
         reduction: str = "mean",
+        transform_input: bool = False,
+        transform_target: bool = False,
         epsilon: float = 1e-6,
     ) -> None:
         """Initializes the loss."""
         super().__init__()
         self.reduction = _check_reduction(reduction)
+        self.transform_input = transform_input
+        self.transform_target = transform_target
         self.epsilon = epsilon
 
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
@@ -198,6 +210,11 @@ class LogMSELoss(nn.Module):
             ValueError: If ``input`` and ``target`` have different shapes.
         """
         _check_same_shape(input, target)
+        if self.transform_input:
+            input = torch.log(input + self.epsilon)
+        if self.transform_target:
+            target = torch.log(target + self.epsilon)
+
         return _elementwise_log_mse(input, target, self.epsilon, self.reduction)
 
 
