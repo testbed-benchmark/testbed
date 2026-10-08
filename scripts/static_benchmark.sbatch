@@ -80,7 +80,7 @@ echo "job=${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID} host=$(hostname) task=$TA
 nvidia-smi
 
 if [[ ! -f "$RUN/final_step.pt" ]]; then
-  "$PYTHON" testbed/methods/static.py \
+  "$PYTHON" -m testbed.cli.static \
     --config-name "experiments/benchmarking/$TASK/static" \
     seed="$SEED" \
     hydra.run.dir="$RUN" \

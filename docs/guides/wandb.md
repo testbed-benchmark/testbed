@@ -52,11 +52,11 @@ stays off.
 
 ## Enable / override on the CLI
 
-The Hydra entry points (e.g. `testbed/methods/dad.py`) merge dotted CLI overrides into the
+The Hydra entry points (e.g. `testbed/cli/dad.py`) merge dotted CLI overrides into the
 composed config, so you can flip W&B on without editing the YAML:
 
 ```sh
-python testbed/methods/dad.py \
+python -m testbed.cli.dad \
     save_dir=./runs \
     wandb.enabled=true \
     wandb.project=my-project \

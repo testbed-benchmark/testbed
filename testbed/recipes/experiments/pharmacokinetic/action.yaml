@@ -2,7 +2,7 @@
 
 # An action net trained on rollouts from a frozen designer:
 #
-#   python testbed/methods/action.py \
+#   python -m testbed.cli.action \
 #     --config-name experiments/pharmacokinetic/action \
 #     designer_run_dir=runs/<a finished pharmacokinetic run>
 #

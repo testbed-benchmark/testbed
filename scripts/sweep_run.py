@@ -101,7 +101,7 @@ def main() -> None:
         print("no seed=<n> among the overrides", file=sys.stderr)
         sys.exit(2)
 
-    entry_point = os.path.join(REPO_ROOT, "testbed", "methods", f"{method}.py")
+    entry_point = os.path.join(REPO_ROOT, "testbed", "cli", f"{method}.py")
     if not os.path.exists(entry_point):
         print(f"no entry point at {entry_point}", file=sys.stderr)
         sys.exit(2)

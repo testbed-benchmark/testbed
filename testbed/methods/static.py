@@ -1,6 +1,5 @@
 """Training for static (non-adaptive) designs, with random restarts."""
 
-import hydra
 import torch
 from torch import nn
 
@@ -249,14 +248,13 @@ def build_objective(cfg, task):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/static")
-def main(cfg):
+def run(cfg):
     """Entry point for static-design training.
 
     Args:
         cfg: Composed Hydra configuration for the training run.
 
-    Run with ``python testbed/methods/static.py [overrides...]``.
+    Run with ``python -m testbed.cli.static [overrides...]``.
     """
     manager, task = setup(cfg)
 
@@ -293,7 +291,3 @@ def main(cfg):
     )
 
     trainer.train()
-
-
-if __name__ == "__main__":
-    main()

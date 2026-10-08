@@ -34,6 +34,14 @@ cd testbed
 pip install -e .[full,dev,docs]
 ```
 
+The core library (tasks, designers, design nets and objectives) needs only PyTorch. The training methods (`testbed.methods`), their Hydra entry points (`python -m testbed.cli.<method>`) and the checkpoint evaluators in `testbed.eval` additionally need [Hydra](https://hydra.cc/), which is opt-in through the `train` extra (also included in `full`):
+
+```
+pip install -e .[train]
+```
+
+Stable Hydra (1.3) cannot run its command line on Python 3.14, so use Python 3.13 or earlier to launch training runs.
+
 ## Installing with conda
 
 If you prefer conda, create and activate an environment first, then install the package into it with pip:

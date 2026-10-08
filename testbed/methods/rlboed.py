@@ -8,7 +8,6 @@ import warnings
 from dataclasses import dataclass
 from math import ceil, inf, isfinite, isinf, log
 
-import hydra
 import torch
 import torch.nn.functional as F
 from hydra.utils import instantiate
@@ -1253,18 +1252,13 @@ def build_replay_buffer(cfg, task):
 # ============================================================================
 
 
-@hydra.main(
-    version_base="1.3",
-    config_path="../recipes",
-    config_name="experiments/location_finding/rlboed",
-)
-def main(cfg):
+def run(cfg):
     """Entry point for RL-BOED (SAC) training.
 
     Args:
         cfg: Composed Hydra configuration for the training run.
 
-    Run with ``python testbed/methods/rlboed.py [overrides...]``.
+    Run with ``python -m testbed.cli.rlboed [overrides...]``.
     """
     start_time = time.monotonic()
     manager, task = setup(cfg)
@@ -1296,7 +1290,3 @@ def main(cfg):
     )
 
     trainer.train()
-
-
-if __name__ == "__main__":
-    main()

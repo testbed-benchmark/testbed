@@ -4,7 +4,6 @@ import inspect
 import time
 from math import inf, isfinite
 
-import hydra
 import torch
 from hydra.utils import get_class, instantiate
 from omegaconf import OmegaConf
@@ -496,16 +495,13 @@ def load_checkpoint(
 # ============================================================================
 
 
-@hydra.main(
-    version_base="1.3", config_path="../recipes", config_name="method/actionbed"
-)
-def main(cfg):
+def run(cfg):
     """Entry point for ActionBED training.
 
     Args:
         cfg: Composed Hydra configuration for the training run.
 
-    Run with ``python testbed/methods/actionbed.py [overrides...]``.
+    Run with ``python -m testbed.cli.actionbed [overrides...]``.
     """
     start_time = time.monotonic()
     manager, task = setup(cfg)
@@ -513,7 +509,3 @@ def main(cfg):
     # Setup counts toward the time budget.
     trainer.elapsed_seconds = time.monotonic() - start_time
     trainer.train()
-
-
-if __name__ == "__main__":
-    main()

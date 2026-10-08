@@ -152,7 +152,7 @@ The agent appends the sampled parameters to the `command` block through the
 syntax. `scripts/sweep_run.py` forwards them untouched and runs:
 
 ```sh
-python testbed/methods/<method>.py --config-name experiments/<task>/<method> \
+python -m testbed.cli.<method> --config-name experiments/<task>/<method> \
     wandb.enabled=true 'wandb.tags=[seed<n>]' \
     'hydra.run.dir=<save_dir>/<task>_<method>_seed<n>_<timestamp>_<jobid>_<taskid>' \
     seed=<n> [other swept parameters]
@@ -203,7 +203,7 @@ For a quick one-off grid on a single machine, Hydra's own multirun is simpler an
 no sweep at all:
 
 ```sh
-python testbed/methods/actionbed.py --multirun \
+python -m testbed.cli.actionbed --multirun \
     --config-name experiments/location_finding_2src/actionbed \
     lr=1e-4,5e-4,1e-3
 ```
@@ -230,7 +230,7 @@ The group syntax is what records the choice in `hydra.runtime.choices`, which is
 `scripts/sweep_run.py` finds the entry point to run. Writing `- /method/actionbed`
 instead includes the same file but records no choice, and the wrapper will refuse the
 recipe. Taking it from the config means the filename need not match the method:
-`var_post_scorebed_repro.yaml` correctly runs `testbed/methods/var_post.py`.
+`var_post_scorebed_repro.yaml` correctly runs `testbed/cli/var_post.py`.
 
 Leave `entity` alone: it stays `null` in `testbed/recipes/wandb/default.yaml` so that
 anyone using TestBED logs to their own account, and `WANDB_ENTITY` supplies yours.

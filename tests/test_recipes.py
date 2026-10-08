@@ -5,7 +5,7 @@ migration — defaults lists, `_self_` ordering, `net@<pkg>` package redirects,
 the shared `system`/`task`/`wandb` groups, and the `save_dir` default — none
 of which the unit tests (which build configs by hand) exercise. A broken
 defaults path or dropped `@package` would otherwise pass CI and only fail when
-a user launches `python testbed/methods/<x>.py`.
+a user launches `python -m testbed.cli.<x>`.
 """
 
 from pathlib import Path

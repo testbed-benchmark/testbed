@@ -1181,7 +1181,7 @@ def test_main_starts_timer_before_setup(monkeypatch, tmp_path):
 
     monkeypatch.setattr(module, "setup", setup)
     monkeypatch.setattr(module, "Trainer", RecordingTrainer)
-    module.main.__wrapped__(cfg)
+    module.run(cfg)
     manager.metric_logger.close()
 
 

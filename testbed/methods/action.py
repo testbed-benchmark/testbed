@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-import hydra
 import torch
 from hydra.utils import instantiate
 
@@ -331,15 +330,14 @@ def build_trainer(cfg, task, manager=None):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/action")
-def main(cfg):
+def run(cfg):
     """Entry point for training an action net on top of a frozen designer.
 
     Designs are drawn at random unless ``designer_run_dir`` points at a
     finished run, in which case that run's designer (and its task, T, design
     net and history convention) are taken from its own saved config.
 
-        python testbed/methods/action.py designer_run_dir=runs/<run_name>
+        python -m testbed.cli.action designer_run_dir=runs/<run_name>
 
     Everything else, the action net and the training schedule, stays ours.
 
@@ -357,7 +355,3 @@ def main(cfg):
             "Its loss was chosen for the other task."
         )
     build_trainer(cfg, task, manager).train()
-
-
-if __name__ == "__main__":
-    main()
