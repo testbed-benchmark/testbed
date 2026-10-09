@@ -12,6 +12,8 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.distributions import Categorical, MixtureSameFamily, Normal
 
+from testbed.design_nets.history import prepare_history
+
 
 class _AlineEncoderLayer(nn.TransformerEncoderLayer):
     """A transformer encoder layer that also works before any observations exist.
@@ -44,7 +46,15 @@ class _AlineEncoderLayer(nn.TransformerEncoderLayer):
 
 @dataclass
 class AlineOutput:
-    """Outputs from a forward pass through ALINE."""
+    """Outputs from a forward pass through ALINE.
+
+    Attributes:
+        acquisition_logits: Candidate scores, shape ``[*batch_shape, N]``.
+        mixture_logits: Component logits, shape
+            ``[*batch_shape, dim_theta, n_components]``.
+        mixture_means: Component means, shaped like ``mixture_logits``.
+        mixture_scales: Component scales, shaped like ``mixture_logits``.
+    """
 
     acquisition_logits: Tensor
     mixture_logits: Tensor
@@ -211,15 +221,11 @@ class AlineModel(nn.Module):
         )
 
     def _normalize_designs(self, designs: Tensor) -> Tensor:
-        if torch.Size(designs.shape[2:]) != self.event_shape_design:
-            raise ValueError("Design tensors must end in event_shape_design.")
-        designs = designs.reshape(*designs.shape[:2], self.dim_design)
+        """Normalizes flattened designs shaped ``[b, n, dim_design]``."""
         return (designs - self.design_center) / self.design_scale
 
     def _normalize_outcomes(self, outcomes: Tensor) -> Tensor:
-        if torch.Size(outcomes.shape[2:]) != self.event_shape_y:
-            raise ValueError("Outcome tensors must end in event_shape_y.")
-        outcomes = outcomes.reshape(*outcomes.shape[:2], self.dim_y)
+        """Normalizes flattened outcomes shaped ``[b, n, dim_y]``."""
         return (outcomes - self.outcome_center) / self.outcome_scale
 
     def _attention_mask(
@@ -239,26 +245,58 @@ class AlineModel(nn.Module):
 
     def forward(
         self,
-        context_y: Tensor,
-        context_designs: Tensor,
-        candidates: Tensor,
+        y_history,
+        design_history,
+        candidates,
+        *,
+        mask: Tensor | None = None,
         available_mask: Tensor | None = None,
     ) -> AlineOutput:
-        """Scores candidate designs and estimates parameter marginals."""
-        if context_y.shape[:2] != context_designs.shape[:2]:
-            raise ValueError(
-                "Context outcomes and designs must share batch/time shape."
-            )
-        if context_designs.shape[0] != candidates.shape[0]:
-            raise ValueError("Context and candidate batch sizes must match.")
-        if candidates.shape[1] == 0:
-            raise ValueError("ALINE requires at least one candidate design.")
+        """Scores candidate designs and estimates parameter marginals.
 
-        batch_size, n_context = context_designs.shape[:2]
-        n_query = candidates.shape[1]
+        Args:
+            y_history: Context outcomes shaped
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Context designs shaped
+                ``[*batch_shape, T, *event_shape_design]``.
+            candidates: Candidate designs shaped
+                ``[*batch_shape, N, *event_shape_design]`` with ``N >= 1``.
+            mask: Optional boolean validity mask for padded context positions,
+                shaped ``[*batch_shape, T]``.
+            available_mask: Optional boolean mask of selectable candidates,
+                shaped ``[*batch_shape, N]``. Unavailable candidates receive
+                ``-inf`` acquisition logits.
+
+        Returns:
+            AlineOutput: Outputs with leading dimensions ``batch_shape``.
+        """
+        history = prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=self.event_shape_y,
+            event_shape_design=self.event_shape_design,
+            mask=mask,
+            device=self.design_center.device,
+            dtype=self.design_center.dtype,
+        )
+        batch_shape = history.batch_shape
+        batch_size, n_context = history.design_flat.shape[:2]
+        candidates = torch.as_tensor(
+            candidates, device=self.design_center.device, dtype=self.design_center.dtype
+        )
+        n_query = candidates.shape[len(batch_shape)] if candidates.ndim else 0
+        if candidates.shape != (*batch_shape, n_query, *self.event_shape_design):
+            raise ValueError(
+                "candidates must have shape [*batch_shape, N, *event_shape_design] "
+                "with the same batch_shape as the history."
+            )
+        if n_query == 0:
+            raise ValueError("ALINE requires at least one candidate design.")
+        candidates = candidates.reshape(batch_size, n_query, self.dim_design)
+
         context_embeddings = self.design_embedder(
-            self._normalize_designs(context_designs)
-        ) + self.outcome_embedder(self._normalize_outcomes(context_y))
+            self._normalize_designs(history.design_flat)
+        ) + self.outcome_embedder(self._normalize_outcomes(history.y_flat))
         query_embeddings = self.design_embedder(self._normalize_designs(candidates))
         target_embeddings = self.target_tokens.unsqueeze(0).expand(batch_size, -1, -1)
         embeddings = torch.cat(
@@ -268,24 +306,37 @@ class AlineModel(nn.Module):
         attention_mask = self._attention_mask(
             n_context, n_query, device=embeddings.device
         )
-        encoded = self.transformer(embeddings, mask=attention_mask)
+        padding_mask = None
+        if history.mask_flat is not None:
+            # Float, like attention_mask, so PyTorch merges the two without
+            # a mismatched-mask-type warning.
+            padding_mask = torch.zeros(
+                batch_size, embeddings.shape[1], device=embeddings.device
+            )
+            padding_mask[:, :n_context] = padding_mask[:, :n_context].masked_fill(
+                ~history.mask_flat, float("-inf")
+            )
+        encoded = self.transformer(
+            embeddings, mask=attention_mask, src_key_padding_mask=padding_mask
+        )
         query_encoded = encoded[:, n_context : n_context + n_query]
         target_encoded = encoded[:, n_context + n_query :]
 
         acquisition_logits = self.acquisition_head(query_encoded).squeeze(-1)
+        acquisition_logits = acquisition_logits.reshape(*batch_shape, n_query)
         if available_mask is not None:
-            available_mask = torch.as_tensor(
-                available_mask, device=candidates.device, dtype=torch.bool
-            )
+            available_mask = torch.as_tensor(available_mask, device=embeddings.device)
+            if available_mask.dtype is not torch.bool:
+                raise ValueError("available_mask must be a boolean tensor.")
             if available_mask.shape != acquisition_logits.shape:
-                raise ValueError("available_mask must match the candidate batch shape.")
+                raise ValueError("available_mask must have shape [*batch_shape, N].")
             acquisition_logits = acquisition_logits.masked_fill(
                 ~available_mask, float("-inf")
             )
 
         raw_components = torch.stack(
             [head(target_encoded) for head in self.inference_heads], dim=-2
-        )
+        ).reshape(*batch_shape, self.dim_theta, len(self.inference_heads), 3)
         mixture_means = raw_components[..., 0]
         mixture_scales = F.softplus(raw_components[..., 1]) + self.min_scale
         mixture_logits = raw_components[..., 2]

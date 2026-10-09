@@ -144,7 +144,7 @@ class _ExactPosterior(VariationalPosteriorNet):
         return MultivariateNormal(loc=post_mean, covariance_matrix=post_cov)
 
     def log_prob(self, theta, y_history, design_history, mask=None):
-        theta_flat = self._flatten_theta(theta)
+        theta_flat = self._flatten_theta(theta, y_history.shape[:1])
         return self.distribution(y_history, design_history, mask=mask).log_prob(
             theta_flat
         )
@@ -1261,7 +1261,7 @@ def test_ces_posterior_rejects_wrong_theta_shape():
     net = _make_ces_posterior(task)
     y_history, design_history = _ces_history(task, b=4)
 
-    with pytest.raises(ValueError, match="trailing shape"):
+    with pytest.raises(ValueError, match="theta must have shape"):
         net.log_prob(task.sample_prior(4)[:, :4], y_history, design_history)
 
 

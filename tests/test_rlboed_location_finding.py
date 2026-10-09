@@ -22,8 +22,6 @@ from testbed.design_nets import (
     GaussianHead,
     GaussianPolicyActor,
     GaussianPolicyNet,
-    RLBOEDDiscreteQNetwork,
-    RLBOEDQNetwork,
 )
 from testbed.designers import PolicyDesigner
 from testbed.envs.history import History
@@ -33,6 +31,7 @@ from testbed.eval.eval_policy import (
 from testbed.eval.eval_policy import (
     evaluate_checkpoint,
 )
+from testbed.method_nets import RLBOEDDiscreteQNetwork, RLBOEDQNetwork
 from testbed.methods.rlboed import (
     Trainer,
     _CompactEpisodeReplayBuffer,
@@ -46,6 +45,11 @@ from testbed.methods.rlboed import (
 from testbed.tasks import LocationFinding, PreyPopulation
 
 SoftQNetwork = RLBOEDQNetwork
+
+
+def _history(observation):
+    """Unpacks an env History into the (y_history, design_history) convention."""
+    return observation.outcomes, observation.designs
 
 
 # =====================================================================
@@ -77,8 +81,8 @@ def test_actor_rejects_initial_std_outside_log_std_bounds(init_std):
 def test_soft_q_network_is_permutation_invariant():
     """Permuting valid history entries does not change the Q estimate."""
     critic = SoftQNetwork(
-        dim_y=1,
-        dim_design=2,
+        event_shape_y=(1,),
+        event_shape_design=(2,),
         design_low=-4.0,
         design_high=4.0,
         outcome_low=-3.0,
@@ -105,8 +109,10 @@ def test_soft_q_network_is_permutation_invariant():
         mask=mask[:, permutation],
     )
 
-    actual = critic(observation, design)
-    permuted = critic(permuted_observation, design)
+    actual = critic(*_history(observation), design, mask=observation.mask)
+    permuted = critic(
+        *_history(permuted_observation), design, mask=permuted_observation.mask
+    )
 
     torch.testing.assert_close(actual, permuted)
 
@@ -114,8 +120,8 @@ def test_soft_q_network_is_permutation_invariant():
 def test_soft_q_network_ignores_masked_history_entries():
     """Changing padded history entries does not change the Q estimate."""
     critic = SoftQNetwork(
-        dim_y=1,
-        dim_design=2,
+        event_shape_y=(1,),
+        event_shape_design=(2,),
         design_low=-4.0,
         design_high=4.0,
         outcome_low=-3.0,
@@ -136,8 +142,10 @@ def test_soft_q_network_ignores_masked_history_entries():
     )
     design = torch.randn(2, 2)
 
-    actual = critic(observation, design)
-    modified = critic(modified_observation, design)
+    actual = critic(*_history(observation), design, mask=observation.mask)
+    modified = critic(
+        *_history(modified_observation), design, mask=modified_observation.mask
+    )
 
     assert actual.shape == (2, 1)
     torch.testing.assert_close(actual, modified)
@@ -145,8 +153,8 @@ def test_soft_q_network_ignores_masked_history_entries():
 
 def test_soft_q_network_uses_reference_history_and_design_coordinates():
     critic = SoftQNetwork(
-        dim_y=1,
-        dim_design=2,
+        event_shape_y=(1,),
+        event_shape_design=(2,),
         design_low=torch.tensor([-2.0, 2.0]),
         design_high=torch.tensor([4.0, 6.0]),
         outcome_low=-3.0,
@@ -170,7 +178,7 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
         mask=torch.tensor([[True]]),
     )
 
-    critic(observation, physical_design)
+    critic(*_history(observation), physical_design, mask=observation.mask)
 
     torch.testing.assert_close(
         inputs["encoder"][..., -2:],
@@ -236,8 +244,8 @@ def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
 
 def test_discrete_q_network_is_masked_and_permutation_invariant():
     critic = RLBOEDDiscreteQNetwork(
-        dim_y=1,
-        dim_design=1,
+        event_shape_y=(1,),
+        event_shape_design=(1,),
         n_designs=3,
         design_low=1.0,
         design_high=10.0,
@@ -255,10 +263,10 @@ def test_discrete_q_network_is_masked_and_permutation_invariant():
         mask=mask[:, [1, 0, 2]],
     )
 
-    values = critic(observation)
+    values = critic(*_history(observation), mask=observation.mask)
 
     assert values.shape == (2, 3)
-    torch.testing.assert_close(values, critic(permuted))
+    torch.testing.assert_close(values, critic(*_history(permuted), mask=permuted.mask))
 
 
 # =====================================================================
@@ -1378,8 +1386,8 @@ def test_critics_accept_independent_encoder_and_head(encoder_type, discrete):
     head = nn.Linear(8 if discrete else 10, 3 if discrete else 1)
     original_weights = head.weight.detach().clone()
     kwargs = {
-        "dim_y": 1,
-        "dim_design": 2,
+        "event_shape_y": (1,),
+        "event_shape_design": (2,),
         "design_low": -1.0,
         "design_high": 1.0,
         "outcome_low": 0.0,
@@ -1397,7 +1405,11 @@ def test_critics_accept_independent_encoder_and_head(encoder_type, discrete):
     torch.testing.assert_close(head.weight, original_weights)
     observation = History.empty((2,), 3, (2,), (1,))
     observation.write(0, torch.zeros(2, 2), torch.ones(2, 1))
-    output = critic(observation) if discrete else critic(observation, torch.zeros(2, 2))
+    output = (
+        critic(*_history(observation), mask=observation.mask)
+        if discrete
+        else critic(*_history(observation), torch.zeros(2, 2), mask=observation.mask)
+    )
     assert output.shape == (2, 3 if discrete else 1)
     output.square().sum().backward()
     assert torch.isfinite(head.weight.grad).all()

@@ -9,8 +9,8 @@ from omegaconf import OmegaConf
 from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.hooks import ActionHook, PosteriorUpdateHook
 from testbed.core.rollout import Rollout
-from testbed.design_nets import AlineModel, AlineOutput
 from testbed.designers import AlineDesigner
+from testbed.method_nets import AlineModel, AlineOutput
 from testbed.methods.aline import Trainer, load_checkpoint
 from testbed.tasks import LocationFinding
 
@@ -86,7 +86,7 @@ def test_model_masks_unavailable_candidates_and_scores_posterior():
         context_y,
         context_designs,
         candidates,
-        available,
+        available_mask=available,
     )
 
     policy = torch.distributions.Categorical(logits=output.acquisition_logits)
@@ -184,7 +184,10 @@ def test_shared_rollout_keeps_one_pool_and_masks_selected_candidates(random_poli
     designer = trainer.designer
     seen = []
     handle = model.register_forward_pre_hook(
-        lambda module, inputs: seen.append((inputs[2], inputs[3].clone()))
+        lambda module, inputs, kwargs: seen.append(
+            (inputs[2], kwargs["available_mask"].clone())
+        ),
+        with_kwargs=True,
     )
     theta = trainer.task.sample_prior(2).requires_grad_()
     rollout = designer.rollout(
@@ -352,7 +355,7 @@ def _checkpoint_cfg(**overrides):
             },
         },
         design_net={
-            "_target_": "testbed.design_nets.AlineModel",
+            "_target_": "testbed.method_nets.AlineModel",
             "embedding_dim": 8,
             "feedforward_dim": 16,
             "n_heads": 2,

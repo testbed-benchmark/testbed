@@ -657,35 +657,33 @@ class CategoricalPolicyNet(StochasticDesignNet):
             mask: Optional padding mask with shape ``[*batch_shape, T]``.
 
         Returns:
-            Logits with shape ``[batch, n_designs]`` after flattening batches.
+            Logits with shape ``[*batch_shape, n_designs]``.
         """
         history = self._prepare_histories(y_history, design_history, mask=mask)
-        return self._validated_logits(
+        logits = self._validated_logits(
             history.y_flat, history.design_flat, history.mask_flat
         )
+        return logits.reshape(*history.batch_shape, self.n_designs)
 
-    def logits_from_observation(self, obs) -> Tensor:
-        """Returns categorical logits for a ``History`` observation.
-
-        Args:
-            obs: History containing outcomes, designs, and an optional mask.
-
-        Returns:
-            Logits with shape ``[batch, n_designs]``.
-        """
-        return self.logits(obs.outcomes, obs.designs, mask=obs.mask)
-
-    def design_probabilities_from_observation(self, obs) -> tuple[Tensor, Tensor]:
+    def design_probabilities(
+        self, y_history, design_history, *, mask: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]:
         """Returns exact categorical probabilities and log probabilities.
 
         Args:
-            obs: History containing outcomes, designs, and an optional mask.
+            y_history: Outcome history with shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Design history with shape
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional padding mask with shape ``[*batch_shape, T]``.
 
         Returns:
             A ``(probabilities, log_probabilities)`` tuple, each with shape
-                ``[batch, n_designs]``.
+                ``[*batch_shape, n_designs]``.
         """
-        log_probs = torch.log_softmax(self.logits_from_observation(obs), dim=-1)
+        log_probs = torch.log_softmax(
+            self.logits(y_history, design_history, mask=mask), dim=-1
+        )
         return log_probs.exp(), log_probs
 
 

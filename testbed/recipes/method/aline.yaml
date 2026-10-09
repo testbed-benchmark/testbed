@@ -15,7 +15,7 @@ seed: 0
 pool_size: 200
 
 design_net:
-  _target_: testbed.design_nets.AlineModel
+  _target_: testbed.method_nets.AlineModel
   canonicalize_theta: false
   embedding_dim: 128
   feedforward_dim: 384

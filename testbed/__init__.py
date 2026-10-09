@@ -7,6 +7,7 @@ from . import (
     designers,
     envs,
     inference,
+    method_nets,
     methods,
     metrics,
     tasks,
