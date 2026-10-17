@@ -32,7 +32,3 @@ n_outer: 2_048
 
 # eval
 eval_every: 0  # the final_eval block handles it
-
-wandb:
-  project: pharmacokinetic  # one project per task; methods separate by group
-  group: dad

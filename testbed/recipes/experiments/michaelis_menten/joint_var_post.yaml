@@ -94,7 +94,3 @@ posterior_net:
           - _target_: torch.distributions.transforms.AffineTransform
             loc: 20.0
             scale: 180.0
-
-wandb:
-  project: michaelis_menten  # one project per task; methods separate by group
-  group: joint_var_post

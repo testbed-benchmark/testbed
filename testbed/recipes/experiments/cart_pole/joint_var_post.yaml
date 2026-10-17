@@ -99,7 +99,3 @@ posterior_net:
     theta_sizes: [3]
     transforms:
       - _target_: torch.distributions.transforms.ExpTransform
-
-wandb:
-  project: cart_pole  # one project per task; methods separate by group
-  group: joint_var_post

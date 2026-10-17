@@ -16,7 +16,3 @@ objective:
   n_inner: 8_192  # CES designs score near log(4097), where the sPCE bound saturates
 
 eval_every: 0  # no need to eval during training
-
-wandb:
-  project: constant_elasticity_of_substitution  # one project per task; methods separate by group
-  group: static

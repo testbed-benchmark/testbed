@@ -22,7 +22,3 @@ design_net:
 
 checkpoint_every: 2_500
 eval_every: 0
-
-wandb:
-  project: temporal_discounting  # one project per task; methods separate by group
-  group: aline

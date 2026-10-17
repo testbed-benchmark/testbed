@@ -93,7 +93,3 @@ posterior_net:
     theta_sizes: [2]
     transforms:
       - _target_: torch.distributions.transforms.ExpTransform
-
-wandb:
-  project: stochastic_pendulum  # one project per task; methods separate by group
-  group: joint_var_post

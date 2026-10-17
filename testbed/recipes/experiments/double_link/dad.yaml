@@ -39,7 +39,3 @@ n_outer: 1_024
 
 # eval
 eval_every: 0  # the final_eval block handles it
-
-wandb:
-  project: double_link  # one project per task; methods separate by group
-  group: dad

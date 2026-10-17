@@ -6,7 +6,3 @@ defaults:
   - _self_
 
 eval_every: 0  # no need to eval during training
-
-wandb:
-  project: michaelis_menten  # one project per task; methods separate by group
-  group: static

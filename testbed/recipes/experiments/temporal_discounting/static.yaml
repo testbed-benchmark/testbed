@@ -11,7 +11,3 @@ objective:
   baseline: leave_one_out
 
 eval_every: 0  # no need to eval during training
-
-wandb:
-  project: temporal_discounting  # one project per task; methods separate by group
-  group: static
