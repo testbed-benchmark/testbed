@@ -1,0 +1,39 @@
+# @package _global_
+
+defaults:
+  - /method: dad
+  - override /task: michaelis_menten
+  - _self_
+
+# DAD on the Michaelis-Menten model (T = 20 substrate
+# concentrations).
+#
+
+seed: 0
+
+# checkpointing
+checkpoint_every: 5_000
+
+# designer
+# Condition on the unconstrained designs the policy emits rather than on the
+# concentrations in [0, 400]. The tanh squash makes the two bijective, and the
+# raw values are O(1), so the encoder needs no input normalization.
+use_raw_history: true
+# objective
+objective:
+  name: spce
+  fused: true  # false falls back to the per-step loop
+  n_inner: 2_000  # contrastive samples for sPCE
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false
+# training
+n_train_iter: 200_000
+n_outer: 2_048
+
+# eval
+eval_every: 0  # the final_eval block handles it
+
+wandb:
+  project: michaelis_menten  # one project per task; methods separate by group
+  group: dad

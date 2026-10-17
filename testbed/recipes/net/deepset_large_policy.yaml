@@ -1,13 +1,12 @@
-# DeepSets policy net sized to match net/attentive_policy, for the architecture
-# ablation: the comparison is then sum pooling against attention rather than
-# against a smaller model.
+# DeepSets policy net sized to match net/attentive_policy, so that comparing the
+# two isolates sum pooling against attention rather than against a smaller model.
 #
 # Sized component by component rather than by widening until the totals agree.
 # On location finding the attentive net spends 33,920 parameters on its token
 # MLP and 594,816 on three transformer blocks; phi = [528, 528, 528] -> 128
 # absorbs 628,448 against that 628,736. dim_emb, the readout and the decoder
 # are identical to attentive_policy, so pooling is the only thing that differs.
-# Totals: 645,346 against 662,786, i.e. 0.97x, and 0.97x on every benchmarking
+# Totals: 645,346 against 662,786, i.e. 0.97x, and 0.97x on every other
 # task, since only phi's first layer moves with dim_y and dim_design.
 #
 # Depth is capped at three hidden layers on purpose. Zhang et al. (ICML 2022,

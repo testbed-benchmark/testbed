@@ -7,7 +7,7 @@
 # to match the run count exactly.
 #
 #   sbatch --array=0-4 scripts/reeval.sbatch \
-#       rainml-testbed/location_finding_2src/1dpl3rg2 \
+#       <entity>/location_finding_2src/<sweep_id> \
 #       --n-contrastive 10000000 --n-outer 512 --prefix eval_L1e7
 #
 # Everything after the sweep path is forwarded to scripts/sweep_reeval.py.
@@ -32,8 +32,6 @@ VENV_PATH="${VENV_PATH:-.venv}"
   exit 1
 }
 source "$VENV_PATH/bin/activate"
-
-export WANDB_ENTITY="${WANDB_ENTITY:-rainml-testbed}"
 
 SWEEP=${1:?usage: sbatch --array=0-N scripts/reeval.sbatch <entity>/<project>/<sweep_id> [sweep_reeval.py args]}
 shift

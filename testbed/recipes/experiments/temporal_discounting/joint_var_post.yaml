@@ -12,8 +12,7 @@ defaults:
 # experiments/location_finding_2src/joint_var_post for why the joint variant is
 # used rather than the frozen one.
 #
-# Optimiser settings follow var_post_scorebed_repro.yaml, i.e. ScoreBED's
-# released code for this baseline. Note ScoreBED itself never ran HTD, so only
+# Optimiser settings follow ScoreBED's released code for this baseline. Note ScoreBED itself never ran HTD, so only
 # the method-level settings carry over; everything task-shaped below is taken
 # from experiments/temporal_discounting/dad so the two methods differ only in
 # the objective that trains the policy.

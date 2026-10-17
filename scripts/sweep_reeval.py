@@ -34,7 +34,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVAL_SCRIPT = os.path.join(REPO_ROOT, "scripts", "eval_run.py")
 
 
-def resolve_sweep_path(sweep: str, entity: str, project: str | None) -> str:
+def resolve_sweep_path(sweep: str, entity: str | None, project: str | None) -> str:
     """Expands a bare sweep id into ``<entity>/<project>/<sweep_id>``."""
     if sweep.count("/") == 2:
         return sweep
@@ -42,6 +42,11 @@ def resolve_sweep_path(sweep: str, entity: str, project: str | None) -> str:
         raise SystemExit(
             f"{sweep} is a bare sweep id; pass --project, or give the full "
             f"<entity>/<project>/<sweep_id> path"
+        )
+    if entity is None:
+        raise SystemExit(
+            f"{sweep} is a bare sweep id; pass --entity, set WANDB_ENTITY, or give "
+            f"the full <entity>/<project>/<sweep_id> path"
         )
     return f"{entity}/{project}/{sweep}"
 
@@ -90,8 +95,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--entity",
-        default=os.environ.get("WANDB_ENTITY", "rainml-testbed"),
-        help="Default: $WANDB_ENTITY, else rainml-testbed.",
+        default=os.environ.get("WANDB_ENTITY"),
+        help="Default: $WANDB_ENTITY.",
     )
     parser.add_argument(
         "--project", default=None, help="Required when the sweep id is bare."

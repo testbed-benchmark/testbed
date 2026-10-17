@@ -26,49 +26,17 @@ ENTRY_POINT_RECIPES = [
     "method/var_post",
     "method/joint_var_post",
     "method/static",
-    "experiments/location_finding/rlboed",
-    "experiments/location_finding_2src/actionbed",
-    "experiments/location_finding_2src/dad",
-    "experiments/location_finding_2src/rlboed",
-    "experiments/prey_population/rlboed",
-    "experiments/constant_elasticity_of_substitution/dad",
-    "experiments/constant_elasticity_of_substitution/joint_var_post",
-    "experiments/constant_elasticity_of_substitution/actionbed",
-    "experiments/benchmarking/location_finding_2src/dad",
-    "experiments/benchmarking/location_finding_2src/joint_var_post",
-    "experiments/benchmarking/temporal_discounting/dad",
-    "experiments/benchmarking/temporal_discounting/joint_var_post",
-    "experiments/benchmarking/constant_elasticity_of_substitution/dad",
-    "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post",
-    "experiments/benchmarking/michaelis_menten/dad",
-    "experiments/benchmarking/michaelis_menten/joint_var_post",
-    "experiments/benchmarking/location_finding_2src/joint_var_post_single_gaussian",
-    "experiments/benchmarking/temporal_discounting/joint_var_post_single_gaussian",
-    "experiments/benchmarking/constant_elasticity_of_substitution/joint_var_post_single_gaussian",
-    "experiments/benchmarking/michaelis_menten/joint_var_post_single_gaussian",
-    "experiments/benchmarking/pharmacokinetic/dad",
-    "experiments/benchmarking/pharmacokinetic/joint_var_post",
-    "experiments/benchmarking/pharmacokinetic/joint_var_post_single_gaussian",
-    "experiments/benchmarking/cart_pole/dad",
-    "experiments/benchmarking/cart_pole/joint_var_post",
-    "experiments/benchmarking/cart_pole/joint_var_post_single_gaussian",
-    "experiments/benchmarking/double_link/dad",
-    "experiments/benchmarking/double_link/joint_var_post",
-    "experiments/benchmarking/double_link/joint_var_post_single_gaussian",
-    "experiments/benchmarking/stochastic_pendulum/dad",
-    "experiments/benchmarking/stochastic_pendulum/joint_var_post",
-    "experiments/benchmarking/stochastic_pendulum/joint_var_post_single_gaussian",
-    "experiments/benchmarking/location_finding_2src/static",
-    "experiments/benchmarking/temporal_discounting/static",
-    "experiments/benchmarking/constant_elasticity_of_substitution/static",
-    "experiments/benchmarking/cart_pole/static",
-    "experiments/benchmarking/double_link/static",
-    "experiments/benchmarking/pharmacokinetic/static",
-    "experiments/benchmarking/stochastic_pendulum/static",
-    "experiments/benchmarking/michaelis_menten/static",
 ]
 
-BENCHMARK_TASKS = [
+RECIPES_PATH = Path(RECIPES_DIR)
+
+# Every per-task recipe under experiments/<task>/<method>.yaml is an entry point.
+ENTRY_POINT_RECIPES += sorted(
+    str(path.relative_to(RECIPES_PATH).with_suffix(""))
+    for path in RECIPES_PATH.glob("experiments/*/*.yaml")
+)
+
+TASKS = [
     "cart_pole",
     "constant_elasticity_of_substitution",
     "double_link",
@@ -79,12 +47,7 @@ BENCHMARK_TASKS = [
     "temporal_discounting",
 ]
 
-# One ActionBED recipe per (task, loss); the whole grid is an entry point.
-ACTIONBED_RECIPES = [
-    f"experiments/benchmarking/{task}/actionbed_{loss}"
-    for task in BENCHMARK_TASKS
-    for loss in ("logmse", "mse", "truelogmse")
-]
+ACTIONBED_RECIPES = [f"experiments/{task}/actionbed" for task in TASKS]
 
 # The training loss an action net gets by default, per task: element-wise where
 # the parameters are a plain vector, permutation-invariant where they are a set
@@ -100,18 +63,6 @@ ACTION_LOSSES = {
     "constant_elasticity_of_substitution": "TrueLogMSELoss",
     "temporal_discounting": "TrueLogMSELoss",
 }
-
-ENTRY_POINT_RECIPES += ACTIONBED_RECIPES
-ENTRY_POINT_RECIPES += [f"experiments/{task}/action" for task in ACTION_LOSSES]
-
-
-# Static designs have no design net, and ActionBED runs to a wall-clock budget;
-# both sit outside the shared step-budget configuration below.
-BENCHMARK_RECIPES = [
-    r
-    for r in ENTRY_POINT_RECIPES
-    if "/benchmarking/" in r and not r.endswith("/static") and "/actionbed_" not in r
-]
 
 
 def _compose(recipe):
@@ -263,9 +214,6 @@ def test_joint_var_post_recipe_sets_joint_true():
 
 
 def test_temporal_discounting_var_post_uses_reinforce_and_htd_task():
-    # Not in ENTRY_POINT_RECIPES: its task (HTD) isn't in test_recipe_composes's
-    # allowed task-target set, same reason experiments/temporal_discounting/dad
-    # gets its own standalone test above instead of joining that list.
     cfg = _compose("experiments/temporal_discounting/var_post")
     assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
     assert cfg.objective.name == "barber_agakov_reinforce"
@@ -388,8 +336,7 @@ def test_var_post_recipes_actually_instantiate_their_posterior_net():
         "experiments/constant_elasticity_of_substitution/joint_var_post",
         "experiments/temporal_discounting/var_post",
         "experiments/temporal_discounting/joint_var_post",
-        "experiments/location_finding_2src/joint_var_post",
-        *[r for r in BENCHMARK_RECIPES if r.endswith("/joint_var_post")],
+        *[f"experiments/{task}/joint_var_post" for task in TASKS],
     ]
     for recipe in recipes:
         cfg = _compose(recipe)
@@ -398,63 +345,15 @@ def test_var_post_recipes_actually_instantiate_their_posterior_net():
         assert sum(p.numel() for p in net.parameters()) > 0, recipe
 
 
-# DAD on these tasks OOMs at the suite's 2_048; see their recipes.
-HALF_BATCH_RECIPES = {
-    "experiments/benchmarking/cart_pole/dad",
-    "experiments/benchmarking/double_link/dad",
-}
+# DAD on these tasks OOMs at 2_048 on a 95 GiB card; see their recipes.
+HALF_BATCH_TASKS = {"cart_pole", "double_link"}
 
 
-@pytest.mark.parametrize("recipe", BENCHMARK_RECIPES)
-def test_benchmark_recipes_share_one_configuration(recipe):
-    """The benchmarking suite varies the task and the method, nothing else.
-
-    Its whole point is that a table built from it compares methods rather than
-    architectures or budgets, which holds only while these agree.
-
-    n_train_iter is deliberately not asserted to agree. The shared budget is the
-    wall clock (see the test below); n_train_iter is only the cap that must not
-    bind before it, and how many steps 12h buys differs by an order of magnitude
-    across these tasks. Pinning it to one number is what let recipes end on the
-    iteration limit at ~6h while claiming a 12h budget.
-    """
-    cfg = _compose(recipe)
-
-    assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
-    assert cfg.n_outer == (1_024 if recipe in HALF_BATCH_RECIPES else 2_048)
-    task = recipe.split("/")[-2]
-    assert cfg.wandb.project == f"benchmarking_{task}"
-
-
-def test_benchmark_recipes_share_one_training_budget():
-    """Every benchmark run gets the same wall clock and the same checkpoint cadence.
-
-    Asserted as agreement rather than against fixed numbers, so retuning the
-    budget stays a one-line change per recipe.
-    """
-    budgets = {r: _compose(r).train_time_budget_seconds for r in BENCHMARK_RECIPES}
-    intervals = {r: _compose(r).checkpoint_every for r in BENCHMARK_RECIPES}
-
-    assert len(set(budgets.values())) == 1, budgets
-    assert len(set(intervals.values())) == 1, intervals
-    # A null budget here would mean the suite is iteration-bound again.
-    assert next(iter(budgets.values())) is not None
-
-
-@pytest.mark.parametrize("recipe", ACTIONBED_RECIPES)
-def test_actionbed_benchmark_recipes_share_one_configuration(recipe):
-    """The ActionBED grid varies the task and the loss, nothing else."""
-    cfg = _compose(recipe)
-    task, loss = recipe.split("/")[-2], recipe.split("_")[-1]
-
-    assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
-    assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
-    assert cfg.train_time_budget_seconds == 43_200
-    assert cfg.n_action_warmup_iter == 50_000
-    assert cfg.n_outer == 2_000
-    assert cfg.eval_every == 0  # the final_eval block handles it
-    assert cfg.wandb.project == f"benchmarking_{task}"
-    assert cfg.wandb.group == f"actionbed_{loss}"
+@pytest.mark.parametrize("task", sorted(HALF_BATCH_TASKS))
+def test_long_horizon_dad_recipes_halve_the_batch(task):
+    cfg = _compose(f"experiments/{task}/dad")
+    assert cfg.n_outer == 1_024
+    assert cfg.use_raw_history is True
 
 
 @pytest.mark.parametrize("recipe", ACTIONBED_RECIPES)

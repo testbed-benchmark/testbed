@@ -17,7 +17,7 @@ page still applies.
 | Path | Role |
 | --- | --- |
 | `testbed/recipes/experiments/<task>/<method>.yaml` | The recipe. Declares `wandb.project` (the task) and `wandb.group` (the method). |
-| `sweeps/<task>_<method>.yaml` | The queue: a grid over the seeds still to run. Generated, and committed. |
+| `sweeps/<task>_<method>.yaml` | The queue: a grid over the seeds still to run. Generated on demand. |
 | `scripts/sweep_run.py` | Wrapper the agent invokes once per seed; turns a queue item into Hydra overrides. |
 | `scripts/generate_seed_sweeps.py` | Rebuilds the queue from what W&B says has finished. |
 
@@ -175,7 +175,7 @@ names the run. To sweep learning rate across seeds, write the YAML by hand:
 name: location_finding_2src-actionbed-lr
 program: scripts/sweep_run.py
 method: grid
-entity: rainml-testbed
+entity: your-team
 project: location_finding_2src
 
 parameters:
@@ -230,7 +230,7 @@ The group syntax is what records the choice in `hydra.runtime.choices`, which is
 `scripts/sweep_run.py` finds the entry point to run. Writing `- /method/actionbed`
 instead includes the same file but records no choice, and the wrapper will refuse the
 recipe. Taking it from the config means the filename need not match the method:
-`var_post_scorebed_repro.yaml` correctly runs `testbed/methods/var_post.py`.
+`joint_var_post.yaml` correctly runs `testbed/methods/var_post.py`.
 
 Leave `entity` alone: it stays `null` in `testbed/recipes/wandb/default.yaml` so that
 anyone using TestBED logs to their own account, and `WANDB_ENTITY` supplies yours.

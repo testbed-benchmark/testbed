@@ -1,0 +1,15 @@
+# @package _global_
+
+defaults:
+  - /method: static
+  - override /task: cart_pole
+  - _self_
+
+objective:
+  n_inner: 8_192  # a random design already saturates log(4097)
+
+eval_every: 0  # no need to eval during training
+
+wandb:
+  project: cart_pole  # one project per task; methods separate by group
+  group: static

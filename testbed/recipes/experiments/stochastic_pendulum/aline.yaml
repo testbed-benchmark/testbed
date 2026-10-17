@@ -1,0 +1,21 @@
+# @package _global_
+
+defaults:
+  - /method: aline
+  - override /task: stochastic_pendulum
+  - _self_
+
+# Fixed input scales; outcomes are unbounded and are not clipped.
+# Outcome order: angle, angular velocity.
+design_net:
+  design_center: 0.0
+  design_scale: 1.0
+  outcome_center: 0.0
+  outcome_scale: [3.0, 8.0]
+
+checkpoint_every: 2_500
+eval_every: 0
+
+wandb:
+  project: stochastic_pendulum  # one project per task; methods separate by group
+  group: aline

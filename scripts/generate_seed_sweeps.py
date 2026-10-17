@@ -27,7 +27,7 @@ seed out once.
 
 Usage
 -----
-    export WANDB_ENTITY=rainml-testbed
+    export WANDB_ENTITY=<your-team>
     python scripts/generate_seed_sweeps.py \
         --recipe experiments/location_finding_2src/actionbed
     python scripts/generate_seed_sweeps.py \

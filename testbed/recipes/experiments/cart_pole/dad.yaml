@@ -1,0 +1,42 @@
+# @package _global_
+
+defaults:
+  - /method: dad
+  - override /task: cart_pole
+  - _self_
+
+# DAD on the cart pole (T = 50 force steps).
+
+seed: 0
+
+# checkpointing
+checkpoint_every: 5_000
+
+# designer
+# Condition on the unconstrained designs the policy emits rather than on the
+# forces in [-5, 5]. The tanh squash makes the two bijective, and the raw
+# values are O(1), so the encoder needs no input normalization.
+use_raw_history: true
+# objective
+objective:
+  name: spce
+  fused: true  # false falls back to the per-step loop
+  n_inner: 2_000  # contrastive samples for sPCE
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false
+# training
+# n_outer is halved from the 2_048 the other tasks use, and from what
+# this task's joint_var_post uses. At 2_048 the sPCE backward needs more than
+# the 95 GiB card: training runs out of memory on the first step, holding ~79
+# GiB of activations over the [n_outer * n_inner, T, ...] contrastive scoring.
+# joint_var_post has no contrastive axis, so it fits at 2_048 and is unchanged.
+n_train_iter: 200_000
+n_outer: 1_024
+
+# eval
+eval_every: 0  # the final_eval block handles it
+
+wandb:
+  project: cart_pole  # one project per task; methods separate by group
+  group: dad

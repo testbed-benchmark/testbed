@@ -5,7 +5,7 @@
 # seeds in parallel. Surplus tasks find an empty queue and exit immediately, so
 # the array range never has to match the amount of outstanding work.
 #
-#   sbatch --array=0-4 scripts/agent.sbatch rainml-testbed/location_finding_2src/<sweep_id>
+#   sbatch --array=0-4 scripts/agent.sbatch <entity>/location_finding_2src/<sweep_id>
 #
 # Raise --count (below) when there are more seeds than array tasks, and extend
 # --time to cover count x single-run duration.
@@ -27,8 +27,6 @@ VENV_PATH="${VENV_PATH:-.venv}"
   exit 1
 }
 source "$VENV_PATH/bin/activate"
-
-export WANDB_ENTITY="${WANDB_ENTITY:-rainml-testbed}"
 
 SWEEP=${1:?usage: sbatch --array=0-N scripts/agent.sbatch <entity>/<project>/<sweep_id>}
 

@@ -18,7 +18,7 @@ from testbed.design_objectives import LossReinforce
 from testbed.methods.actionbed import build_trainer, load_checkpoint
 
 RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
-HTD_RECIPE = "experiments/benchmarking/temporal_discounting/actionbed_logmse"
+HTD_RECIPE = "experiments/temporal_discounting/actionbed"
 
 
 def _cfg(**overrides):
@@ -151,16 +151,18 @@ def test_finite_run_still_stops_on_the_iteration_limit(tmp_path):
     assert trainer.stop_reason == "iteration_limit"
 
 
-def test_location_finding_truelogmse_recipe_stops_immediately(tmp_path):
-    """The known-NaN recipe must not spend its wall-clock budget.
+def test_location_finding_truelogmse_stops_immediately(tmp_path):
+    """A known-NaN configuration must not spend its wall-clock budget.
 
     Its Gaussian source prior puts ~50% of theta below zero, so the loss's
     log(theta + eps) is NaN from the first step.
     """
     with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
         cfg = compose(
-            config_name="experiments/benchmarking/location_finding_2src/actionbed_truelogmse",
+            config_name="experiments/location_finding_2src/actionbed",
             overrides=[
+                "loss._target_=testbed.design_objectives.TrueLogMSELoss",
+                "+loss.transform_input=false",
                 "device=cpu",
                 "n_outer=32",
                 "n_action_warmup_iter=5",
