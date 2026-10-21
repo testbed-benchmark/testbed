@@ -2,23 +2,23 @@
 
 # An action net trained on rollouts from a frozen designer:
 #
-#   python testbed/methods/action.py \
-#     --config-name experiments/double_link/action \
-#     designer_run_dir=runs/<a finished double_link run>
+#   python testbed/methods/posthoc_action.py \
+#     --config-name experiments/pharmacokinetic/posthoc_action \
+#     designer_run_dir=runs/<a finished pharmacokinetic run>
 #
 # The run supplies the task, T and the frozen design policy; this supplies the
 # loss to train the action net with, and the losses to report.
 
 defaults:
-  - /method: action
-  - override /task: double_link
+  - /method: posthoc_action
+  - override /task: pharmacokinetic
   - _self_
 
 eval_every: 0  # the final_eval block handles it
 
 wandb:
-  project: double_link  # one project per task; methods separate by group
-  group: action
+  project: pharmacokinetic  # one project per task; methods separate by group
+  group: posthoc_action
 
 # Parameters are a plain vector, so the element-wise loss applies as written.
 loss:

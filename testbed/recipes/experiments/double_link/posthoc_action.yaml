@@ -2,23 +2,23 @@
 
 # An action net trained on rollouts from a frozen designer:
 #
-#   python testbed/methods/action.py \
-#     --config-name experiments/cart_pole/action \
-#     designer_run_dir=runs/<a finished cart_pole run>
+#   python testbed/methods/posthoc_action.py \
+#     --config-name experiments/double_link/posthoc_action \
+#     designer_run_dir=runs/<a finished double_link run>
 #
 # The run supplies the task, T and the frozen design policy; this supplies the
 # loss to train the action net with, and the losses to report.
 
 defaults:
-  - /method: action
-  - override /task: cart_pole
+  - /method: posthoc_action
+  - override /task: double_link
   - _self_
 
 eval_every: 0  # the final_eval block handles it
 
 wandb:
-  project: cart_pole  # one project per task; methods separate by group
-  group: action
+  project: double_link  # one project per task; methods separate by group
+  group: posthoc_action
 
 # Parameters are a plain vector, so the element-wise loss applies as written.
 loss:

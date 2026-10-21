@@ -17,7 +17,7 @@ from testbed.designers import (
     RandomDesigner,
     StaticDesigner,
 )
-from testbed.methods.action import Trainer, adopt_run_task, build_policy_net
+from testbed.methods.posthoc_action import Trainer, adopt_run_task, build_policy_net
 from testbed.tasks import LocationFinding
 
 T = 3

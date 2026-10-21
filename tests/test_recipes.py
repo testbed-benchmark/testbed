@@ -23,7 +23,7 @@ RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
 ENTRY_POINT_RECIPES = [
     "method/dad",
     "method/actionbed",
-    "method/action",
+    "method/posthoc_action",
     "method/rlboed",
     "method/var_post",
     "method/joint_var_post",
@@ -104,7 +104,7 @@ ACTION_LOSSES = {
 }
 
 ENTRY_POINT_RECIPES += ACTIONBED_RECIPES
-ENTRY_POINT_RECIPES += [f"experiments/{task}/action" for task in ACTION_LOSSES]
+ENTRY_POINT_RECIPES += [f"experiments/{task}/posthoc_action" for task in ACTION_LOSSES]
 
 
 # Static designs have no design net, and ActionBED runs to a wall-clock budget;
@@ -167,7 +167,7 @@ def test_actionbed_recipe_wires_design_and_action_nets():
 
 
 def test_action_recipe_wires_a_frozen_designer_and_action_net():
-    cfg = _compose("method/action")
+    cfg = _compose("method/posthoc_action")
     # Designs come from the task's design space until a run dir says otherwise.
     assert cfg.designer._target_ == "testbed.designers.RandomDesigner"
     assert cfg.designer_run_dir is None
@@ -189,7 +189,7 @@ def test_action_recipe_wires_a_frozen_designer_and_action_net():
 
 @pytest.mark.parametrize(("task", "loss"), sorted(ACTION_LOSSES.items()))
 def test_action_recipes_train_on_the_loss_their_task_calls_for(task, loss):
-    cfg = _compose(f"experiments/{task}/action")
+    cfg = _compose(f"experiments/{task}/posthoc_action")
 
     assert cfg.loss._target_ == f"testbed.design_objectives.{loss}"
     assert cfg.wandb.project == task

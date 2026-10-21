@@ -28,7 +28,7 @@ use_raw_history: null
 # loss
 # Element-wise, so it holds for any task. A task whose parameters are a set of
 # exchangeable objects (location finding's sources) wants the sorted or
-# permutation-invariant variant instead; see experiments/<task>/action.yaml.
+# permutation-invariant variant instead; see experiments/<task>/posthoc_action.yaml.
 loss:
   _target_: testbed.design_objectives.MSELoss
   reduction: mean
@@ -64,7 +64,7 @@ final_eval:
   # as (objects, dim_object) -- the sorted and permutation-invariant ones --
   # belong to tasks whose parameters are a set of objects, and the TrueLogMSE
   # variants log theta itself and are NaN wherever it can be negative; both are
-  # added per experiment. See experiments/location_finding_2src/action.yaml.
+  # added per experiment. See experiments/location_finding_2src/posthoc_action.yaml.
   losses:
     mse:
       _target_: testbed.design_objectives.MSELoss

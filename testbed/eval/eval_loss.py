@@ -3,7 +3,7 @@
 The counterpart to `eval_policy.py`: where that scores a design policy by its
 sPCE/sNMC bounds, this scores a designer together with the action net that
 reads its rollouts, by the losses that action incurs. It is what a finished
-`methods.action` run is evaluated with, though nothing here assumes the action
+`methods.posthoc_action` run is evaluated with, though nothing here assumes the action
 net was trained that way -- any designer plus any action net can be scored.
 
 Every loss is evaluated on one shared set of rollouts, so the numbers are

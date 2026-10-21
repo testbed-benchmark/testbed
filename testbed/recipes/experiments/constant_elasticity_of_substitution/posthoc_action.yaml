@@ -2,23 +2,23 @@
 
 # An action net trained on rollouts from a frozen designer:
 #
-#   python testbed/methods/action.py \
-#     --config-name experiments/temporal_discounting/action \
-#     designer_run_dir=runs/<a finished temporal_discounting run>
+#   python testbed/methods/posthoc_action.py \
+#     --config-name experiments/constant_elasticity_of_substitution/posthoc_action \
+#     designer_run_dir=runs/<a finished constant_elasticity_of_substitution run>
 #
 # The run supplies the task, T and the frozen design policy; this supplies the
 # loss to train the action net with, and the losses to report.
 
 defaults:
-  - /method: action
-  - override /task: temporal_discounting
+  - /method: posthoc_action
+  - override /task: constant_elasticity_of_substitution
   - _self_
 
 eval_every: 0  # the final_eval block handles it
 
 wandb:
-  project: temporal_discounting  # one project per task; methods separate by group
-  group: action
+  project: constant_elasticity_of_substitution  # one project per task; methods separate by group
+  group: posthoc_action
 
 # The action net predicts log(theta) and is scored against log of the target,
 # following the ActionBED recipes for this task. Raw-scale losses therefore do
