@@ -9,6 +9,7 @@ from . import (
     design_objectives,
     designers,
     envs,
+    eval,
     inference,
     methods,
     tasks,

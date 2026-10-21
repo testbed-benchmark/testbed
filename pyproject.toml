@@ -27,8 +27,6 @@ dependencies = [
 [project.optional-dependencies]
 full = [
     'matplotlib',
-    'jupyterlab',
-    'notebook',
     'pyro-ppl',
     'wandb',
 ]
