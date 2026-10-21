@@ -342,7 +342,7 @@ def build_policy_nets(cfg, task):
         cfg.action_net,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
-        event_shape_out=task.action_space.event_shape,
+        event_shape_out=task.event_shape_theta,
     )
 
     return design_net, action_net

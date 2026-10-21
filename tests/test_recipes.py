@@ -198,7 +198,7 @@ def test_action_recipes_train_on_the_loss_their_task_calls_for(task, loss):
     # a net trained on log theta is not scored on the raw scale, and only a task
     # with an objects axis is scored permutation-invariantly.
     reported = {k for k, v in cfg.final_eval.losses.items() if v is not None}
-    objects = len(instantiate(cfg.task).action_space.event_shape) > 1
+    objects = len(instantiate(cfg.task).event_shape_theta) > 1
     assert any(loss.replace("Loss", "").lower() in k.replace("_", "") for k in reported)
     assert all(("permutation_invariant" in k) == objects for k in reported)
 
@@ -475,7 +475,7 @@ def test_actionbed_recipes_size_their_action_net_to_the_task(recipe):
 
     y = torch.zeros(2, cfg.T, *task.event_shape_y)
     designs = torch.zeros(2, cfg.T, *task.event_shape_design)
-    assert action_net(y, designs).shape == (2, *task.action_space.event_shape)
+    assert action_net(y, designs).shape == (2, *task.event_shape_theta)
 
 
 def test_ces_posterior_transform_matches_the_task_theta_width():
