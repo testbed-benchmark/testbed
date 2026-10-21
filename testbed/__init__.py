@@ -8,6 +8,5 @@ from . import (
     envs,
     inference,
     methods,
-    metrics,
     tasks,
 )

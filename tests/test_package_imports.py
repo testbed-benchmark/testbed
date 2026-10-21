@@ -11,7 +11,6 @@ SUBPACKAGES = [
     "designers",
     "envs",
     "inference",
-    "metrics",
     "methods",
     "tasks",
 ]
