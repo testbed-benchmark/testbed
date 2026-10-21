@@ -16,6 +16,8 @@ from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
+import testbed  # registers the auto_device resolver
+
 RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
 
 ENTRY_POINT_RECIPES = [
@@ -126,7 +128,7 @@ def test_recipe_composes(recipe):
 
     # Shared `system` group is merged in: device plus a non-missing save_dir so
     # a bare run (no `save_dir=` override) still resolves its run directory.
-    assert cfg.device
+    assert cfg.device in {"cpu", "cuda"}
     assert not OmegaConf.is_missing(cfg, "save_dir")
     assert cfg.save_dir
 
