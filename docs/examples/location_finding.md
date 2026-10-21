@@ -92,7 +92,7 @@ task = LocationFinding(n_sources, dim_theta)
 random_designer = RandomDesigner(task, T)
 ```
 
-To sample from a distribution of your own instead, pass it as `dist`. This can be any {py:class}`pytorch.distributions.Distribution` object, as long as its shape is compatible with the {py:class}`~testbed.tasks.Task`. For instance, if we change our task to `LocationFinding(n_sources=3, dim_theta=5)`, our `design_dist` would need to return samples of shape `[..., 3, 5]`. You may also use a `testbed.core.distributions.Distribution` object.
+To sample from a distribution of your own instead, pass it as `dist`. This can be any {py:class}`torch.distributions.Distribution` object, as long as its shape is compatible with the {py:class}`~testbed.tasks.Task`. For instance, if we change our task to `LocationFinding(n_sources=3, dim_theta=5)`, our `design_dist` would need to return samples of shape `[..., 3, 5]`. You may also use a `testbed.core.distributions.Distribution` object.
 
 ```{code-cell} ipython3
 :tags: [remove-output]
