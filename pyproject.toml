@@ -33,7 +33,7 @@ full = [
     'wandb',
 ]
 wandb = ['wandb']
-dev = ["pytest", "pre-commit", "ruff", 'rich']
+dev = ["pytest", "pre-commit", "ruff"]
 docs = [
     "sphinx", 
     "sphinx-autoapi", 
