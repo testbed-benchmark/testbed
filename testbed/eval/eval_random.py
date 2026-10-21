@@ -22,7 +22,7 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from testbed.designers import RandomDesigner
-from testbed.eval import eval_spce_snmc
+from testbed.eval.base import eval_spce_snmc
 
 
 def set_seed(seed):
