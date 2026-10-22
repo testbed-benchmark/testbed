@@ -1,5 +1,7 @@
 """TestBED."""
 
+from importlib.metadata import version
+
 import torch
 from omegaconf import OmegaConf
 
@@ -14,6 +16,9 @@ from . import (
     methods,
     tasks,
 )
+
+__version__ = version("testbed")
+del version
 
 # Lets recipes write `device: ${auto_device:}`.
 OmegaConf.register_new_resolver(
