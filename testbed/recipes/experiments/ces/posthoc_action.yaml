@@ -2,7 +2,7 @@
 
 defaults:
   - /method: posthoc_action
-  - override /task: constant_elasticity_of_substitution
+  - override /task: ces
   - _self_
 
 eval_every: 0

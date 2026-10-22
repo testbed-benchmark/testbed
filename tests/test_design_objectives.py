@@ -3,11 +3,11 @@
 import torch
 
 from testbed.design_objectives import PCE
-from testbed.tasks import HyperbolicTemporalDiscounting
+from testbed.tasks import TemporalDiscounting
 
 
 def _make_task():
-    return HyperbolicTemporalDiscounting()
+    return TemporalDiscounting()
 
 
 def test_sample_joint_keeps_batch_dim_when_total_samples_is_one():

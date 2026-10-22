@@ -8,7 +8,7 @@ import torch
 from testbed.design_objectives import NMC, PCE
 from testbed.designers import SequentialDesigner
 from testbed.inference.is_sampler import run_importance_sampling
-from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
+from testbed.tasks import LocationFinding, TemporalDiscounting
 
 
 def _make_task():
@@ -86,7 +86,7 @@ def test_sequential_designer_matches_pre_refactor_reference():
 
 
 def test_raw_design_history_matches_forward_transform():
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     objective = PCE(task, n_outer=4, n_inner=4)
     designer = SequentialDesigner(task, T=2, objective=objective, lr=1e-2, n_step_opt=3)
 
@@ -101,9 +101,9 @@ def test_raw_design_history_matches_forward_transform():
 
 
 def test_transform_designs_false_opts_out():
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     # With transform_designs=False, the raw optimized tensor (init ~N(0,1))
-    # is used directly as the design, which won't satisfy HTDDesignSpace's
+    # is used directly as the design, which won't satisfy TDDesignSpace's
     # real domain constraints (D1 > 0, 0 < R0 < 100) -- disable validation
     # since this test is only about the designer-level opt-out.
     task.validate_designs = False

@@ -12,11 +12,11 @@ from testbed.designers import (
     RandomDesigner,
     StaticDesigner,
 )
-from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
+from testbed.tasks import LocationFinding, TemporalDiscounting
 
 
 def _htd():
-    return HyperbolicTemporalDiscounting()
+    return TemporalDiscounting()
 
 
 def _policy_designer(task, **kwargs):

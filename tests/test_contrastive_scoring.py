@@ -19,12 +19,12 @@ import torch
 from testbed.core.rollout import Rollout
 from testbed.design_objectives.contrastive import contrastive_logsumexps
 from testbed.tasks import CES, LocationFinding, StochasticPendulum
-from testbed.tasks.hyperbolic_temporal_discounting import HyperbolicTemporalDiscounting
+from testbed.tasks.temporal_discounting import TemporalDiscounting
 
 MEMORYLESS_TASKS = {
     "location_finding": lambda: LocationFinding(n_sources=2, dim_theta=2),
     "ces": CES,
-    "htd": HyperbolicTemporalDiscounting,
+    "htd": TemporalDiscounting,
 }
 
 # The compiled loop is task-agnostic and compiling it dominates test time, so

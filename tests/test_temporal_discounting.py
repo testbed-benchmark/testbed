@@ -8,12 +8,12 @@ from torch.distributions import Bernoulli
 
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.designers import PolicyDesigner
-from testbed.tasks import HyperbolicTemporalDiscounting
-from testbed.tasks.hyperbolic_temporal_discounting import HTDDesignSpace, HTDPrior
+from testbed.tasks import TemporalDiscounting
+from testbed.tasks.temporal_discounting import TDDesignSpace, TDPrior
 
 
 def _make_task(**kwargs):
-    return HyperbolicTemporalDiscounting(**kwargs)
+    return TemporalDiscounting(**kwargs)
 
 
 def _make_inputs(b=64, seed=0):
@@ -37,7 +37,7 @@ def test_event_shapes_and_flags():
 
 def test_task_uses_default_prior():
     task = _make_task()
-    assert isinstance(task.prior, HTDPrior)
+    assert isinstance(task.prior, TDPrior)
     assert torch.allclose(task.prior.k_loc, torch.tensor(-4.25))
     assert torch.allclose(task.prior.k_scale, torch.tensor(1.5))
     assert torch.allclose(task.prior.alpha_scale, torch.tensor(2.0))
@@ -51,7 +51,7 @@ def test_prior_sample_shape_and_support():
 
 
 def test_prior_logprob_matches_lognormal_and_halfnormal():
-    prior = HTDPrior()
+    prior = TDPrior()
     reference_k = torch.distributions.LogNormal(-4.25, 1.5)
     reference_alpha = torch.distributions.HalfNormal(2.0)
 
@@ -174,7 +174,7 @@ def test_outcome_logp_normalized():
 
 def test_task_computes_htd_design_space_from_prior():
     task = _make_task()
-    assert isinstance(task.design_space, HTDDesignSpace)
+    assert isinstance(task.design_space, TDDesignSpace)
     expected = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
     assert task.design_space.log_k_mean == pytest.approx(expected)
 
@@ -182,7 +182,7 @@ def test_task_computes_htd_design_space_from_prior():
 def test_htd_design_space_transform():
     # Raw (x_d, x_r) map to D_1 = exp(x_d - log_k_mean), R_0 = 100 * sigmoid(x_r).
     log_k_mean = -3.125
-    space = HTDDesignSpace(log_k_mean=log_k_mean)
+    space = TDDesignSpace(log_k_mean=log_k_mean)
     raw = torch.tensor([[0.0, 0.0], [1.0, 2.0]])
 
     design = space.to_design(raw)
@@ -240,7 +240,7 @@ def test_history_logp_rejects_malformed_theta():
 
 
 def _invalid_design(b=4):
-    # D_1 <= 0 violates HTDDesignSpace's domain (D_1 > 0).
+    # D_1 <= 0 violates TDDesignSpace's domain (D_1 > 0).
     return torch.stack([torch.full((b,), -1.0), torch.full((b,), 50.0)], dim=-1)
 
 

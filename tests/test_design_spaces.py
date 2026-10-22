@@ -7,7 +7,7 @@ from testbed.core.design_spaces import (
     DesignSpace,
     FiniteDesignSpace,
 )
-from testbed.tasks.hyperbolic_temporal_discounting import HTDDesignSpace
+from testbed.tasks.temporal_discounting import TDDesignSpace
 
 
 class PositiveSpace(DesignSpace):
@@ -216,7 +216,7 @@ def test_box_log_det_matches_autograd():
 
 
 def test_htd_log_det_matches_autograd():
-    space = HTDDesignSpace(log_k_mean=-3.0)
+    space = TDDesignSpace(log_k_mean=-3.0)
     raw = torch.tensor([0.7, -0.4])
 
     assert torch.allclose(space._log_det_jacobian(raw), _autograd_log_det(space, raw))
@@ -413,12 +413,12 @@ def test_finite_design_space_supports_scalar_designs():
 
 
 # ---------------------------------------------------------------------------
-# HTDDesignSpace
+# TDDesignSpace
 # ---------------------------------------------------------------------------
 
 
 def test_htd_design_space_inherits_the_base_shape_check():
-    space = HTDDesignSpace()
+    space = TDDesignSpace()
 
     assert space.event_shape == torch.Size([2])
     assert space.contains(torch.tensor([[1.0, 50.0], [2.0, 25.0]]))
@@ -428,7 +428,7 @@ def test_htd_design_space_inherits_the_base_shape_check():
 def test_htd_design_space_domain_is_closed():
     # Closed, matching Step-DAD: exp and sigmoid saturate onto the boundary in
     # float32, and the likelihood is well defined there.
-    space = HTDDesignSpace()
+    space = TDDesignSpace()
 
     assert space.contains(torch.tensor([0.0, 50.0]))  # D_1 = 0 is allowed
     assert space.contains(torch.tensor([1.0, 0.0]))  # R_0 = 0 is allowed
@@ -441,7 +441,7 @@ def test_htd_design_space_domain_is_closed():
 
 def test_htd_sample_lands_in_the_space():
     torch.manual_seed(0)
-    space = HTDDesignSpace(log_k_mean=-3.0)
+    space = TDDesignSpace(log_k_mean=-3.0)
 
     assert space.contains(space.sample((256,)))
 
@@ -451,7 +451,7 @@ def test_htd_to_design_survives_float_saturation():
     # float32 (from raw around -104 and +17), which a DAD policy net reaches
     # routinely. Those designs must stay valid and finite -- they used to crash
     # training against a strict domain.
-    space = HTDDesignSpace(log_k_mean=-3.125)
+    space = TDDesignSpace(log_k_mean=-3.125)
     extreme = torch.tensor(
         [[-200.0, -200.0], [-120.0, -120.0], [20.0, 20.0], [200.0, 200.0]]
     )
@@ -469,7 +469,7 @@ def test_htd_to_design_gradients_stay_finite_when_saturated():
     # Regression: bounding D_1 by clamping exp's *output* makes the backward
     # pass compute 0 * inf = nan, which silently poisoned the policy net a few
     # thousand steps into DAD training. The bound goes on the exponent instead.
-    space = HTDDesignSpace(log_k_mean=-3.125)
+    space = TDDesignSpace(log_k_mean=-3.125)
     raw = torch.tensor(
         [[-200.0, -200.0], [0.0, 0.0], [200.0, 200.0]], requires_grad=True
     )
@@ -484,7 +484,7 @@ def test_htd_project_output_is_contained():
     # requires the open (0, 100), so a projected design failed validation --
     # BEDEnv projects and then validates, so this raised on every step whose
     # design fell outside the domain.
-    space = HTDDesignSpace()
+    space = TDDesignSpace()
     outside = torch.tensor([[5.0, -20.0], [1.0, 500.0], [-3.0, 100.0]])
 
     projected = space.project(outside)
@@ -493,7 +493,7 @@ def test_htd_project_output_is_contained():
 
 
 def test_htd_to_design_round_trips():
-    space = HTDDesignSpace(log_k_mean=-3.0)
+    space = TDDesignSpace(log_k_mean=-3.0)
     raw = torch.randn(16, 2)
 
     assert torch.allclose(space.to_raw(space.to_design(raw)), raw, atol=1e-4)

@@ -4,7 +4,7 @@
 T: 10
 
 task:
-  _target_: testbed.tasks.PharmacoKinetic
+  _target_: testbed.tasks.Pharmacokinetic
   mult_noise_scale: 0.1  # epsilon ~ N(0, 0.01), so sd 0.1
   add_noise_scale: 0.31622776601683794   # eta ~ N(0, 0.1), so sd sqrt(0.1)
   decay_const: 400.0  # D_V

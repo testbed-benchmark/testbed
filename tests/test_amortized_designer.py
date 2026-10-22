@@ -10,11 +10,11 @@ from testbed.design_nets import (
     GaussianPolicyNet,
 )
 from testbed.designers import PolicyDesigner
-from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
+from testbed.tasks import LocationFinding, TemporalDiscounting
 
 
 def _make_task():
-    return HyperbolicTemporalDiscounting()
+    return TemporalDiscounting()
 
 
 def _make_policy_net(task):
@@ -45,7 +45,7 @@ def test_default_transform_designs_matches_task_design_space():
     torch.testing.assert_close(
         task.design_space.to_design(raw_design_history), rollout.design_history
     )
-    # HTDDesignSpace.to_design is a real (non-identity) transform.
+    # TDDesignSpace.to_design is a real (non-identity) transform.
     assert not torch.allclose(raw_design_history, rollout.design_history)
 
 
@@ -79,7 +79,7 @@ def test_transform_designs_false_opts_out():
     torch.manual_seed(0)
     task = _make_task()
     # With transform_designs=False, the net's raw forward output is used
-    # directly as the design, which won't satisfy HTDDesignSpace's real
+    # directly as the design, which won't satisfy TDDesignSpace's real
     # domain constraints (D1 > 0, 0 < R0 < 100) -- disable validation since
     # this test is only about the designer-level opt-out.
     task.validate_designs = False
@@ -124,7 +124,7 @@ def test_categorical_policy_physical_proposals_bypass_task_transform():
     )
 
     # CategoricalPolicyNet returns an element of its finite physical space;
-    # applying HTDDesignSpace.to_design here would alter both its action and
+    # applying TDDesignSpace.to_design here would alter both its action and
     # its categorical log-mass.
     torch.testing.assert_close(design, raw_design)
     assert policy_space.contains(design)

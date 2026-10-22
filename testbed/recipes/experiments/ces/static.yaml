@@ -2,7 +2,7 @@
 
 defaults:
   - /method: static
-  - override /task: constant_elasticity_of_substitution
+  - override /task: ces
   - _self_
 
 # The outcome is censored, so train with REINFORCE.

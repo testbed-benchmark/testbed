@@ -46,10 +46,10 @@ from testbed.designers import (
 )
 from testbed.tasks import (
     CES,
-    HyperbolicTemporalDiscounting,
     LinearRegression,
     LocationFinding,
     MichaelisMenten,
+    TemporalDiscounting,
 )
 
 # ============================================================================
@@ -58,7 +58,7 @@ from testbed.tasks import (
 
 
 def _make_task():
-    return HyperbolicTemporalDiscounting()
+    return TemporalDiscounting()
 
 
 def _make_design_net(task):
@@ -1006,7 +1006,7 @@ def test_posterior_nll_inherits_the_nets_canonicalization():
 
 
 def test_canonicalize_theta_requires_an_object_axis():
-    task = HyperbolicTemporalDiscounting()  # event_shape_theta == [2]
+    task = TemporalDiscounting()  # event_shape_theta == [2]
     with pytest.raises(ValueError, match="exchangeable object axis"):
         DeepSetVariationalPosteriorNet(
             task.event_shape_y,
@@ -1124,9 +1124,8 @@ def test_myopic_objective_drives_a_sequential_designer():
 def _ces_transform():
     """The CES map: 4 unconstrained coordinates -> (rho, alpha_1..3, u).
 
-    Mirrors the transform in experiments/constant_elasticity_of_substitution/
-    joint_var_post.yaml, including the 0.01 rho floor that matches
-    CESPrior.sample's squash.
+    Mirrors the transform in experiments/ces/joint_var_post.yaml, including
+    the 0.01 rho floor that matches CESPrior.sample's squash.
     """
     return BlockTransform(
         transforms=[
@@ -1475,7 +1474,7 @@ def test_htd_transform_round_trips_on_real_prior_draws():
     raw = torch.randn(64, 2)
     assert torch.allclose(transform.inv(transform(raw)), raw, atol=1e-5)
 
-    theta = HyperbolicTemporalDiscounting().sample_prior(2_000)
+    theta = TemporalDiscounting().sample_prior(2_000)
     assert torch.allclose(transform(transform.inv(theta)), theta, atol=1e-5)
     assert torch.isfinite(transform.inv(theta)).all()
 
@@ -1488,7 +1487,7 @@ def test_htd_posterior_pushforward_normalises():
     because HalfNormal.log_prob rejects negatives outright.
     """
     torch.manual_seed(0)
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     transform = _htd_transform()
 
     raw = transform.inv(task.sample_prior(20_000))
@@ -1512,7 +1511,7 @@ def test_htd_constrained_posterior_keeps_k_positive():
     is the accepted cost of not putting alpha through a log.
     """
     torch.manual_seed(0)
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     net = _make_htd_posterior(task)
     y_history, design_history = _htd_history(task, b=8)
 
@@ -1531,7 +1530,7 @@ def test_htd_log_prob_is_tame_for_a_near_zero_alpha():
     an ordinary point, so log_prob must stay close to that of a central alpha.
     """
     torch.manual_seed(0)
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     net = _make_htd_posterior(task)
     y_history, design_history = _htd_history(task, b=2)
 
@@ -1547,7 +1546,7 @@ def test_htd_log_prob_is_tame_for_a_near_zero_alpha():
 
 def test_htd_barber_agakov_gain_is_finite_for_an_untrained_posterior():
     torch.manual_seed(0)
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     objective = BarberAgakov(task, _make_htd_posterior(task))
     y_history, design_history = _htd_history(task, b=512)
     rollout = Rollout(

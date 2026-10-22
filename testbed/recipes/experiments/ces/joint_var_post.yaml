@@ -2,7 +2,7 @@
 
 defaults:
   - /method: var_post
-  - override /task: constant_elasticity_of_substitution
+  - override /task: ces
   - _self_
 
 # Joint variational posterior (Foster et al. 2020): the posterior and the

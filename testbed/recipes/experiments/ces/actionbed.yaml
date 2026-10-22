@@ -2,7 +2,7 @@
 
 defaults:
   - /method: actionbed
-  - override /task: constant_elasticity_of_substitution
+  - override /task: ces
   - override /net@action_net: null
   - _self_
 

@@ -23,7 +23,7 @@ DELAYED_REWARD = 100.0
 _D1_FLOOR = 1e-30
 
 
-class HTDDesignSpace(DesignSpace):
+class TDDesignSpace(DesignSpace):
     r"""Design space for HTD: :math:`D_1 \ge 0` and :math:`0 \le R_0 \le 100`.
 
     Supports the raw<->design reparametrization
@@ -46,7 +46,7 @@ class HTDDesignSpace(DesignSpace):
 
     def __repr__(self) -> str:
         """Returns a compact representation."""
-        return f"HTDDesignSpace(log_k_mean={self.log_k_mean})"
+        return f"TDDesignSpace(log_k_mean={self.log_k_mean})"
 
     def sample(self, batch_shape=(), *, device=None) -> Tensor:
         """Samples a standard normal raw value and maps it forward."""
@@ -111,7 +111,7 @@ class HTDDesignSpace(DesignSpace):
         return log_det_D1 + log_det_R0
 
 
-class HTDPrior(Distribution):
+class TDPrior(Distribution):
     r"""Prior over the discount rate and choice-noise scale :math:`(k, \alpha)`.
 
     Follows the settings in the DAD paper, Appendix D.2
@@ -194,7 +194,7 @@ class HTDPrior(Distribution):
         return logp
 
 
-class HyperbolicTemporalDiscounting(Task):
+class TemporalDiscounting(Task):
     r"""Hyperbolic temporal-discounting task.
 
     A participant chooses between a delayed reward of 100 available after
@@ -235,9 +235,9 @@ class HyperbolicTemporalDiscounting(Task):
             from: report EIG at ``temperature=0`` to stay comparable with the
             discrete model (default: 0.0).
         prior (Distribution, optional):
-            Prior over parameters. If None, the default HTDPrior is used.
+            Prior over parameters. If None, the default TDPrior is used.
         design_space (DesignSpace, optional):
-            Controls the design parametrization. If None, the default HTDDesignSpace is used.
+            Controls the design parametrization. If None, the default TDDesignSpace is used.
     """
 
     @property
@@ -257,11 +257,11 @@ class HyperbolicTemporalDiscounting(Task):
     ) -> None:
         """Initializes the HTD task."""
         if prior is None:
-            prior = HTDPrior()
+            prior = TDPrior()
 
         if design_space is None:
             log_k_mean = float(prior.k_loc + 0.5 * prior.k_scale**2)
-            design_space = HTDDesignSpace(log_k_mean=log_k_mean)
+            design_space = TDDesignSpace(log_k_mean=log_k_mean)
 
         # If temperature=0, we do not have reparametrised sampling
         # Otherwise, uses a relaxed categorical at sampling time.
@@ -295,7 +295,7 @@ class HyperbolicTemporalDiscounting(Task):
     def __repr__(self) -> str:
         """Returns a compact representation."""
         return (
-            f"HyperbolicTemporalDiscounting(exponent={self.exponent}, "
+            f"TemporalDiscounting(exponent={self.exponent}, "
             f"outer_exponent={self.outer_exponent})"
         )
 
