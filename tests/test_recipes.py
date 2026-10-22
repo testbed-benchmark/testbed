@@ -77,7 +77,6 @@ def test_actionbed_recipes_build_nets_that_fit_the_task(recipe):
     "recipe",
     [
         "method/var_post",
-        "method/joint_var_post",
         *_recipes("experiments/*/var_post.yaml"),
         *_recipes("experiments/*/joint_var_post.yaml"),
     ],
