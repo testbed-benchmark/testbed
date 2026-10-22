@@ -31,13 +31,13 @@ You can install an editable version of the current library as follows:
 ```
 git clone git@github.com:testbed-benchmark/testbed.git
 cd testbed
-pip install -e .[full,dev,docs]
+pip install -e ".[full,dev,docs]"
 ```
 
 The core library (tasks, designers, design nets and objectives) needs only PyTorch. The training methods (`testbed.methods`), their Hydra entry points (`python -m testbed.cli.<method>`) and the checkpoint evaluators in `testbed.eval` additionally need [Hydra](https://hydra.cc/), which is opt-in through the `train` extra (also included in `full`):
 
 ```
-pip install -e .[train]
+pip install -e ".[train]"
 ```
 
 Stable Hydra (1.3) cannot run its command line on Python 3.14, so use Python 3.13 or earlier to launch training runs.
@@ -51,7 +51,7 @@ conda create -n testbed python=3.11
 conda activate testbed
 git clone git@github.com:testbed-benchmark/testbed.git
 cd testbed
-pip install -e .[full,dev]
+pip install -e ".[full,dev]"
 ```
 
 To do a basic check of your installation, run `pytest`. A more extensive test can be run with `python tests/manual/location_finding.py` (nb: this second test requires the `stepdad` [package](https://github.com/marcelhedman/stepdad/tree/master)).

@@ -57,8 +57,6 @@ filterwarnings = [
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning:torch.jit._script",
 ]
 
-[tool.ruff]
-extend-exclude = ["testbed/notebooks/**/*.ipynb"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*.py" = ["F401", "D"]

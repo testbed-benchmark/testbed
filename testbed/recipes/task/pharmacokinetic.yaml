@@ -1,7 +1,6 @@
 # @package _global_
 
-# Task defaults, from Appendix D.5 of https://arxiv.org/abs/2111.02329.
-# T = 10 patients here
+# From Appendix D.5 of https://arxiv.org/abs/2111.02329.
 T: 10
 
 task:

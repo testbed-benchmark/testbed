@@ -13,5 +13,4 @@ log_scale_max: 3.0
 init_scale: 1.0
 theta_loc: null
 theta_scale: null
-# Combination recipes can enable this for tasks with exchangeable object axes.
-canonicalize_theta: false
+canonicalize_theta: false  # enable for tasks whose parameters are exchangeable objects

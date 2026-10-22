@@ -1,0 +1,9 @@
+# @package _global_
+
+defaults:
+  - /method: aline
+  - override /task: pharmacokinetic
+  - _self_
+
+checkpoint_every: 2_500
+eval_every: 0

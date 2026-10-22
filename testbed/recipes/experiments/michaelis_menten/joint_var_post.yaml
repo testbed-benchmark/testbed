@@ -1,0 +1,73 @@
+# @package _global_
+
+defaults:
+  - /method: var_post
+  - override /task: michaelis_menten
+  - _self_
+
+# Joint variational posterior (Foster et al. 2020): the posterior and the
+# policy are co-optimised on the Barber-Agakov bound, with no pretraining
+# phase. Optimiser settings follow ScoreBED's released code.
+
+seed: 0
+
+checkpoint_every: 5_000
+
+joint: true
+
+objective:
+  name: barber_agakov
+  fused: true
+
+n_posterior_pretrain_iter: 0
+n_posterior_outer: 2_048
+pretrain_design_distr: null
+
+n_train_iter: 200_000
+n_outer: 2_048
+
+lr: 1e-5
+betas: [0.9, 0.999]
+grad_clip: 1.0
+policy_cosine_alpha: 5e-6
+ema_decay: 0.99
+
+posterior_lr: 1e-3
+posterior_betas: [0.9, 0.999]
+posterior_grad_clip: 1.0
+posterior_warmup_frac: 0.001
+posterior_lr_floor: 1e-6
+
+eval_every: 0
+
+# The mixture is fitted over unconstrained coordinates and pushed through a
+# sigmoid onto the Uniform(20, 200) prior's support.
+posterior_net:
+  _target_: testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet
+  n_components: 10
+  encoder_dim_h: 256
+  dim_emb: 128
+  num_heads: 4
+  num_blocks: 3
+  trunk_dim_h: null
+  trunk_activation:
+    _target_: torch.nn.GELU
+    _partial_: true
+  log_scale_min: -7.0
+  log_scale_max: 3.0
+  init_scale: 1.0
+  theta_loc: null
+  theta_scale: null
+  canonicalize_theta: false
+  # loc/scale must match MichaelisMentenPrior's bounds.
+  transform:
+    _target_: testbed.design_nets.BlockTransform
+    raw_sizes: [2]
+    theta_sizes: [2]
+    transforms:
+      - _target_: torch.distributions.transforms.ComposeTransform
+        parts:
+          - _target_: torch.distributions.transforms.SigmoidTransform
+          - _target_: torch.distributions.transforms.AffineTransform
+            loc: 20.0
+            scale: 180.0

@@ -1,4 +1,4 @@
-enabled: false  # opt-in; flip to true or override on the CLI
+enabled: false
 project: testbed
 entity: null  # your wandb team/user; null uses the default
 mode: online  # online | offline | disabled

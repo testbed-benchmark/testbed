@@ -12,6 +12,12 @@ task:
     high: 100.0
     event_shape: [6]
 
-wandb:
-  project: constant_elasticity_of_substitution
-  group: aline
+# Map physical designs [0, 100] and outcomes [0, 1] to [-1, 1].
+design_net:
+  design_center: 50.0
+  design_scale: 50.0
+  outcome_center: 0.5
+  outcome_scale: 0.5
+
+checkpoint_every: 2_500
+eval_every: 0

@@ -1,0 +1,23 @@
+# @package _global_
+
+defaults:
+  - /method: aline
+  - override /task: temporal_discounting
+  - _self_
+
+task:
+  design_space:
+    _target_: testbed.core.design_spaces.BoxDesignSpace
+    low: [0.5, 1.0]
+    high: [200.0, 99.0]
+    event_shape: [2]
+
+# Map delay [0.5, 200], reward [1, 99], and binary outcomes to [-1, 1].
+design_net:
+  design_center: [100.25, 50.0]
+  design_scale: [99.75, 49.0]
+  outcome_center: 0.5
+  outcome_scale: 0.5
+
+checkpoint_every: 2_500
+eval_every: 0

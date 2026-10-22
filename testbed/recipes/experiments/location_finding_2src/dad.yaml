@@ -5,8 +5,11 @@ defaults:
   - override /task: location_finding_2src
   - _self_
 
+seed: 0
 
+checkpoint_every: 5_000
 
-wandb:
-  project: location_finding_2src  # one project per task; methods separate by group
-  group: dad
+objective:
+  n_inner: 2_000
+
+n_train_iter: 200_000

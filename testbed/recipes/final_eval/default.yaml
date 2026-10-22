@@ -1,6 +1,5 @@
-# evaluation of the saved checkpoint after training, run by scripts/eval_run.py.
-# Distinct from `eval_every`/`n_outer_eval`, which control periodic eval during
-# training.
+# Evaluation of the saved checkpoint after training. Separate from
+# `eval_every`/`n_outer_eval`, which control periodic eval during training.
 enabled: true
 checkpoint: final_step.pt
 n_outer: 2_048

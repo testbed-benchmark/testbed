@@ -1,0 +1,17 @@
+# @package _global_
+
+defaults:
+  - /method: static
+  - override /task: constant_elasticity_of_substitution
+  - _self_
+
+# The outcome is censored, so train with REINFORCE.
+task:
+  reparameterize_outcomes: false
+
+objective:
+  name: reinforce
+  baseline: leave_one_out
+  n_inner: 8_192  # 4_096 saturates: designs score near log(4097)
+
+eval_every: 0
