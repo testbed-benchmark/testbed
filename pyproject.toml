@@ -44,6 +44,9 @@ docs = [
 [tool.setuptools.packages.find]
 include = ["testbed*"]
 
+[tool.setuptools.package-data]
+testbed = ["recipes/**/*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = [
