@@ -191,8 +191,8 @@ def test_temporal_discounting_dad_preserves_objective_defaults():
     assert cfg.task._target_ == "testbed.tasks.HyperbolicTemporalDiscounting"
     assert cfg.objective.reparameterize_policy is False
     assert cfg.objective.requires_policy_log_probs is False
-    # The paper's HTD encoder gates two heads with the binary outcome.
-    assert cfg.design_net._target_ == "testbed.design_nets.GatedDeepSetPolicyNet"
+    # The default attentive net, so methods are compared rather than architectures.
+    assert cfg.design_net._target_ == "testbed.design_nets.AttentivePolicyNet"
     assert cfg.use_raw_history is True
 
 
@@ -228,7 +228,7 @@ def test_two_source_actionbed_preserves_grad_clip_default():
     cfg = _compose("experiments/location_finding_2src/actionbed")
     assert cfg.task.n_sources == 2
     assert cfg.grad_clip is None
-    assert cfg.eval_every == 100
+    assert cfg.eval_every == 0
     assert cfg.n_outer_eval == 2_048
     assert cfg.action_net._target_ == "testbed.design_nets.MLPPolicyNet"
     assert "encoder_dim_h" not in cfg.action_net

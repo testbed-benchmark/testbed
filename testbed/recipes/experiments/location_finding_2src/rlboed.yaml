@@ -5,6 +5,9 @@ defaults:
   - override /task: location_finding_2src
   - _self_
 
+# Attention actor over the outcome history, as in the benchmark runs.
+actor_architecture: attention
+
 # Reference range used to normalize outcome histories for RL-BOED's policy and
 # critic networks. This does not constrain or clip task outcomes; observations
 # outside the range are simply mapped outside [0, 1].
@@ -22,7 +25,10 @@ task:
       - ${task.dim_theta}
 
 sac:
-  num_training_iterations: 20_001
+  num_training_iterations: 40_000
+  # Caps the per-iteration entropy anneal at the drop the reference reaches
+  # in 20_001 iterations (20_001 / 1.4e4).
+  entropy_anneal_total: 1.429
 
 wandb:
   project: location_finding_2src  # one project per task; methods separate by group

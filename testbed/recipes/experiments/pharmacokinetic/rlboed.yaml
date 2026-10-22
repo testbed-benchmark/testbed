@@ -5,6 +5,9 @@ defaults:
   - override /task: pharmacokinetic
   - _self_
 
+# Attention actor over the outcome history, as in the benchmark runs.
+actor_architecture: attention
+
 # Use the task's standard sampling-time box [0, 24] hours.
 # Normalization reference only: the log-normal prior and Gaussian observations
 # are unbounded, and observations outside this range are not clipped.
@@ -16,7 +19,10 @@ reward:
   n_contrastive: 100_000
 
 sac:
-  num_training_iterations: 20_001
+  num_training_iterations: 40_000
+  # Caps the per-iteration entropy anneal at the drop the reference reaches
+  # in 20_001 iterations (20_001 / 1.4e4).
+  entropy_anneal_total: 1.429
   buffer_size: 1_000_000
   tau: 0.005
   policy_lr: 0.0003

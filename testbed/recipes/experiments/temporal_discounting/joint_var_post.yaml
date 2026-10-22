@@ -3,7 +3,6 @@
 defaults:
   - /method: var_post
   - override /task: temporal_discounting
-  - override /net@design_net: null
   - _self_
 
 # Joint variational posterior (Foster et al. 2020) on hyperbolic temporal
@@ -18,6 +17,10 @@ defaults:
 # the objective that trains the policy.
 
 seed: 0
+
+# checkpointing
+checkpoint_every: 5_000
+
 joint: true
 # designer
 # No use_raw_history key here: unlike dad, var_post.py derives it from the net
@@ -36,12 +39,12 @@ objective:
 
 # no pretraining phase
 n_posterior_pretrain_iter: 0
-n_posterior_outer: 1_024  # unused without pretraining; kept for completeness
+n_posterior_outer: 2_048  # unused without pretraining; kept for completeness
 pretrain_design_distr: null
 
 # policy training
 n_train_iter: 200_000
-n_outer: 1_024  # batch size, matching dad on this task
+n_outer: 2_048  # batch size, matching dad on this task
 
 # policy optimizer: Adam, grad clip 1.0 (global norm),
 # cosine decay from 1e-5 to 5e-6 over the run.
@@ -62,21 +65,7 @@ posterior_lr_floor: 1e-6
 # eval
 eval_every: 0  # eval is expensive here; the final_eval block handles it
 
-# design policy network: the same architecture dad uses on this task, so the
-# methods differ only in the objective. Encoder [2 -> 256 -> 256 -> 2 x 16]
-# over the design alone, its two heads mixed by the binary outcome, + sum
-# pooling; emitter [16 -> 256 -> 256 -> 2], softplus throughout.
-design_net:
-  _target_: testbed.design_nets.GatedDeepSetPolicyNet
-  encoder_dim_h: [256, 256]
-  dim_emb: 16
-  encoder_activation:
-    _target_: torch.nn.Softplus
-    _partial_: true
-  decoder_dim_h: [256, 256]
-  decoder_activation:
-    _target_: torch.nn.Softplus
-    _partial_: true
+# design policy network: the default net/attentive_policy, as in dad on this task.
 
 # posterior network: attentive Gaussian-mixture readout over (log k, alpha).
 #

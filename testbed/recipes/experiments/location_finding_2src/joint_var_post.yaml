@@ -20,6 +20,10 @@ defaults:
 # the same AttentivePolicyNet that dad uses (the method default here).
 
 seed: 0
+
+# checkpointing
+checkpoint_every: 5_000
+
 joint: true
 
 # objective: plain pathwise bound. The location-finding likelihood is

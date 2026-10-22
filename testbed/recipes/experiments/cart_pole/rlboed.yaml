@@ -5,6 +5,9 @@ defaults:
   - override /task: cart_pole
   - _self_
 
+# Attention actor over the outcome history, as in the benchmark runs.
+actor_architecture: attention
+
 # Initial normalization reference for state observations, not physical bounds.
 # States outside this range are not clipped; shared task settings are unchanged.
 reward:
@@ -12,7 +15,11 @@ reward:
   outcome_high: 10.0
 
 sac:
-  num_training_iterations: 20_001
+  gamma: 0.99
+  num_training_iterations: 40_000
+  # Caps the per-iteration entropy anneal at the drop the reference reaches
+  # in 20_001 iterations (20_001 / 1.4e4).
+  entropy_anneal_total: 1.429
   buffer_size: 1_000_000
   policy_lr: 0.0003
 

@@ -3,29 +3,37 @@
 defaults:
   - /method: dad
   - override /task: temporal_discounting
-  - override /net@design_net: null
   - _self_
 
-# DAD on hyperbolic temporal discounting, trained with the REINFORCE gradient
-# estimator (DAD paper Eq. 16). Architecture and hyperparameters follow the
-# DAD paper HTD experiment (Foster et al. 2021, Appendix D.2).
+# DAD on hyperbolic temporal discounting.
+#
+# Same shared configuration as the other tasks: the default AttentivePolicyNet
+# and 200k gradient steps. The DAD paper's gated DeepSets net is not used, so
+# methods are compared rather than architectures.
+#
+# The outcomes are discrete responses, so there is no pathwise gradient and the
+# objective falls back to REINFORCE.
 
 seed: 0
+
+# checkpointing
+checkpoint_every: 5_000
+
 # designer
-# Condition on the unconstrained (x_d, x_r) the policy emits, as the DAD paper's
-# HTD encoder does, rather than on (D_1, R_0) with D_1 unbounded and R_0 <= 100.
+# Condition on the unconstrained (x_d, x_r) the policy emits rather than on
+# (D_1, R_0), whose D_1 is unbounded and R_0 <= 100.
 use_raw_history: true
 # objective
 objective:
   name: reinforce
-  n_inner: 1_023  # contrastive samples for the sPCE reward
+  fused: true  # false falls back to the per-step loop
+  n_inner: 2_000  # contrastive samples for the sPCE reward
   reparameterize_policy: false
-  baseline: null  # or leave_one_out for variance reduction
+  baseline: leave_one_out  # leave_one_out for variance reduction
   requires_policy_log_probs: false
-  # deterministic policy -> pathwise Reinforce with SPCE.reinforce_value (DAD Eq. 16)
 # training
-n_train_iter: 100_000
-n_outer: 1_024
+n_train_iter: 200_000
+n_outer: 2_048
 
 # optimizer
 lr: 1e-4
@@ -35,29 +43,7 @@ lr_anneal_every: 1_000
 lr_gamma: 0.96
 
 # eval
-eval_every: 0  # eval is expensive here; off for this recipe
-n_outer_eval: 1_024
-n_inner_eval: 100_000
-
-# design policy network
-# The DAD paper's HTD net (Appendix D.2): encoder [2 -> 256 -> 256 -> 2 x 16] over
-# the design alone, its two heads mixed by the binary outcome, + sum pooling;
-# emitter [16 -> 256 -> 256 -> 2], softplus throughout. The one remaining
-# difference is the null encoding, which is learnable here but fixed to zero in
-# the DAD paper.
-
-
-design_net:
-  _target_: testbed.design_nets.GatedDeepSetPolicyNet
-  encoder_dim_h: [256, 256]
-  dim_emb: 16
-  encoder_activation:
-    _target_: torch.nn.Softplus
-    _partial_: true
-  decoder_dim_h: [256, 256]
-  decoder_activation:
-    _target_: torch.nn.Softplus
-    _partial_: true
+eval_every: 0  # the final_eval block handles it
 
 wandb:
   project: temporal_discounting  # one project per task; methods separate by group

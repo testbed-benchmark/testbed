@@ -4,8 +4,7 @@
 # Uses the LogMSELoss
 #
 # The design net is the net/attentive_policy default (~663k params), the same
-# policy capacity as the dad recipe; grad_clip trims late-training gradient
-# spikes.
+# policy capacity as the dad recipe.
 
 defaults:
   - /method: actionbed
@@ -22,15 +21,15 @@ loss:
   _target_: testbed.design_objectives.LogMSELoss
 # training
 n_train_iter: 150_000
-n_action_warmup_iter: 25_000
+n_action_warmup_iter: 50_000
 n_outer: 2_000
 
 # optimizer
 lr: 5e-4
 betas: [0.8, 0.998]
-grad_clip: 750
+grad_clip: null
 lr_gamma: 0.95
-lr_period: 2000
+lr_period: 2500
 # policy networks
 # design_net is intentionally absent: /method: actionbed already pulls
 # /net@design_net: attentive_policy (encoder_dim_h=256, dim_emb=128,

@@ -16,6 +16,8 @@ task:
     event_shape:
       - ${task.dim_theta}
 
+eval_every: 0  # the final_eval block handles it
+
 wandb:
   project: location_finding_2src
   group: aline

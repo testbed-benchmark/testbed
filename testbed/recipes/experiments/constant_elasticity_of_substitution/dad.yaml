@@ -3,21 +3,25 @@
 defaults:
   - /method: dad
   - override /task: constant_elasticity_of_substitution
-  - override /net@design_net: null
   - _self_
 
 # DAD on the CES model, trained with REINFORCE.
 #
+# Same shared configuration as the other tasks: the default AttentivePolicyNet
+# and 200k gradient steps.
+#
 # The outcome is a censored sigmoid of a Gaussian, so it is formally
-# reparameterizable, but the pathwise gradient is not usable here: a large portion
-# of the mass sits on the two censoring atoms, and _outcome_logp switches branches
-# there, so the sPCE value jumps at the boundary. Reparameterizing through a
-# discontinuity drops the d(censoring probability)/d(design) term, which is
-# precisely the signal telling the policy to leave the saturated region.
-
-
+# reparameterizable, but the pathwise gradient is not usable: much of the mass
+# sits on the two censoring atoms, where _outcome_logp switches branches and the
+# sPCE value jumps. Reparameterizing through that discontinuity drops the
+# d(censoring probability)/d(design) term, which is the signal telling the
+# policy to leave the saturated region. Hence REINFORCE.
 
 seed: 0
+
+# checkpointing
+checkpoint_every: 5_000
+
 task:
   reparameterize_outcomes: false
 # designer
@@ -28,45 +32,26 @@ use_raw_history: true
 # objective
 objective:
   name: reinforce
-  n_inner: 1_024  # "number of negative samples"
+  fused: true  # false falls back to the per-step loop
+  n_inner: 2_000  # contrastive samples for the sPCE reward
   reparameterize_policy: false
   baseline: leave_one_out  # the score term carries the gradient; keep its variance down
   requires_policy_log_probs: false
 # training
-n_train_iter: 50_000  # gradient steps 
-n_outer: 1_024  # batch size
+n_train_iter: 200_000
+n_outer: 2_048
 
-# optimizer
+# optimizer: StepLR every 1k steps. The gamma is the paper benchmark's, set so
+# the ~375k steps its 12h runs reached decay 1e-4 -> 1e-5 (0.9938 ** 375 ~= 0.1);
+# over the 200k steps here it ends near 2.9e-5.
 lr: 1e-4
 betas: [0.9, 0.999]
 grad_clip: 1.0
-lr_anneal_every: 1_000  # annealing frequency (Table 20)
-lr_gamma: 0.955  # 0.955 ** (50_000 / 1_000) ~= 0.1, i.e. 1e-4 -> 1e-5 
+lr_anneal_every: 1_000
+lr_gamma: 0.9938
 
 # eval
-eval_every: 0  # eval is expensive here; off for this recipe
-n_outer_eval: 2_048
-n_inner_eval: 100_000
-
-# design policy network
-# embed y (1) and the design (6) separately to 32 each and
-# concatenate to 64 before the encoder. Those embeddings are just the first
-# stage of the per-step encoder, so they are folded into it here: the encoder
-# is [7 -> 64 -> 128 -> 32] + sum pooling, and the emitter is [32 -> 128 -> 6],
-# ReLU throughout, with no activation on the emitter output because
-# BoxDesignSpace applies the tanh squash.
-
-design_net:
-  _target_: testbed.design_nets.DeepSetPolicyNet
-  encoder_dim_h: [64, 128]
-  dim_emb: 32
-  encoder_activation:
-    _target_: torch.nn.ReLU
-    _partial_: true
-  decoder_dim_h: [128]
-  decoder_activation:
-    _target_: torch.nn.ReLU
-    _partial_: true
+eval_every: 0  # eval is expensive here; the final_eval block handles it
 
 wandb:
   project: constant_elasticity_of_substitution  # one project per task; methods separate by group
