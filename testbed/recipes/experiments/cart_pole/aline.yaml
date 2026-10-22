@@ -1,0 +1,17 @@
+# @package _global_
+
+defaults:
+  - /method: aline
+  - override /task: cart_pole
+  - _self_
+
+# Input normalization; outcomes are not clipped. Outcome order:
+# position, angle, linear velocity, angular velocity.
+design_net:
+  design_center: 0.0
+  design_scale: 5.0
+  outcome_center: 0.0
+  outcome_scale: [10.0, 2.0, 8.0, 5.0]
+
+checkpoint_every: 2_500
+eval_every: 0

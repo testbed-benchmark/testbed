@@ -1,28 +1,13 @@
 # @package _global_
 
-# An action net trained on rollouts from a frozen designer:
-#
-#   python testbed/methods/action.py \
-#     --config-name experiments/temporal_discounting/action \
-#     designer_run_dir=runs/<a finished temporal_discounting run>
-#
-# The run supplies the task, T and the frozen design policy; this supplies the
-# loss to train the action net with, and the losses to report.
-
 defaults:
   - /method: action
   - override /task: temporal_discounting
   - _self_
 
-eval_every: 0  # the final_eval block handles it
+eval_every: 0
 
-wandb:
-  project: temporal_discounting  # one project per task; methods separate by group
-  group: action
-
-# The action net predicts log(theta) and is scored against log of the target,
-# following the ActionBED recipes for this task. Raw-scale losses therefore do
-# not apply to its output, and are dropped from the report.
+# The action net predicts log(theta), so raw-scale losses are not reported.
 loss:
   _target_: testbed.design_objectives.TrueLogMSELoss
   reduction: mean
@@ -37,8 +22,6 @@ final_eval:
       _target_: testbed.design_objectives.TrueLogMSELoss
       transform_input: false
       transform_target: true
-    # The same log-scale theta as true_log_mse, scored with the ActionBED
-    # element-wise mse + log(mse) formula rather than a plain mse.
     log_mse_log_scale:
       _target_: testbed.design_objectives.LogMSELoss
       transform_input: false

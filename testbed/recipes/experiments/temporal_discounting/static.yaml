@@ -1,0 +1,13 @@
+# @package _global_
+
+defaults:
+  - /method: static
+  - override /task: temporal_discounting
+  - _self_
+
+# Discrete outcomes, so train with REINFORCE.
+objective:
+  name: reinforce
+  baseline: leave_one_out
+
+eval_every: 0

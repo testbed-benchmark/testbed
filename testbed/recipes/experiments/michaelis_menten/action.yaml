@@ -1,26 +1,12 @@
 # @package _global_
 
-# An action net trained on rollouts from a frozen designer:
-#
-#   python testbed/methods/action.py \
-#     --config-name experiments/michaelis_menten/action \
-#     designer_run_dir=runs/<a finished michaelis_menten run>
-#
-# The run supplies the task, T and the frozen design policy; this supplies the
-# loss to train the action net with, and the losses to report.
-
 defaults:
   - /method: action
   - override /task: michaelis_menten
   - _self_
 
-eval_every: 0  # the final_eval block handles it
+eval_every: 0
 
-wandb:
-  project: michaelis_menten  # one project per task; methods separate by group
-  group: action
-
-# Parameters are a plain vector, so the element-wise loss applies as written.
 loss:
   _target_: testbed.design_objectives.MSELoss
   reduction: mean

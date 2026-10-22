@@ -1,0 +1,26 @@
+# @package _global_
+
+defaults:
+  - /method: dad
+  - override /task: double_link
+  - _self_
+
+seed: 0
+
+checkpoint_every: 5_000
+
+use_raw_history: true
+
+objective:
+  name: spce
+  fused: true
+  n_inner: 2_000
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false
+
+n_train_iter: 200_000
+# 2_048 runs out of memory on a 95 GiB GPU in the sPCE backward.
+n_outer: 1_024
+
+eval_every: 0

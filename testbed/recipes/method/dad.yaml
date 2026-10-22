@@ -8,14 +8,14 @@ defaults:
   - /final_eval: default
   - /hydra_run: default
   - _self_
-# system (device/save_dir come from the system group)
+
 seed: 0
 torch_deterministic: true
-# designer
-# false -> the policy conditions on physical designs; true -> on the
-# unconstrained designs it emitted, before task.design_space.to_design.
+
+# false: the policy conditions on physical designs; true: on the unconstrained
+# designs it emitted, before task.design_space.to_design.
 use_raw_history: false
-# objective
+
 objective:
   name: spce
   fused: true
@@ -23,22 +23,19 @@ objective:
   reparameterize_policy: false
   baseline: null
   requires_policy_log_probs: false
-# training
+
 n_train_iter: 25_000
 n_outer: 2_048
 
-# budget / checkpointing
 train_time_budget_seconds: null  # null for no time limit
 checkpoint_every: 0  # 0 to disable
 
-# optimizer
 lr: 1e-4
 betas: [0.9, 0.999]
 grad_clip: 1.0
-lr_anneal_every: null  # null -> constant LR. Otherwise exponential decay
+lr_anneal_every: null  # null: constant LR; otherwise exponential decay every this many steps
 lr_gamma: null
 
-# eval
-eval_every: 0  # eval is expensive here; off for this recipe
+eval_every: 0
 n_outer_eval: 2_048
 n_inner_eval: 100_000

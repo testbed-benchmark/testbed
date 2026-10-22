@@ -1,0 +1,23 @@
+# @package _global_
+
+defaults:
+  - /method: dad
+  - override /task: stochastic_pendulum
+  - _self_
+
+seed: 0
+
+checkpoint_every: 5_000
+
+objective:
+  name: spce
+  fused: true
+  n_inner: 2_000
+  reparameterize_policy: false
+  baseline: null
+  requires_policy_log_probs: false
+
+n_train_iter: 200_000
+n_outer: 2_048
+
+eval_every: 0

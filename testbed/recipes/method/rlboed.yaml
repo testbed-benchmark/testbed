@@ -9,14 +9,13 @@ defaults:
   - /hydra_run: default
   - _self_
 
-# system (device/save_dir come from the system group)
 seed: 0
 torch_deterministic: true
-# Independently selectable history encoders for the actor and critics.
-# Each may be deepset, deepset_time, or attention.
+
+# History encoders for the actor and the critics: deepset, deepset_time or attention.
 actor_architecture: deepset
 critic_architecture: deepset
-# complete deployable policy
+
 design_net:
   _target_: testbed.design_nets.make_stochastic_policy
   architecture: ${actor_architecture}
@@ -25,8 +24,8 @@ design_net:
     dim_emb: ${attention_policy.dim_emb}
     num_heads: ${attention_policy.num_heads}
     num_blocks: ${attention_policy.num_blocks}
-  # DeepSet encoder and SAC head defaults. Attention encoder widths come from
-  # net/attentive_policy above; unspecified options use AttentiveEncoder defaults.
+  # DeepSet encoder and SAC head; the attention encoder's widths come from
+  # net/attentive_policy.
   dim_h: [128, 128]
   dim_emb: 64
   log_std_min: -20.0
@@ -37,19 +36,19 @@ design_net:
   outcome_bounds:
     - ${reward.outcome_low}
     - ${reward.outcome_high}
-# reward
+
 reward:
-  # Environment-specific reference range for normalizing outcome histories in
-  # the policy and critic networks; experiment recipes must supply both values.
+  # Reference range for normalizing outcome histories in the actor and critics.
+  # Task-specific, so every experiment recipe sets it; outcomes are not clipped.
   outcome_low: ???
   outcome_high: ???
   n_contrastive: 100_000
-# eval
-eval_every: 0  # no periodic eval during SAC training
+
+eval_every: 0
 eval_n_contrastive: 1_000_000
 train_time_budget_seconds: null
 checkpoint_every: 1_000
-# SAC hyperparameters
+
 sac:
   num_training_iterations: 100_000
   num_envs: 100
@@ -68,6 +67,5 @@ sac:
   initial_alpha: 1.0
   target_entropy: null
   entropy_anneal_rate: 7.143e-05  # 1 / 1.4e4, per iteration
-  # No cap by default; time-limited benchmark recipes set an explicit endpoint.
-  entropy_anneal_total: null
+  entropy_anneal_total: null  # cap on the total anneal; null for none
   log_frequency: 100
