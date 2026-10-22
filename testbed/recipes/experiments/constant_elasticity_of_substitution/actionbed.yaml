@@ -6,7 +6,7 @@ defaults:
   - override /net@action_net: null
   - _self_
 
-seed: 42
+seed: 0
 
 eval_every: 0
 

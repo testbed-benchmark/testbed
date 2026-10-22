@@ -1,7 +1,7 @@
 # @package _global_
 
-# From https://arxiv.org/abs/2402.07868, with the diffusion
-# matched to ScoreBED (https://github.com/angusphillips/Score_Matching_BED).
+# From https://arxiv.org/abs/2402.07868, with the diffusion matched to
+# ScoreBED (https://github.com/angusphillips/Score_Matching_BED).
 T: 50
 
 task:

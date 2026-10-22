@@ -9,14 +9,12 @@ seed: 0
 
 checkpoint_every: 5_000
 
-# Condition on the unconstrained designs the policy emits, which are O(1),
-# rather than on the physical torques in [-4, 4] x [-2, 2].
 use_raw_history: true
 
 objective:
   name: spce
   fused: true
-  n_inner: 2_000  # contrastive samples for sPCE
+  n_inner: 2_000
   reparameterize_policy: false
   baseline: null
   requires_policy_log_probs: false

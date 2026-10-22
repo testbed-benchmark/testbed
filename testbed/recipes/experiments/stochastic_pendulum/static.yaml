@@ -7,6 +7,6 @@ defaults:
 
 objective:
   n_inner: 8_192
-  chunk_size: 1_024  # bounds memory
+  chunk_size: 1_024
 
 eval_every: 0

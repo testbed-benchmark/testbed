@@ -9,15 +9,13 @@ seed: 0
 
 checkpoint_every: 5_000
 
-# Condition on the unconstrained (x_d, x_r) the policy emits rather than on
-# (D_1, R_0), whose D_1 is unbounded.
 use_raw_history: true
 
 # Discrete outcomes, so train with REINFORCE.
 objective:
   name: reinforce
   fused: true
-  n_inner: 2_000  # contrastive samples for the sPCE reward
+  n_inner: 2_000
   reparameterize_policy: false
   baseline: leave_one_out
   requires_policy_log_probs: false

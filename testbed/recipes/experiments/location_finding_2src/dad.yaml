@@ -10,6 +10,6 @@ seed: 0
 checkpoint_every: 5_000
 
 objective:
-  n_inner: 2_000  # contrastive samples for sPCE
+  n_inner: 2_000
 
 n_train_iter: 200_000

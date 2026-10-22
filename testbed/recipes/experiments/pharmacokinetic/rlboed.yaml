@@ -17,7 +17,7 @@ reward:
 
 sac:
   num_training_iterations: 40_000
-  entropy_anneal_total: 1.429  # total anneal of the reference 20_001-iteration schedule
+  entropy_anneal_total: 1.429  # 20_001 * entropy_anneal_rate
   buffer_size: 1_000_000
   tau: 0.005
   policy_lr: 0.0003

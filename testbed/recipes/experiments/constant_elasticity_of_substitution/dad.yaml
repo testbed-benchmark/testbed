@@ -14,14 +14,12 @@ checkpoint_every: 5_000
 task:
   reparameterize_outcomes: false
 
-# Condition on the unconstrained designs the policy emits, which are O(1),
-# rather than on the physical baskets in [0, 100]^6.
 use_raw_history: true
 
 objective:
   name: reinforce
   fused: true
-  n_inner: 2_000  # contrastive samples for the sPCE reward
+  n_inner: 2_000
   reparameterize_policy: false
   baseline: leave_one_out
   requires_policy_log_probs: false

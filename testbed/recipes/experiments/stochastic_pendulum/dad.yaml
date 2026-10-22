@@ -12,7 +12,7 @@ checkpoint_every: 5_000
 objective:
   name: spce
   fused: true
-  n_inner: 2_000  # contrastive samples for sPCE
+  n_inner: 2_000
   reparameterize_policy: false
   baseline: null
   requires_policy_log_probs: false
