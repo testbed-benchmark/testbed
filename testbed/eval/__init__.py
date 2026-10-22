@@ -18,16 +18,8 @@ _LAZY = {
     "evaluate_static_checkpoint": "eval_static",
 }
 
-__all__ = [
-    "build_design_net",
-    "build_losses",
-    "chunked_spce_snmc",
-    "eval_losses",
-    "eval_spce_snmc",
-    "evaluate_checkpoint",
-    "evaluate_loss_checkpoint",
-    "evaluate_static_checkpoint",
-]
+# The lazy names stay out of ``__all__`` so ``import *`` does not pull in Hydra.
+__all__ = ["chunked_spce_snmc", "eval_spce_snmc"]
 
 
 def __getattr__(name):

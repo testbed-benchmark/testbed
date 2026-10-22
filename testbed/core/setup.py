@@ -58,9 +58,11 @@ def instantiate_action_net(config, task, T):
 def setup(cfg):
     """Build the run manager and task common to every Hydra entry point.
 
-    Hydra owns the run directory, so its resolved ``runtime.output_dir`` is
-    handed straight to the Manager. The task is instantiated from ``cfg.task``
-    and moved onto ``cfg.device``.
+    Under the Hydra CLI, Hydra owns the run directory, so its resolved
+    ``runtime.output_dir`` is handed straight to the Manager. Called directly
+    (from a script or notebook), the Manager creates a timestamped run under
+    ``cfg.save_dir``. The task is instantiated from ``cfg.task`` and moved onto
+    ``cfg.device``.
 
     Args:
         cfg: The composed Hydra/OmegaConf config.
@@ -68,6 +70,9 @@ def setup(cfg):
     Returns:
         A ``(manager, task)`` tuple: the run manager and the device-placed task.
     """
-    manager = Manager(cfg, run_dir=HydraConfig.get().runtime.output_dir)
+    if HydraConfig.initialized():
+        manager = Manager(cfg, run_dir=HydraConfig.get().runtime.output_dir)
+    else:
+        manager = Manager(cfg, root=cfg.get("save_dir", "runs"))
     task = instantiate(cfg.task).to(cfg.device)
     return manager, task

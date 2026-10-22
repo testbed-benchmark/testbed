@@ -3,16 +3,10 @@
 Run with ``python -m testbed.cli.static [overrides...]``.
 """
 
-import hydra
-
+from testbed.cli import make_main
 from testbed.methods.static import run
 
-
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/static")
-def main(cfg):
-    """Composes the recipe and hands it to ``testbed.methods.static.run``."""
-    run(cfg)
-
+main = make_main(run, "method/static")
 
 if __name__ == "__main__":
     main()
