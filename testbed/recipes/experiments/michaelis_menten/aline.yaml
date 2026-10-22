@@ -5,7 +5,7 @@ defaults:
   - override /task: michaelis_menten
   - _self_
 
-# Normalize physical inputs to approximately [-1, 1] before embedding.
+# Map designs and outcomes to roughly [-1, 1].
 design_net:
   design_center: 200.0
   design_scale: 200.0

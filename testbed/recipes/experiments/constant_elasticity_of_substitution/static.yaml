@@ -5,14 +5,13 @@ defaults:
   - override /task: constant_elasticity_of_substitution
   - _self_
 
-# The censored outcome's pathwise gradient drops the censoring-probability term
-# and degrades the designs, so hold outcomes fixed and add the score term.
+# The outcome is censored, so train with REINFORCE.
 task:
   reparameterize_outcomes: false
 
 objective:
   name: reinforce
   baseline: leave_one_out
-  n_inner: 8_192  # CES designs score near log(4097), where the sPCE bound saturates
+  n_inner: 8_192  # 4_096 saturates: designs score near log(4097)
 
-eval_every: 0  # no need to eval during training
+eval_every: 0

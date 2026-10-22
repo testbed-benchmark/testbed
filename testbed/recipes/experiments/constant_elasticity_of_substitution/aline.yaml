@@ -20,8 +20,4 @@ design_net:
   outcome_scale: 0.5
 
 checkpoint_every: 2_500
-eval_every: 0  # the final_eval block handles it
-
-wandb:
-  project: constant_elasticity_of_substitution
-  group: aline
+eval_every: 0

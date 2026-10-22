@@ -1,26 +1,12 @@
 # @package _global_
 
-# An action net trained on rollouts from a frozen designer:
-#
-#   python testbed/methods/action.py \
-#     --config-name experiments/cart_pole/action \
-#     designer_run_dir=runs/<a finished cart_pole run>
-#
-# The run supplies the task, T and the frozen design policy; this supplies the
-# loss to train the action net with, and the losses to report.
-
 defaults:
   - /method: action
   - override /task: cart_pole
   - _self_
 
-eval_every: 0  # the final_eval block handles it
+eval_every: 0
 
-wandb:
-  project: cart_pole  # one project per task; methods separate by group
-  group: action
-
-# Parameters are a plain vector, so the element-wise loss applies as written.
 loss:
   _target_: testbed.design_objectives.MSELoss
   reduction: mean

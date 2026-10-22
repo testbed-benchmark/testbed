@@ -2,47 +2,30 @@
 
 defaults:
   - /method: actionbed
-  # method/actionbed.yaml defaults to location_finding.
   - override /task: constant_elasticity_of_substitution
   - override /net@action_net: null
   - _self_
 
-# ActionBED on CES, with the LogMSELoss.
+seed: 42
 
-seed: 42  # single-run default; seed sweeps override this
-
-wandb:
-  project: constant_elasticity_of_substitution # project = task
-  group: actionbed_ces                         # group = method
+eval_every: 0
 
 loss:
   _target_: testbed.design_objectives.LogMSELoss
 
-# training
 n_train_iter: 150_000
-# NB: 63% of observations under random designs are censored at the boundary,
-# and 38% of warmup rollouts carry no interior observation at all, so this
-# phase is weak on CES. Left at the inherited value for parity.
 n_action_warmup_iter: 50_000
 n_outer: 2_000
 
-# eval
-eval_every: 0  # the final_eval block handles it
-
-# optimizer
 lr: 5e-4
 betas: [0.8, 0.998]
 grad_clip: null
 lr_gamma: 0.95
 lr_period: 2500
-# policy networks
-# design_net is intentionally absent: /method: actionbed already pulls
-# /net@design_net: attentive_policy (encoder_dim_h=256, dim_emb=128,
-# num_blocks=3).
+
 action_net:
   _target_: testbed.design_nets.MLPPolicyNet
-  # input dim: T * (dim_design + dim_y) = T * 7
-  # output dim: dim_theta = 5
+  # input: T * (dim_y + dim_design) = 10 * (1 + 6); output: dim_theta = 5
   dims: [70, 512, 256, 128, 5]
   activation:
     _target_: torch.nn.GELU

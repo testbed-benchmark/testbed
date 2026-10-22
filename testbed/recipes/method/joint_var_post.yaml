@@ -4,7 +4,6 @@ defaults:
   - /method: var_post
   - _self_
 
-# Joint variant: the posterior keeps training (rather than being frozen) during
-# policy training.
+# The posterior keeps training alongside the policy instead of being frozen.
 joint: true
 n_posterior_pretrain_iter: 0

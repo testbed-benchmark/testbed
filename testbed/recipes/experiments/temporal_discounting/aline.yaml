@@ -5,7 +5,7 @@ defaults:
   - override /task: temporal_discounting
   - _self_
 
-# Match the bounded physical design space used by RL-BOED.
+# A bounded design space, matching the RL-BOED recipe.
 task:
   design_space:
     _target_: testbed.core.design_spaces.BoxDesignSpace

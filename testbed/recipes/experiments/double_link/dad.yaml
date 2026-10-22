@@ -5,37 +5,24 @@ defaults:
   - override /task: double_link
   - _self_
 
-# DAD on the double link (T = 50 torque steps).
-#
-
 seed: 0
 
-# checkpointing
 checkpoint_every: 5_000
 
-# designer
-# Condition on the unconstrained designs the policy emits rather than on the
-# torques, whose two coordinates have different ranges ([-4, 4] and [-2, 2]).
-# The raw values are O(1) and on one scale, so the encoder needs no input
-# normalization.
+# Condition on the unconstrained designs the policy emits, which are O(1),
+# rather than on the physical torques in [-4, 4] x [-2, 2].
 use_raw_history: true
-# objective
+
 objective:
   name: spce
-  fused: true  # false falls back to the per-step loop
+  fused: true
   n_inner: 2_000  # contrastive samples for sPCE
   reparameterize_policy: false
   baseline: null
   requires_policy_log_probs: false
-# training
-# n_outer is halved from the 2_048 the other tasks use, and from what
-# this task's joint_var_post uses. At 2_048 the sPCE backward needs more than
-# the 95 GiB card: training runs out of memory within two minutes, with the
-# card essentially full (~84 GiB of activations) over the
-# [n_outer * n_inner, T, ...] contrastive scoring. joint_var_post has no
-# contrastive axis, so it fits at 2_048 and is unchanged.
+
 n_train_iter: 200_000
+# 2_048 runs out of memory on a 95 GiB GPU in the sPCE backward.
 n_outer: 1_024
 
-# eval
-eval_every: 0  # the final_eval block handles it
+eval_every: 0

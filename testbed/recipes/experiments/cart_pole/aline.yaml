@@ -5,8 +5,8 @@ defaults:
   - override /task: cart_pole
   - _self_
 
-# Fixed input scales; outcomes are unbounded and are not clipped.
-# Outcome order: position, angle, linear velocity, angular velocity.
+# Input normalization; outcomes are not clipped. Outcome order:
+# position, angle, linear velocity, angular velocity.
 design_net:
   design_center: 0.0
   design_scale: 5.0

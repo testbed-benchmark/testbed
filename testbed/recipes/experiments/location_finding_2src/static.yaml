@@ -5,8 +5,4 @@ defaults:
   - override /task: location_finding_2src
   - _self_
 
-eval_every: 0  # no need to eval during training
-
-wandb:
-  project: location_finding_2src  # one project per task; methods separate by group
-  group: static
+eval_every: 0

@@ -5,14 +5,11 @@ defaults:
   - override /task: pharmacokinetic
   - _self_
 
-# Attention actor over the outcome history, as in the benchmark runs.
 actor_architecture: attention
 
-# Use the task's standard sampling-time box [0, 24] hours.
-# Normalization reference only: the log-normal prior and Gaussian observations
-# are unbounded, and observations outside this range are not clipped.
-# At four log-space standard deviations below the prior median V, D_V / V
-# is about 49; allowing four observation-noise standard deviations gives < 70.
+# Normalization range for the outcomes; outcomes are not clipped. Four prior
+# standard deviations below the median V give D_V / V ~ 49, and four noise
+# standard deviations on top stay under 70.
 reward:
   outcome_low: -2.0
   outcome_high: 70.0
@@ -20,13 +17,7 @@ reward:
 
 sac:
   num_training_iterations: 40_000
-  # Caps the per-iteration entropy anneal at the drop the reference reaches
-  # in 20_001 iterations (20_001 / 1.4e4).
-  entropy_anneal_total: 1.429
+  entropy_anneal_total: 1.429  # total anneal of the reference 20_001-iteration schedule
   buffer_size: 1_000_000
   tau: 0.005
   policy_lr: 0.0003
-
-wandb:
-  project: pharmacokinetic
-  group: rlboed

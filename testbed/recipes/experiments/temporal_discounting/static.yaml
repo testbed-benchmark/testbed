@@ -5,9 +5,9 @@ defaults:
   - override /task: temporal_discounting
   - _self_
 
-# Discrete outcomes carry no pathwise gradient, so add the outcome score term.
+# Discrete outcomes, so train with REINFORCE.
 objective:
   name: reinforce
   baseline: leave_one_out
 
-eval_every: 0  # no need to eval during training
+eval_every: 0

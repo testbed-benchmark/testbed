@@ -6,7 +6,7 @@ defaults:
   - _self_
 
 design_net:
-  canonicalize_theta: true # the two sources are exchangeable
+  canonicalize_theta: true  # the two sources are exchangeable
 
 task:
   design_space:
@@ -16,8 +16,4 @@ task:
     event_shape:
       - ${task.dim_theta}
 
-eval_every: 0  # the final_eval block handles it
-
-wandb:
-  project: location_finding_2src
-  group: aline
+eval_every: 0

@@ -5,65 +5,44 @@ defaults:
   - override /task: pharmacokinetic
   - _self_
 
-# the joint variational posterior on the pharmacokinetic
-# model: co-optimise the posterior and the policy on the Barber-Agakov lower
-# bound, with no separate posterior-pretraining phase.
-#
+# Joint variational posterior (Foster et al. 2020): the posterior and the
+# policy are co-optimised on the Barber-Agakov bound, with no pretraining
+# phase. Optimiser settings follow ScoreBED's released code.
 
 seed: 0
 
-# checkpointing
 checkpoint_every: 5_000
 
 joint: true
 
-
-# objective: plain pathwise bound. The concentration is differentiable in theta
-# and the noise is Gaussian, so no score term is needed.
 objective:
   name: barber_agakov
-  fused: true  # false falls back to the per-step loop
+  fused: true
 
-# no pretraining phase
 n_posterior_pretrain_iter: 0
-n_posterior_outer: 2_048  # unused without pretraining; kept for completeness
+n_posterior_outer: 2_048
 pretrain_design_distr: null
 
-# policy training
 n_train_iter: 200_000
-n_outer: 2_048  # batch size, matching dad on this task
+n_outer: 2_048
 
-# policy optimizer: Adam, grad clip 1.0 (global norm),
-# cosine decay from 1e-5 to 5e-6 over the run.
 lr: 1e-5
 betas: [0.9, 0.999]
 grad_clip: 1.0
 policy_cosine_alpha: 5e-6
-ema_decay: 0.99  # ScoreBED's reported bounds use the EMA policy weights
+ema_decay: 0.99
 
-# posterior optimizer: Adam, grad clip 1.0 (global norm), warmup-cosine from 0
-# to a 1e-3 peak over the first 0.1% of steps, decaying to 1e-6.
 posterior_lr: 1e-3
 posterior_betas: [0.9, 0.999]
 posterior_grad_clip: 1.0
 posterior_warmup_frac: 0.001
 posterior_lr_floor: 1e-6
 
-# eval
-eval_every: 0  # eval is expensive here; the final_eval block handles it
+eval_every: 0
 
-# posterior network: attentive Gaussian-mixture readout over log theta.
-#
-# theta = (ka, ke, V) is strictly positive, so a mixture in theta's own
-# coordinates puts mass on negative rates and volumes. PKPrior is exactly
-# log-normal, so working in log space both respects the support and makes the
-# mixture Gaussian in the coordinate the prior already is.
-#
-# theta_loc/theta_scale standardize that log space to the prior's own moments,
-# log [1, 0.1, 20] and sd sqrt(0.05). Without them the net would have to learn
-# a +3 offset on log V from a zero-initialised head.
-#
-# No canonicalisation: absorption, elimination and volume are not exchangeable.
+# The mixture is fitted in log space, where the log-normal prior is Gaussian,
+# and pushed through exp onto the positive parameters. theta_loc/theta_scale
+# standardize log space to the prior's moments.
 posterior_net:
   _target_: testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet
   n_components: 10
@@ -71,7 +50,7 @@ posterior_net:
   dim_emb: 128
   num_heads: 4
   num_blocks: 3
-  trunk_dim_h: null  # use dim_emb
+  trunk_dim_h: null
   trunk_activation:
     _target_: torch.nn.GELU
     _partial_: true
@@ -85,9 +64,6 @@ posterior_net:
     _target_: torch.tensor
     data: [0.22360679774997896, 0.22360679774997896, 0.22360679774997896]  # sqrt(0.05)
   canonicalize_theta: false
-  # (z_ka, z_ke, z_V) -> (ka, ke, V): exp on every coordinate, which is exactly
-  # the map PKPrior pushes its normal through, so the pushforward covers the
-  # prior's support and integrates to 1.
   transform:
     _target_: testbed.design_nets.BlockTransform
     raw_sizes: [3]

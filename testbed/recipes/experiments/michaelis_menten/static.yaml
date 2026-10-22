@@ -5,4 +5,4 @@ defaults:
   - override /task: michaelis_menten
   - _self_
 
-eval_every: 0  # no need to eval during training
+eval_every: 0

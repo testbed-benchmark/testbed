@@ -7,6 +7,6 @@ defaults:
 
 objective:
   n_inner: 8_192
-  chunk_size: 1_024  # unchunked, 8192 inner samples OOMs a 24GB GPU
+  chunk_size: 1_024  # bounds memory
 
-eval_every: 0  # no need to eval during training
+eval_every: 0

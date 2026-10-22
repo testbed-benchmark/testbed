@@ -1,6 +1,6 @@
 # @package _global_
 
-# Task defaults, from Appendix D.4 of https://arxiv.org/abs/2402.07868, with the
+# From Appendix D.4 of https://arxiv.org/abs/2402.07868, with the
 # diffusion matched to ScoreBED (https://github.com/angusphillips/Score_Matching_BED).
 T: 50
 

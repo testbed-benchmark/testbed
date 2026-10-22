@@ -5,46 +5,30 @@ defaults:
   - override /task: temporal_discounting
   - _self_
 
-# DAD on hyperbolic temporal discounting.
-#
-# Same shared configuration as the other tasks: the default AttentivePolicyNet
-# and 200k gradient steps. The DAD paper's gated DeepSets net is not used, so
-# methods are compared rather than architectures.
-#
-# The outcomes are discrete responses, so there is no pathwise gradient and the
-# objective falls back to REINFORCE.
-
 seed: 0
 
-# checkpointing
 checkpoint_every: 5_000
 
-# designer
 # Condition on the unconstrained (x_d, x_r) the policy emits rather than on
-# (D_1, R_0), whose D_1 is unbounded and R_0 <= 100.
+# (D_1, R_0), whose D_1 is unbounded.
 use_raw_history: true
-# objective
+
+# Discrete outcomes, so train with REINFORCE.
 objective:
   name: reinforce
-  fused: true  # false falls back to the per-step loop
+  fused: true
   n_inner: 2_000  # contrastive samples for the sPCE reward
   reparameterize_policy: false
-  baseline: leave_one_out  # leave_one_out for variance reduction
+  baseline: leave_one_out
   requires_policy_log_probs: false
-# training
+
 n_train_iter: 200_000
 n_outer: 2_048
 
-# optimizer
 lr: 1e-4
 betas: [0.9, 0.999]
 grad_clip: null
 lr_anneal_every: 1_000
 lr_gamma: 0.96
 
-# eval
-eval_every: 0  # the final_eval block handles it
-
-wandb:
-  project: temporal_discounting  # one project per task; methods separate by group
-  group: dad
+eval_every: 0

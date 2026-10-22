@@ -5,8 +5,7 @@ defaults:
   - override /task: stochastic_pendulum
   - _self_
 
-# Fixed input scales; outcomes are unbounded and are not clipped.
-# Outcome order: angle, angular velocity.
+# Input normalization; outcomes are not clipped. Outcome order: angle, angular velocity.
 design_net:
   design_center: 0.0
   design_scale: 1.0

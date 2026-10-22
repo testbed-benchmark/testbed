@@ -5,30 +5,19 @@ defaults:
   - override /task: stochastic_pendulum
   - _self_
 
-# DAD on the stochastic pendulum (T = 50 torque steps).
-#
-# The Euler-Maruyama step is a differentiable drift plus Gaussian noise, so the
-# outcomes reparameterize and the objective is pathwise sPCE.
-
 seed: 0
 
-# checkpointing
 checkpoint_every: 5_000
 
-# designer
-# No use_raw_history: the torque box is [-1, 1], so the physical designs are
-# already O(1) and the encoder needs no unconstrained stand-in.
-# objective
 objective:
   name: spce
-  fused: true  # false falls back to the per-step loop
+  fused: true
   n_inner: 2_000  # contrastive samples for sPCE
   reparameterize_policy: false
   baseline: null
   requires_policy_log_probs: false
-# training
+
 n_train_iter: 200_000
 n_outer: 2_048
 
-# eval
-eval_every: 0  # the final_eval block handles it
+eval_every: 0

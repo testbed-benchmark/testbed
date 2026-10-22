@@ -5,20 +5,11 @@ defaults:
   - override /task: location_finding_2src
   - _self_
 
-# DAD on location finding (d=2, K=2, T=30), with the default AttentivePolicyNet
-# and a pathwise sPCE gradient.
-
 seed: 0
 
-# checkpointing
 checkpoint_every: 5_000
 
-# objective
 objective:
   n_inner: 2_000  # contrastive samples for sPCE
-# training
-n_train_iter: 200_000
 
-wandb:
-  project: location_finding_2src  # one project per task; methods separate by group
-  group: dad
+n_train_iter: 200_000

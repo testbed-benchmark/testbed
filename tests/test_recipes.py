@@ -141,7 +141,6 @@ def test_action_recipes_train_on_the_loss_their_task_calls_for(task, loss):
     cfg = _compose(f"experiments/{task}/action")
 
     assert cfg.loss._target_ == f"testbed.design_objectives.{loss}"
-    assert cfg.wandb.project == task
 
     # Every reported loss has to apply to what the action net actually outputs:
     # a net trained on log theta is not scored on the raw scale, and only a task

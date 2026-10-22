@@ -5,7 +5,6 @@ defaults:
   - override /task: michaelis_menten
   - _self_
 
-# Attention actor over the outcome history, as in the benchmark runs.
 actor_architecture: attention
 
 reward:
@@ -15,13 +14,7 @@ reward:
 
 sac:
   num_training_iterations: 40_000
-  # Caps the per-iteration entropy anneal at the drop the reference reaches
-  # in 20_001 iterations (20_001 / 1.4e4).
-  entropy_anneal_total: 1.429
+  entropy_anneal_total: 1.429  # total anneal of the reference 20_001-iteration schedule
   buffer_size: 1_000_000
   tau: 0.005
   policy_lr: 0.0003
-
-wandb:
-  project: michaelis_menten
-  group: rlboed

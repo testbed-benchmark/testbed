@@ -5,8 +5,7 @@ defaults:
   - override /task: double_link
   - _self_
 
-# Fixed input scales; outcomes are unbounded and are not clipped.
-# Outcome order: q1, q2, q1dot, q2dot.
+# Input normalization; outcomes are not clipped. Outcome order: q1, q2, q1dot, q2dot.
 design_net:
   design_center: [0.0, 0.0]
   design_scale: [4.0, 2.0]
