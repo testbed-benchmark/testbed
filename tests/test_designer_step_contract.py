@@ -118,7 +118,7 @@ def test_step_design_sees_the_step_index_and_prior_histories():
 def test_step_design_can_read_hook_scratch():
     # The reason for passing the state: a designer can depend on what a hook
     # recorded, with no signature change anywhere.
-    from testbed.designers import RolloutHook
+    from testbed.core import RolloutHook
 
     class CountingHook(RolloutHook):
         def after_step(self, state):

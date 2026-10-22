@@ -5,11 +5,12 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from testbed.core import Rollout
 from testbed.core.design_spaces import BoxDesignSpace
 from testbed.design_nets import DeepSetPolicyNet, GaussianPolicyNet
 from testbed.design_objectives import SPCE, Reinforce, SPCEReinforce
 from testbed.design_objectives.reinforce import leave_one_out_baseline
-from testbed.designers import PolicyDesigner, Rollout
+from testbed.designers import PolicyDesigner
 from testbed.methods.dad import Trainer, build_objective
 from testbed.tasks import TemporalDiscounting
 

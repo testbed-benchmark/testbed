@@ -4,7 +4,8 @@ import pytest
 import torch
 from torch import nn
 
-from testbed.designers import ActionHook, RolloutHook, StaticDesigner
+from testbed.core import ActionHook, RolloutHook
+from testbed.designers import StaticDesigner
 from testbed.tasks import LocationFinding, TemporalDiscounting
 
 

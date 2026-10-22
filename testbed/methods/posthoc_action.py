@@ -7,10 +7,11 @@ import hydra
 import torch
 from hydra.utils import instantiate
 
+from testbed.core import ActionHook
 from testbed.core.load import designer_from_run, run_config
 from testbed.core.setup import instantiate_action_net, setup
 from testbed.core.util import seed_all
-from testbed.designers import ActionHook, Designer
+from testbed.designers import Designer
 from testbed.eval.eval_loss import evaluate_loss_checkpoint
 from testbed.methods.actionbed import build_loss_fn
 

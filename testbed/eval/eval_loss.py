@@ -31,9 +31,9 @@ from hydra.utils import get_class, instantiate
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
+from testbed.core import ActionHook
 from testbed.core.load import designer_from_run, run_checkpoint_path, run_config
 from testbed.core.setup import instantiate_action_net
-from testbed.designers import ActionHook
 
 # Scored when a run's config names no losses of its own. Deliberately just the
 # one every task supports: which of the sorted/permutation-invariant variants

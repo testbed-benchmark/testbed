@@ -15,7 +15,7 @@ from torch.distributions.transforms import (
     StickBreakingTransform,
 )
 
-from testbed.core import RandomScaleGaussianDesignDistribution
+from testbed.core import RandomScaleGaussianDesignDistribution, Rollout
 from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.hooks import RolloutHook
 from testbed.core.util import sort_by_first_coordinate
@@ -38,12 +38,7 @@ from testbed.design_objectives import (
     posterior_nll,
 )
 from testbed.design_objectives.reinforce import leave_one_out_baseline
-from testbed.designers import (
-    PolicyDesigner,
-    RandomDesigner,
-    Rollout,
-    SequentialDesigner,
-)
+from testbed.designers import PolicyDesigner, RandomDesigner, SequentialDesigner
 from testbed.tasks import (
     CES,
     LinearRegression,
