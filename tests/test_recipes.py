@@ -12,6 +12,8 @@ import torch
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 
+import testbed  # registers the auto_device resolver
+
 RECIPES_PATH = Path(__file__).resolve().parents[1] / "testbed" / "recipes"
 RECIPES_DIR = str(RECIPES_PATH)
 
@@ -34,6 +36,7 @@ def _compose(recipe, overrides=()):
 @pytest.mark.parametrize("recipe", ENTRY_POINT_RECIPES)
 def test_recipe_composes_and_builds_its_task(recipe):
     cfg = _compose(recipe)
+    assert cfg.device in {"cpu", "cuda"}
     assert cfg.save_dir
     instantiate(cfg.task)
 
