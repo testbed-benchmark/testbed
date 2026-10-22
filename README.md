@@ -31,19 +31,7 @@ You can install an editable version of the current library as follows:
 ```
 git clone git@github.com:testbed-benchmark/testbed.git
 cd testbed
-pip install -e .[full,dev,docs]
-```
-
-## Installing with conda
-
-If you prefer conda, create and activate an environment first, then install the package into it with pip:
-
-```
-conda create -n testbed python=3.11
-conda activate testbed
-git clone git@github.com:testbed-benchmark/testbed.git
-cd testbed
-pip install -e .[full,dev]
+pip install -e ".[full,dev,docs]"
 ```
 
 To do a basic check of your installation, run `pytest`.

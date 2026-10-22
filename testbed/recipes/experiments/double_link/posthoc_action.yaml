@@ -1,26 +1,12 @@
 # @package _global_
 
-# An action net trained on rollouts from a frozen designer:
-#
-#   python testbed/methods/posthoc_action.py \
-#     --config-name experiments/double_link/posthoc_action \
-#     designer_run_dir=runs/<a finished double_link run>
-#
-# The run supplies the task, T and the frozen design policy; this supplies the
-# loss to train the action net with, and the losses to report.
-
 defaults:
   - /method: posthoc_action
   - override /task: double_link
   - _self_
 
-eval_every: 0  # the final_eval block handles it
+eval_every: 0
 
-wandb:
-  project: double_link  # one project per task; methods separate by group
-  group: posthoc_action
-
-# Parameters are a plain vector, so the element-wise loss applies as written.
 loss:
   _target_: testbed.design_objectives.MSELoss
   reduction: mean

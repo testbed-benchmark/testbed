@@ -8,10 +8,8 @@ defaults:
   - /hydra_run: default
   - _self_
 
-# system
 seed: 0
 
-# rollout
 pool_size: 200
 
 design_net:
@@ -29,9 +27,8 @@ design_net:
   outcome_center: 0.0
   outcome_scale: 1.0
 
-# training
-train_time_budget_seconds: null  # no wall-clock limit by default
-checkpoint_every: 7_500  # policy snapshots; 0 disables periodic saving
+train_time_budget_seconds: null  # null for no time limit
+checkpoint_every: 7_500  # 0 to disable
 n_train_iter: 200_000
 n_warmup_iter: 20_000
 n_outer: 200
@@ -43,7 +40,6 @@ optimizer:
   lr: 1e-3
   weight_decay: 0.01
 
-# evaluation
 eval_every: 10_000
 eval_pool_size: 2_000
 eval_batch_size: 50

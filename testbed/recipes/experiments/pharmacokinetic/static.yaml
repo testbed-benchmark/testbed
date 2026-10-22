@@ -1,0 +1,8 @@
+# @package _global_
+
+defaults:
+  - /method: static
+  - override /task: pharmacokinetic
+  - _self_
+
+eval_every: 0

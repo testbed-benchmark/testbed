@@ -7,78 +7,59 @@ defaults:
   - /hydra_run: default
   - _self_
 
-# system (device/save_dir come from the system group)
 seed: 0
 torch_deterministic: true
 
-# designer
-# The frozen source of rollouts. `designer_run_dir` points at a finished run
-# whose designer we freeze -- its task, T, design net (or static design) and
-# history convention all come from that run's own config, so nothing here has
-# to be kept in step with it. Left null, `designer` is built as written.
+# The designer whose rollouts train the action net. `designer_run_dir` points at
+# a finished run whose designer is frozen; its task, T, design net and history
+# convention all come from that run's config. Left null, `designer` is built as
+# written.
 designer:
   _target_: testbed.designers.RandomDesigner
 designer_run_dir: null
 
-# false -> the action net conditions on physical designs; true -> on the raw
-# designs the designer emitted, before task.design_space.to_design.
-# null -> follow the designer's own convention.
+# false: the action net conditions on physical designs; true: on the raw
+# designs the designer emitted, before task.design_space.to_design; null:
+# follow the designer's own convention.
 use_raw_history: null
 
-# loss
-# Element-wise, so it holds for any task. A task whose parameters are a set of
-# exchangeable objects (location finding's sources) wants the sorted or
-# permutation-invariant variant instead; see experiments/<task>/posthoc_action.yaml.
 loss:
   _target_: testbed.design_objectives.MSELoss
   reduction: mean
 
-# training
 n_train_iter: 25_000
 n_outer: 2_000
 
-# eval
 eval_every: 0
 n_outer_eval: 2_048
 
-# optimizer
 lr: 5e-4
 betas: [0.8, 0.998]
-grad_clip: null # can help improve stability; try ~1.0 as a default
+grad_clip: null
 lr_gamma: 0.95
-lr_period: 1000  # halved with n_train_iter, so the LR still anneals to the same place
+lr_period: 1000
 
-# evaluation of the saved checkpoint, run at the end of training and repeatable
-# with `python -m testbed.eval.eval_loss <run_dir>`. Every loss listed is scored
-# on one shared set of rollouts, and the results are written to eval.json and
-# logged to the training run. Distinct from `eval_every`/`n_outer_eval`, which
-# control periodic eval during training.
+# Scores the final checkpoint on one shared set of rollouts and writes the
+# results to eval.json.
 final_eval:
   enabled: true
   checkpoint: final_step.pt
-  # These losses are heavy-tailed -- a few rollouts carry much of the mean --
-  # so 2_048 leaves a ~25% standard error on them.
+  # These losses are heavy-tailed, so 2_048 rollouts leave a ~25% standard error.
   n_outer: 8_192
   outer_batch_size: 256
-  # Element-wise, so they hold for any task. Losses reading the last two axes
-  # as (objects, dim_object) -- the sorted and permutation-invariant ones --
-  # belong to tasks whose parameters are a set of objects, and the TrueLogMSE
-  # variants log theta itself and are NaN wherever it can be negative; both are
-  # added per experiment. See experiments/location_finding_2src/posthoc_action.yaml.
+  # Element-wise losses, valid for any task. Tasks whose parameters are a set
+  # of objects add the sorted and permutation-invariant variants, and tasks
+  # with positive parameters add the TrueLogMSE ones.
   losses:
     mse:
       _target_: testbed.design_objectives.MSELoss
     log_mse:
       _target_: testbed.design_objectives.LogMSELoss
 
-# action network
-# The MLP flattens the whole history, so only the hidden widths are set here:
-# the first and last entries are refitted to the task and T, whichever run's
-# designer we freeze. Shown for the default task.
+# The first and last entries of `dims` are refitted to the task and T; only the
+# hidden widths matter here.
 action_net:
   _target_: testbed.design_nets.MLPPolicyNet
-  # input dim: T * (dim_y + dim_design)
-  # output dim: prod(*event_shape_action)
   dims: [30, 512, 256, 128, 2]
   activation:
     _target_: torch.nn.GELU

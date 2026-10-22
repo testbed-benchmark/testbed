@@ -1,0 +1,16 @@
+# @package _global_
+
+defaults:
+  - /method: aline
+  - override /task: michaelis_menten
+  - _self_
+
+# Map designs and outcomes to roughly [-1, 1].
+design_net:
+  design_center: 200.0
+  design_scale: 200.0
+  outcome_center: 100.0
+  outcome_scale: 100.0
+
+checkpoint_every: 2_500
+eval_every: 0

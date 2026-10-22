@@ -6,40 +6,26 @@ defaults:
   - override /net@action_net: null
   - _self_
 
-# Hyperparameter settings for reproducing ActionBED on the 2D, 2 source LF problem
-# See: ActionBED (Rossa et al., 2026), Table 13.
+seed: 0
 
-seed: 42  # single-run default; seed sweeps override this
+eval_every: 0
 
-wandb:
-  project: location_finding_2src  # one project per task; methods separate by group
-  group: actionbed
-
-# loss
 loss:
-  _target_: testbed.design_objectives.PermutationInvariantMSELoss
-# training
+  _target_: testbed.design_objectives.PermutationInvariantLogMSELoss
+
 n_train_iter: 150_000
 n_action_warmup_iter: 50_000
 n_outer: 2_000
 
-# optimizer
 lr: 5e-4
 betas: [0.8, 0.998]
 grad_clip: null
 lr_gamma: 0.95
-lr_period: 2000
-# policy networks
-design_net:
-  _target_: testbed.design_nets.AttentivePolicyNet
-  encoder_dim_h: [64]
-  dim_emb: 64
-  num_heads: 4
-  num_blocks: 2
+lr_period: 2500
+
 action_net:
   _target_: testbed.design_nets.MLPPolicyNet
-  # input dim: T * (dim_y + n_sources * dim_theta)
-  # output dim: dim_theta
+  # input: T * (dim_y + dim_design) = 30 * (1 + 2); output: n_sources * dim_theta = 4
   dims: [90, 512, 256, 128, 4]
   activation:
     _target_: torch.nn.GELU

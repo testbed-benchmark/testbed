@@ -1,27 +1,12 @@
 # @package _global_
 
-# An action net trained on rollouts from a frozen designer:
-#
-#   python testbed/methods/posthoc_action.py \
-#     --config-name experiments/location_finding_2src/posthoc_action \
-#     designer_run_dir=runs/<a finished location_finding_2src run>
-#
-# The run supplies the task, T and the frozen design policy; this supplies the
-# loss to train the action net with, and the losses to report.
-
 defaults:
   - /method: posthoc_action
   - override /task: location_finding_2src
   - _self_
 
-eval_every: 0  # the final_eval block handles it
+eval_every: 0
 
-wandb:
-  project: location_finding_2src  # one project per task; methods separate by group
-  group: posthoc_action
-
-# The sources are exchangeable, so their ordering must not count against an
-# estimate -- in training or in what is reported.
 loss:
   _target_: testbed.design_objectives.PermutationInvariantMSELoss
   reduction: mean

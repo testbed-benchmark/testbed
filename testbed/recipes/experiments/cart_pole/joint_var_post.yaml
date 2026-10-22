@@ -1,0 +1,72 @@
+# @package _global_
+
+defaults:
+  - /method: var_post
+  - override /task: cart_pole
+  - _self_
+
+# Joint variational posterior (Foster et al. 2020): the posterior and the
+# policy are co-optimised on the Barber-Agakov bound, with no pretraining
+# phase. Optimiser settings follow ScoreBED's released code.
+
+seed: 0
+
+checkpoint_every: 5_000
+
+joint: true
+
+objective:
+  name: barber_agakov
+  fused: true
+
+n_posterior_pretrain_iter: 0
+n_posterior_outer: 2_048
+pretrain_design_distr: null
+
+n_train_iter: 200_000
+n_outer: 2_048
+
+lr: 1e-5
+betas: [0.9, 0.999]
+grad_clip: 1.0
+policy_cosine_alpha: 5e-6
+ema_decay: 0.99
+
+posterior_lr: 1e-3
+posterior_betas: [0.9, 0.999]
+posterior_grad_clip: 1.0
+posterior_warmup_frac: 0.001
+posterior_lr_floor: 1e-6
+
+eval_every: 0
+
+# The mixture is fitted in log space, where the log-normal prior is Gaussian,
+# and pushed through exp onto the positive parameters. theta_loc/theta_scale
+# standardize log space to the prior's moments.
+posterior_net:
+  _target_: testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet
+  n_components: 10
+  encoder_dim_h: 256
+  dim_emb: 128
+  num_heads: 4
+  num_blocks: 3
+  trunk_dim_h: null
+  trunk_activation:
+    _target_: torch.nn.GELU
+    _partial_: true
+  log_scale_min: -7.0
+  log_scale_max: 3.0
+  init_scale: 1.0
+  theta_loc:
+    _target_: torch.tensor
+    data: [0.0, 0.0, 0.0]
+  theta_scale:
+    _target_: torch.tensor
+    data: [0.1, 0.1, 0.1]
+  canonicalize_theta: false
+  transform:
+    _target_: testbed.design_nets.BlockTransform
+    raw_sizes: [3]
+    theta_sizes: [3]
+    transforms:
+      - _target_: torch.distributions.transforms.ExpTransform

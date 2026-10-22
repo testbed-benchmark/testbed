@@ -6,9 +6,6 @@ Usage:
 <task> names a recipe in testbed/recipes/task/. One (task, seed) is evaluated
 per invocation and written to <out_dir>/<task>/seed<n>.jsonl. The sample sizes
 default to testbed/recipes/final_eval/default.yaml (see `--help`).
-
-scripts/random_eval.sbatch holds the task and seed lists, running one
-(task, seed) per array element.
 """
 
 import argparse

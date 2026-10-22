@@ -9,12 +9,13 @@ defaults:
   - /final_eval: default
   - /hydra_run: default
   - _self_
-# system (device/save_dir come from the system group)
+
 seed: 0
 torch_deterministic: true
-# frozen variant: pretrain the posterior, then freeze it while training the policy
+
+# false: pretrain the posterior, then freeze it while training the policy.
 joint: false
-# objective
+
 objective:
   name: barber_agakov
   reparameterize_policy: false
@@ -22,32 +23,29 @@ objective:
   requires_policy_log_probs: false
   use_current_prior: false
   fused: true
-# posterior pretraining
+
 n_posterior_pretrain_iter: 5_000
 n_posterior_outer: 1_024
 posterior_lr: 1e-4
 posterior_grad_clip: 1.0
-posterior_betas: null  # null -> torch Adam default (0.9, 0.999)
-posterior_warmup_frac: null  # null/0 -> constant posterior_lr; else linear-warmup-then-cosine-decay
+posterior_betas: null  # null: torch Adam default (0.9, 0.999)
+posterior_warmup_frac: null  # null or 0: constant posterior_lr; else linear warmup then cosine decay
 posterior_lr_floor: 1e-6  # only used when posterior_warmup_frac is set
 pretrain_design_distr: null
-# policy training
+
 n_train_iter: 25_000
 n_outer: 2_048
 
-# budget / checkpointing
 train_time_budget_seconds: null  # null for no time limit
 checkpoint_every: 0  # 0 to disable
 
-# optimizer
 lr: 1e-4
 grad_clip: 1.0
-betas: null  # null -> torch Adam default (0.9, 0.999)
-policy_cosine_alpha: null  # null -> constant lr; else cosine decay to lr * policy_cosine_alpha
-lr_schedule_iters: null  # null -> schedules span the whole run; else their horizon in steps
-ema_decay: null  # null -> no EMA tracking of design_net
+betas: null  # null: torch Adam default (0.9, 0.999)
+policy_cosine_alpha: null  # null: constant lr; else cosine decay to lr * policy_cosine_alpha
+lr_schedule_iters: null  # null: schedules span the whole run; else their horizon in steps
+ema_decay: null  # null: no EMA of design_net
 
-# eval
-eval_every: 0  # eval is expensive here; off for this recipe
+eval_every: 0
 n_outer_eval: 2_048
 n_inner_eval: 100_000

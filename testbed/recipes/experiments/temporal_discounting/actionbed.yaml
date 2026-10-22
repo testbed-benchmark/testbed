@@ -1,0 +1,39 @@
+# @package _global_
+
+defaults:
+  - /method: actionbed
+  - override /task: temporal_discounting
+  - override /net@action_net: null
+  - _self_
+
+seed: 0
+
+eval_every: 0
+
+# Discrete outcomes, so train with REINFORCE.
+objective:
+  name: reinforce
+  reparameterize_policy: false
+  baseline: leave_one_out
+  requires_policy_log_probs: false
+
+loss:
+  _target_: testbed.design_objectives.LogMSELoss
+
+n_train_iter: 150_000
+n_action_warmup_iter: 50_000
+n_outer: 2_000
+
+lr: 5e-4
+betas: [0.8, 0.998]
+grad_clip: 1.0  # REINFORCE gradients are high-variance
+lr_gamma: 0.95
+lr_period: 2500
+
+action_net:
+  _target_: testbed.design_nets.MLPPolicyNet
+  # input: T * (dim_y + dim_design) = 20 * (1 + 2); output: dim_theta = 2
+  dims: [60, 512, 256, 128, 2]
+  activation:
+    _target_: torch.nn.GELU
+    _partial_: true

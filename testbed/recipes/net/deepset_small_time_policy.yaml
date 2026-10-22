@@ -1,9 +1,4 @@
-# net/deepset_policy with learned time embeddings switched on, for the
-# architecture ablation. Every other value is identical, so the pair isolates
-# what order-awareness contributes at DAD's own network size
-#
-# The embedding is concatenated onto each token, so with dim_time = dim_emb = 16
-# the per-step input is [dim_design + dim_y + 16] rather than [dim_design + dim_y].
+# net/deepset_policy with a learned time embedding concatenated onto each token.
 _target_: testbed.design_nets.TimeEmbeddedDeepSetPolicyNet
 encoder_dim_h: [256]
 dim_emb: 16
