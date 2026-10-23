@@ -6,10 +6,11 @@ from pathlib import Path
 import torch
 from hydra.utils import instantiate
 
+from testbed.core import ActionHook
 from testbed.core.load import designer_from_run, run_config
 from testbed.core.setup import instantiate_action_net, make_main, setup
 from testbed.core.util import seed_all
-from testbed.designers import ActionHook, Designer
+from testbed.designers import Designer
 from testbed.eval.eval_loss import evaluate_loss_checkpoint
 from testbed.methods.actionbed import build_loss_fn
 
@@ -337,7 +338,7 @@ def run(cfg):
     finished run, in which case that run's designer (and its task, T, design
     net and history convention) are taken from its own saved config.
 
-        python testbed/methods/action.py designer_run_dir=runs/<run_name>
+        python testbed/methods/posthoc_action.py designer_run_dir=runs/<run_name>
 
     Everything else, the action net and the training schedule, stays ours.
 
@@ -357,7 +358,7 @@ def run(cfg):
     build_trainer(cfg, task, manager).train()
 
 
-main = make_main(run, "method/action")
+main = make_main(run, "method/posthoc_action")
 
 if __name__ == "__main__":
     main()

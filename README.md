@@ -42,7 +42,7 @@ pip install -e ".[train]"
 
 Stable Hydra (1.3) cannot run its command line on Python 3.14, so use Python 3.13 or earlier to launch training runs.
 
-To do a basic check of your installation, run `pytest`. A more extensive test can be run with `python tests/manual/location_finding.py` (nb: this second test requires the `stepdad` [package](https://github.com/marcelhedman/stepdad/tree/master)).
+To do a basic check of your installation, run `pytest`.
 
 Check out the [Location Finding](docs/examples/location_finding.md) example for a quick overview of the package.
 

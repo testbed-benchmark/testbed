@@ -1,6 +1,7 @@
 """TestBED."""
 
 import importlib
+from importlib.metadata import PackageNotFoundError, version
 
 import torch
 
@@ -13,6 +14,13 @@ from . import (
     inference,
     tasks,
 )
+
+# Running from a source tree that was never installed has no metadata to read.
+try:
+    __version__ = version("testbed")
+except PackageNotFoundError:
+    __version__ = "unknown"
+del PackageNotFoundError, version
 
 # Training methods and checkpoint evaluation need the optional ``[train]``
 # dependencies (Hydra/OmegaConf), so they load only when first touched.

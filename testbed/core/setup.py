@@ -36,7 +36,7 @@ def instantiate_design_net(config, task):
 
 
 def instantiate_action_net(config, task, T):
-    """Instantiates an action net, which outputs into the task's action space.
+    """Instantiates an action net, which outputs an estimate of theta.
 
     A net configured with ``dims`` (an MLP) flattens the whole history, so its
     first and last widths follow from the task and T rather than the config,
@@ -48,14 +48,14 @@ def instantiate_action_net(config, task, T):
         dim_in = T * (prod(task.event_shape_y) + prod(task.event_shape_design))
         config = OmegaConf.merge(
             config,
-            {"dims": [dim_in, *config.dims[1:-1], prod(task.action_space.event_shape)]},
+            {"dims": [dim_in, *config.dims[1:-1], prod(task.event_shape_theta)]},
         )
 
     return instantiate(
         config,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
-        event_shape_out=task.action_space.event_shape,
+        event_shape_out=task.event_shape_theta,
     )
 
 

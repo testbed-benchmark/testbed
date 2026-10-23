@@ -1,8 +1,8 @@
 # @package _global_
 
 defaults:
-  - /method: action
-  - override /task: stochastic_pendulum
+  - /method: posthoc_action
+  - override /task: cart_pole
   - _self_
 
 eval_every: 0

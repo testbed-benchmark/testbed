@@ -40,7 +40,7 @@ def test_eval_star_import_skips_hydra_evaluators():
 
 @pytest.mark.parametrize(
     "module",
-    ["action", "actionbed", "aline", "dad", "rlboed", "static", "var_post"],
+    ["actionbed", "aline", "dad", "posthoc_action", "rlboed", "static", "var_post"],
 )
 def test_methods_expose_run_and_main(module):
     import importlib

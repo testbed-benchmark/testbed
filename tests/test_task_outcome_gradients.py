@@ -7,11 +7,11 @@ from torch.distributions import Independent, Normal
 from testbed.core.distributions import TorchDistribution
 from testbed.tasks import (
     CES,
-    HyperbolicTemporalDiscounting,
     LinearRegression,
     LocationFinding,
     MichaelisMenten,
     PreyPopulation,
+    TemporalDiscounting,
 )
 from testbed.tasks.base import Task
 
@@ -93,13 +93,13 @@ _PATHWISE_TASKS = [
     lambda **kw: LinearRegression(dim=2, **kw),
     lambda **kw: MichaelisMenten(**kw),
     lambda **kw: CES(**kw),
-    lambda **kw: HyperbolicTemporalDiscounting(temperature=0.1, **kw),
+    lambda **kw: TemporalDiscounting(temperature=0.1, **kw),
 ]
 
 # Tasks with no pathwise sampler, which must reject an explicit True.
 _NON_PATHWISE_TASKS = [
     lambda **kw: PreyPopulation(**kw),
-    lambda **kw: HyperbolicTemporalDiscounting(temperature=0.0, **kw),
+    lambda **kw: TemporalDiscounting(temperature=0.0, **kw),
 ]
 
 

@@ -2,7 +2,7 @@
 
 defaults:
   - /method: dad
-  - override /task: constant_elasticity_of_substitution
+  - override /task: ces
   - _self_
 
 seed: 0

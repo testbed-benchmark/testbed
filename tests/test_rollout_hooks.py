@@ -3,7 +3,8 @@
 import pytest
 import torch
 
-from testbed.designers import ActionHook, Designer, RolloutHook
+from testbed.core import ActionHook, RolloutHook
+from testbed.designers import Designer
 from testbed.tasks import LocationFinding
 
 

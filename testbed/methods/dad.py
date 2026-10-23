@@ -200,7 +200,7 @@ class Trainer:
 def build_design_net(cfg, task):
     """Instantiates the design policy network.
 
-    Any raw-to-design reparametrization (e.g. HTD's exp/sigmoid transform)
+    Any raw-to-design reparametrization (e.g. TD's exp/sigmoid transform)
     lives on task.design_space and is applied automatically by the designer
     -- no net-level wrapper needed.
     """

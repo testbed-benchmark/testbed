@@ -8,14 +8,11 @@ import torch
 from hydra.utils import get_class, instantiate
 from omegaconf import OmegaConf
 
+from testbed.core import ActionHook
 from testbed.core.setup import make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_objectives import LossReinforce
-from testbed.designers import (
-    ActionHook,
-    PolicyDesigner,
-    RandomDesigner,
-)
+from testbed.designers import PolicyDesigner, RandomDesigner
 
 # ============================================================================
 # Training class
@@ -341,7 +338,7 @@ def build_policy_nets(cfg, task):
         cfg.action_net,
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
-        event_shape_out=task.action_space.event_shape,
+        event_shape_out=task.event_shape_theta,
     )
 
     return design_net, action_net

@@ -3,7 +3,7 @@
 T: 20
 
 task:
-  _target_: testbed.tasks.HyperbolicTemporalDiscounting
+  _target_: testbed.tasks.TemporalDiscounting
   epsilon: 0.01
   exponent: 1.0
   outer_exponent: 1.0

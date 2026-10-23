@@ -19,12 +19,12 @@ import torch
 from testbed.core.rollout import Rollout
 from testbed.design_objectives.contrastive import contrastive_logsumexps
 from testbed.tasks import CES, LocationFinding, StochasticPendulum
-from testbed.tasks.hyperbolic_temporal_discounting import HyperbolicTemporalDiscounting
+from testbed.tasks.temporal_discounting import TemporalDiscounting
 
 MEMORYLESS_TASKS = {
     "location_finding": lambda: LocationFinding(n_sources=2, dim_theta=2),
     "ces": CES,
-    "htd": HyperbolicTemporalDiscounting,
+    "td": TemporalDiscounting,
 }
 
 # The compiled loop is task-agnostic and compiling it dominates test time, so
@@ -113,7 +113,7 @@ def test_fused_scoring_matches_the_loop_on_gradients(name, float64):
         torch.manual_seed(0)
         joint, chunks = contrastive_logsumexps(task, rollout, L, None, fused=fused)
         (joint - torch.logsumexp(chunks, dim=1)).mean().backward()
-        # HTD's outcomes are discrete, so y carries no gradient there.
+        # TD's outcomes are discrete, so y carries no gradient there.
         return design.grad, y.grad
 
     looped, fused = grads(False), grads(True)

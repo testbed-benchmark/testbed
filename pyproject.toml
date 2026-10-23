@@ -30,13 +30,11 @@ train = ['hydra-core>=1.3']
 full = [
     'testbed[train]',
     'matplotlib',
-    'jupyterlab',
-    'notebook',
     'pyro-ppl',
     'wandb',
 ]
 wandb = ['wandb']
-dev = ["pytest", "pre-commit", "ruff", 'rich']
+dev = ["pytest", "pre-commit", "ruff"]
 docs = [
     "sphinx", 
     "sphinx-autoapi", 
@@ -48,6 +46,9 @@ docs = [
 
 [tool.setuptools.packages.find]
 include = ["testbed*"]
+
+[tool.setuptools.package-data]
+testbed = ["recipes/**/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

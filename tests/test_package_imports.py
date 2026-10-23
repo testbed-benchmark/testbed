@@ -30,14 +30,14 @@ TASKS = [
     "CartPole",
     "DoubleLink",
     "Gravimetry",
-    "HyperbolicTemporalDiscounting",
     "LinearRegression",
     "LocationFinding",
     "MichaelisMenten",
-    "PharmacoKinetic",
+    "Pharmacokinetic",
     "PreyPopulation",
     "StochasticPendulum",
     "Task",
+    "TemporalDiscounting",
 ]
 
 
@@ -47,3 +47,16 @@ def test_task_accessible_from_tasks_subpackage(name):
     from testbed import tasks
 
     assert hasattr(tasks, name)
+
+
+def test_old_task_names_still_instantiate():
+    """Saved run configs target the pre-rename class names."""
+    from hydra.utils import instantiate
+
+    from testbed import tasks
+
+    for old, new in [
+        ("HyperbolicTemporalDiscounting", tasks.TemporalDiscounting),
+        ("PharmacoKinetic", tasks.Pharmacokinetic),
+    ]:
+        assert isinstance(instantiate({"_target_": f"testbed.tasks.{old}"}), new)

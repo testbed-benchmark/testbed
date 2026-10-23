@@ -1,8 +1,8 @@
 # @package _global_
 
 defaults:
-  - /method: action
-  - override /task: double_link
+  - /method: posthoc_action
+  - override /task: pharmacokinetic
   - _self_
 
 eval_every: 0
