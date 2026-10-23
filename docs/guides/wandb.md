@@ -101,8 +101,3 @@ logger.close()
 
 You can also hand a ready-made logger to the `Manager` via its `logger=` argument, in
 which case the `Manager` uses it as-is and skips the `wandb:`-block wiring.
-
-## Running a recipe across seeds
-
-W&B also coordinates multi-seed runs: see [](sweeps.md) for the sweep setup that hands
-each unrun seed to the next available agent and rebuilds the queue after crashes.

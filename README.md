@@ -1,7 +1,7 @@
 # TestBED
 
 > [!WARNING]
-> TestBED is still early in its development.
+> TestBED is still in development.
 > We welcome all suggestions and contributions!
 
 TestBED is a PyTorch library for Bayesian Experimental Design (BED).
@@ -29,18 +29,18 @@ Requirements:
 You can install an editable version of the current library as follows:
 
 ```
-git clone git@github.com:testbed-benchmark/testbed.git
+git clone https://github.com/testbed-benchmark/testbed.git
 cd testbed
 pip install -e ".[full,dev,docs]"
 ```
 
 To do a basic check of your installation, run `pytest`.
 
-Check out the [Location Finding](docs/examples/location_finding.md) example for a quick overview of the package.
+Check out the [Location Finding](https://torch-testbed.readthedocs.io/en/latest/examples/location_finding.html) example for a quick overview of the package.
 
 ## Docs
 
-You can launch a local version of the documentation with `cd docs && make livehtml`. 
+The documentation is hosted at [torch-testbed.readthedocs.io](https://torch-testbed.readthedocs.io). You can launch a local version with `cd docs && make livehtml`.
 
 # Contributing
 
@@ -49,7 +49,7 @@ Please follow the following guidelines if you would like to contribute to TestBE
 1. Fork the repository and install the package in editable mode with dev
    dependencies:
 ```sh
-pip install -e .[full,dev,docs]
+pip install -e ".[full,dev,docs]"
 ```
 Also install the pre-commit hooks once:
 ```sh
