@@ -15,9 +15,9 @@ from omegaconf import OmegaConf
 
 from testbed.core.setup import instantiate_design_net, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
+from testbed.design_nets import AlineModel
 from testbed.design_objectives import SPCE
 from testbed.designers import AlineDesigner
-from testbed.method_nets import AlineModel
 
 
 class Trainer:

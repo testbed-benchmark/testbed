@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.distributions import Categorical, MixtureSameFamily, Normal
 
-from testbed.design_nets.history import prepare_history
+from .history import prepare_history
 
 
 class _AlineEncoderLayer(nn.TransformerEncoderLayer):

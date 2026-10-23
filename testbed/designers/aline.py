@@ -8,7 +8,7 @@ from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.hooks import ActionHook, apply_rollout_end
 from testbed.core.rollout import Rollout, RolloutState
 from testbed.core.util import sort_by_first_coordinate
-from testbed.method_nets.aline import AlineOutput
+from testbed.design_nets.aline import AlineOutput
 
 from .base import Designer
 

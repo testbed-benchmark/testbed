@@ -7,8 +7,12 @@ Histories are ``[*batch_shape, T, *event_shape]`` with an optional
 import pytest
 import torch
 
-from testbed.design_nets import DeepSetVariationalPosteriorNet
-from testbed.method_nets import AlineModel, RLBOEDDiscreteQNetwork, RLBOEDQNetwork
+from testbed.design_nets import (
+    AlineModel,
+    DeepSetVariationalPosteriorNet,
+    RLBOEDDiscreteQNetwork,
+    RLBOEDQNetwork,
+)
 
 BATCH_SHAPE = (2, 3)
 T = 4

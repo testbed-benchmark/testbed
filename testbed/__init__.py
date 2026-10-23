@@ -13,7 +13,6 @@ from . import (
     envs,
     eval,
     inference,
-    method_nets,
     methods,
     tasks,
 )

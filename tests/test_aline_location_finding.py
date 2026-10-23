@@ -9,8 +9,8 @@ from omegaconf import OmegaConf
 from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.hooks import ActionHook, PosteriorUpdateHook
 from testbed.core.rollout import Rollout
+from testbed.design_nets import AlineModel, AlineOutput
 from testbed.designers import AlineDesigner
-from testbed.method_nets import AlineModel, AlineOutput
 from testbed.methods.aline import Trainer, load_checkpoint
 from testbed.tasks import LocationFinding
 
@@ -355,7 +355,7 @@ def _checkpoint_cfg(**overrides):
             },
         },
         design_net={
-            "_target_": "testbed.method_nets.AlineModel",
+            "_target_": "testbed.design_nets.AlineModel",
             "embedding_dim": 8,
             "feedforward_dim": 16,
             "n_heads": 2,

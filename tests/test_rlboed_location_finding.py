@@ -22,6 +22,8 @@ from testbed.design_nets import (
     GaussianHead,
     GaussianPolicyActor,
     GaussianPolicyNet,
+    RLBOEDDiscreteQNetwork,
+    RLBOEDQNetwork,
 )
 from testbed.designers import PolicyDesigner
 from testbed.envs.history import History
@@ -31,7 +33,6 @@ from testbed.eval.eval_policy import (
 from testbed.eval.eval_policy import (
     evaluate_checkpoint,
 )
-from testbed.method_nets import RLBOEDDiscreteQNetwork, RLBOEDQNetwork
 from testbed.methods.rlboed import (
     Trainer,
     _CompactEpisodeReplayBuffer,

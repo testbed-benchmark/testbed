@@ -26,6 +26,8 @@ from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import (
     CategoricalPolicyNet,
     GaussianPolicyNet,
+    RLBOEDDiscreteQNetwork,
+    RLBOEDQNetwork,
     StochasticDesignNet,
 )
 from testbed.design_nets.encoder import make_history_encoder
@@ -33,7 +35,6 @@ from testbed.designers import PolicyDesigner
 from testbed.envs import BEDEnv
 from testbed.envs.history import History
 from testbed.envs.rewards import RLBOEDDenseReward
-from testbed.method_nets import RLBOEDDiscreteQNetwork, RLBOEDQNetwork
 from testbed.tasks.base import Task
 
 

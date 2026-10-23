@@ -5,9 +5,9 @@ from math import prod
 import torch
 from torch import Tensor, nn
 
-from testbed.design_nets.encoder import DeepSetEncoder, HistoryEncoder
-from testbed.design_nets.history import PreparedHistory, prepare_history
-from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
+from .encoder import DeepSetEncoder, HistoryEncoder
+from .history import PreparedHistory, prepare_history
+from .modules import MLP, _initialize_linear_layers, affine_rescale
 
 
 def _flat_bounds(bound: Tensor) -> Tensor:
