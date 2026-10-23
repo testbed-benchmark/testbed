@@ -31,7 +31,7 @@ def _make_task():
 
 
 def _make_design_net(task):
-    # task.design_space (an TDDesignSpace) maps raw (near-zero at init)
+    # task.design_space (a TDDesignSpace) maps raw (near-zero at init)
     # outputs to non-saturating (D_1, R_0); no wrapper needed.
     return DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,

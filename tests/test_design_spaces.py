@@ -215,7 +215,7 @@ def test_box_log_det_matches_autograd():
     assert torch.allclose(space._log_det_jacobian(raw), _autograd_log_det(space, raw))
 
 
-def test_htd_log_det_matches_autograd():
+def test_td_log_det_matches_autograd():
     space = TDDesignSpace(log_k_mean=-3.0)
     raw = torch.tensor([0.7, -0.4])
 
@@ -417,7 +417,7 @@ def test_finite_design_space_supports_scalar_designs():
 # ---------------------------------------------------------------------------
 
 
-def test_htd_design_space_inherits_the_base_shape_check():
+def test_td_design_space_inherits_the_base_shape_check():
     space = TDDesignSpace()
 
     assert space.event_shape == torch.Size([2])
@@ -425,7 +425,7 @@ def test_htd_design_space_inherits_the_base_shape_check():
     assert not space.contains(torch.tensor([1.0, 50.0, 25.0]))
 
 
-def test_htd_design_space_domain_is_closed():
+def test_td_design_space_domain_is_closed():
     # Closed, matching Step-DAD: exp and sigmoid saturate onto the boundary in
     # float32, and the likelihood is well defined there.
     space = TDDesignSpace()
@@ -439,14 +439,14 @@ def test_htd_design_space_domain_is_closed():
     assert not space.contains(torch.tensor([1.0, 100.001]))  # R_0 > 100
 
 
-def test_htd_sample_lands_in_the_space():
+def test_td_sample_lands_in_the_space():
     torch.manual_seed(0)
     space = TDDesignSpace(log_k_mean=-3.0)
 
     assert space.contains(space.sample((256,)))
 
 
-def test_htd_to_design_survives_float_saturation():
+def test_td_to_design_survives_float_saturation():
     # Regression: exp and 100*sigmoid saturate onto the domain boundary in
     # float32 (from raw around -104 and +17), which a DAD policy net reaches
     # routinely. Those designs must stay valid and finite -- they used to crash
@@ -465,7 +465,7 @@ def test_htd_to_design_survives_float_saturation():
     assert (design[:, 1] == 100.0).any()
 
 
-def test_htd_to_design_gradients_stay_finite_when_saturated():
+def test_td_to_design_gradients_stay_finite_when_saturated():
     # Regression: bounding D_1 by clamping exp's *output* makes the backward
     # pass compute 0 * inf = nan, which silently poisoned the policy net a few
     # thousand steps into DAD training. The bound goes on the exponent instead.
@@ -479,7 +479,7 @@ def test_htd_to_design_gradients_stay_finite_when_saturated():
     assert torch.isfinite(raw.grad).all()
 
 
-def test_htd_project_output_is_contained():
+def test_td_project_output_is_contained():
     # Regression: project() clamped R_0 to the closed [0, 100] while contains()
     # requires the open (0, 100), so a projected design failed validation --
     # BEDEnv projects and then validates, so this raised on every step whose
@@ -492,7 +492,7 @@ def test_htd_project_output_is_contained():
     assert space.contains(projected)
 
 
-def test_htd_to_design_round_trips():
+def test_td_to_design_round_trips():
     space = TDDesignSpace(log_k_mean=-3.0)
     raw = torch.randn(16, 2)
 

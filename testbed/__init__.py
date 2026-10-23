@@ -1,6 +1,6 @@
 """TestBED."""
 
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
 import torch
 from omegaconf import OmegaConf
@@ -17,8 +17,12 @@ from . import (
     tasks,
 )
 
-__version__ = version("testbed")
-del version
+# Running from a source tree that was never installed has no metadata to read.
+try:
+    __version__ = version("testbed")
+except PackageNotFoundError:
+    __version__ = "unknown"
+del PackageNotFoundError, version
 
 # Lets recipes write `device: ${auto_device:}`.
 OmegaConf.register_new_resolver(
