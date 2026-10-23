@@ -12,20 +12,22 @@ class Objective(ABC):
     """Shared base for design objectives."""
 
     def __init__(self, task: Task, fused: bool = False):
-        """Initializes.
+        """Initializes the objective.
 
-        fused scores a trajectory in one compiled call rather than looping over
-        the T steps. See ``Task.history_logp``.
+        Args:
+            task: Task whose expected information gain is estimated.
+            fused: If True, score a trajectory in one compiled call rather
+                than looping over the T steps. See :meth:`Task.history_logp`.
         """
         self.task = task
         self.fused = bool(fused)
 
 
 class DesignObjective(Objective):
-    """Estimates a gain for a single design (no history).
+    """Estimates the gain of a single design given the history so far.
 
-    Used by `SequentialDesigner`, which optimizes one design at a time via
-    gradient ascent (e.g. `NMC`, `PCE`).
+    Used by :class:`SequentialDesigner`, which optimizes one design at a time
+    by gradient ascent. Examples include :class:`NMC` and :class:`PCE`.
     """
 
     def __call__(
@@ -34,7 +36,7 @@ class DesignObjective(Objective):
         y_history: Tensor | None = None,
         design_history: Tensor | None = None,
     ) -> Tensor:
-        """Estimates gain for one design."""
+        """Estimates the gain of a design. Alias for :meth:`estimate_gain`."""
         return self.estimate_gain(
             design, y_history=y_history, design_history=design_history
         )
@@ -46,39 +48,52 @@ class DesignObjective(Objective):
         y_history: Tensor | None = None,
         design_history: Tensor | None = None,
     ) -> Tensor:
-        """Estimates expected information gain for a design.
+        """Estimates the expected information gain of a design.
 
-        design: ``[*event_shape_design]``.
-        y_history, design_history: the history observed so far, which
-        ``task.current_prior`` already conditions on (None at the first step).
-        returns: scalar gain estimate.
+        Args:
+            design: Candidate design of shape ``[*event_shape_design]``.
+            y_history: Outcomes observed so far, or None at the first step.
+                ``task.current_prior`` is assumed to already condition on them.
+            design_history: Designs observed so far, aligned with
+                ``y_history``, or None at the first step.
+
+        Returns:
+            Scalar gain estimate.
         """
         ...
 
 
 class RolloutObjective(Objective):
-    """Estimates a gain/surrogate from a full rollout.
+    """Estimates a gain, or a training surrogate for it, from a full rollout.
 
-    Used by amortized (`PolicyDesigner`) training (e.g. `SNMC`, `SPCE`,
-    `Reinforce`).
+    Used to train amortized policies for :class:`PolicyDesigner`. Examples
+    include :class:`SNMC`, :class:`SPCE` and :class:`Reinforce`.
     """
 
     def __call__(self, rollout: Rollout, **kwargs) -> Tensor:
-        """Estimates gain for a simulated rollout."""
+        """Estimates the gain of a rollout. Alias for :meth:`estimate_gain`."""
         return self.estimate_gain(rollout, **kwargs)
 
     @abstractmethod
     def estimate_gain(self, rollout: Rollout) -> Tensor:
-        """Estimates expected information gain (or a training surrogate) from a rollout.
+        """Estimates the expected information gain of a batched rollout.
 
-        returns: scalar, typically ``per_sample_gain(rollout).mean()``.
+        Args:
+            rollout: Batch of ``b`` simulated rollouts.
+
+        Returns:
+            Scalar gain estimate, typically ``per_sample_gain(rollout).mean()``.
         """
         ...
 
     @abstractmethod
     def per_sample_gain(self, rollout: Rollout) -> Tensor:
-        """Estimates per-sample gains (or surrogates) from a batched rollout.
+        """Estimates the gain of each rollout in a batch.
 
-        returns: [b]
+        Args:
+            rollout: Batch of ``b`` simulated rollouts.
+
+        Returns:
+            Per-sample gain estimates of shape ``[b]``.
         """
         ...
