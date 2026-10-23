@@ -7,6 +7,7 @@ build:
   jobs:
     # Avoid the multi-GB CUDA wheels from PyPI.
     pre_install:
+      - pip install --upgrade pip
       - pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 python:
