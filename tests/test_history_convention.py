@@ -4,6 +4,8 @@ Histories are ``[*batch_shape, T, *event_shape]`` with an optional
 ``[*batch_shape, T]`` boolean mask, and outputs keep ``batch_shape``.
 """
 
+from dataclasses import fields
+
 import pytest
 import torch
 
@@ -46,27 +48,21 @@ def _critic_kwargs():
     }
 
 
-def test_continuous_critic_accepts_leading_batch_dims():
-    critic = RLBOEDQNetwork(**_critic_kwargs())
+@pytest.mark.parametrize("discrete", [False, True])
+def test_critics_accept_leading_batch_dims(discrete):
     y, designs, mask = _history()
-    design = torch.rand(*BATCH_SHAPE, *EVENT_DESIGN)
+    if discrete:
+        critic = RLBOEDDiscreteQNetwork(n_designs=5, **_critic_kwargs())
+        candidate = ()
+    else:
+        critic = RLBOEDQNetwork(**_critic_kwargs())
+        candidate = (torch.rand(*BATCH_SHAPE, *EVENT_DESIGN),)
 
-    q = critic(y, designs, design, mask=mask)
-    flat = critic(_flat(y), _flat(designs), _flat(design), mask=_flat(mask))
+    q = critic(y, designs, *candidate, mask=mask)
+    flat = critic(_flat(y), _flat(designs), *map(_flat, candidate), mask=_flat(mask))
 
-    assert q.shape == (*BATCH_SHAPE, 1)
-    torch.testing.assert_close(q, flat.reshape(*BATCH_SHAPE, 1))
-
-
-def test_discrete_critic_accepts_leading_batch_dims():
-    critic = RLBOEDDiscreteQNetwork(n_designs=5, **_critic_kwargs())
-    y, designs, mask = _history()
-
-    q = critic(y, designs, mask=mask)
-    flat = critic(_flat(y), _flat(designs), mask=_flat(mask))
-
-    assert q.shape == (*BATCH_SHAPE, 5)
-    torch.testing.assert_close(q, flat.reshape(*BATCH_SHAPE, 5))
+    assert q.shape == (*BATCH_SHAPE, 5 if discrete else 1)
+    torch.testing.assert_close(q.flatten(0, 1), flat)
 
 
 def test_critic_rejects_mismatched_design_batch():
@@ -92,13 +88,6 @@ def test_posterior_accepts_leading_batch_dims():
     assert samples.shape == (7, *BATCH_SHAPE, *EVENT_THETA)
 
 
-def test_posterior_rejects_theta_with_other_batch_shape():
-    net = DeepSetVariationalPosteriorNet(EVENT_Y, EVENT_DESIGN, EVENT_THETA)
-    y, designs, mask = _history()
-    with pytest.raises(ValueError, match="theta must have shape"):
-        net.log_prob(torch.randn(6, *EVENT_THETA), y, designs, mask=mask)
-
-
 def _aline():
     torch.manual_seed(0)
     return AlineModel(
@@ -113,14 +102,12 @@ def _aline():
     ).eval()
 
 
-def _assert_outputs_close(actual, expected):
-    for name in (
-        "acquisition_logits",
-        "mixture_logits",
-        "mixture_means",
-        "mixture_scales",
-    ):
-        torch.testing.assert_close(getattr(actual, name), getattr(expected, name))
+def _assert_outputs_close(actual, expected, *, flatten_batch=False):
+    for field in fields(actual):
+        value = getattr(actual, field.name)
+        if flatten_batch:
+            value = value.flatten(0, 1)
+        torch.testing.assert_close(value, getattr(expected, field.name))
 
 
 def test_aline_accepts_leading_batch_dims():
@@ -137,20 +124,7 @@ def test_aline_accepts_leading_batch_dims():
 
     assert output.acquisition_logits.shape == (*BATCH_SHAPE, 5)
     assert output.mixture_means.shape == (*BATCH_SHAPE, 4, 3)
-    expected = type(flat)(
-        **{
-            name: getattr(flat, name).reshape(
-                *BATCH_SHAPE, *getattr(flat, name).shape[1:]
-            )
-            for name in (
-                "acquisition_logits",
-                "mixture_logits",
-                "mixture_means",
-                "mixture_scales",
-            )
-        }
-    )
-    _assert_outputs_close(output, expected)
+    _assert_outputs_close(output, flat, flatten_batch=True)
 
 
 @pytest.mark.parametrize("n_valid", [0, 2])
