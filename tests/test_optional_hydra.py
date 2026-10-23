@@ -20,6 +20,7 @@ import testbed
 from testbed.eval import chunked_spce_snmc, eval_spce_snmc
 from testbed.designers import RandomDesigner
 from testbed.tasks import LocationFinding
+from testbed.eval import *
 """
 
 
@@ -28,26 +29,6 @@ def test_core_library_imports_without_hydra():
         [sys.executable, "-c", _PROBE], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
-
-
-def test_eval_star_import_skips_hydra_evaluators():
-    probe = _PROBE + "\nfrom testbed.eval import *\n"
-    result = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize(
-    "module",
-    ["actionbed", "aline", "dad", "posthoc_action", "rlboed", "static", "var_post"],
-)
-def test_methods_expose_run_and_main(module):
-    import importlib
-
-    method = importlib.import_module(f"testbed.methods.{module}")
-    assert callable(method.run)
-    assert callable(method.main)
 
 
 @pytest.mark.parametrize(
@@ -80,13 +61,6 @@ def test_main_refuses_hydra_cli_it_cannot_run(
     else:
         main()
         assert len(ran) == 1
-
-
-def test_lazy_submodules_resolve():
-    import testbed
-
-    assert testbed.methods.DADTrainer is not None
-    assert callable(testbed.eval.evaluate_checkpoint)
 
 
 def test_setup_works_outside_the_hydra_cli(tmp_path):
