@@ -25,9 +25,10 @@ class VariationalPosteriorNet(nn.Module, ABC):
     one.
 
     Shape:
-        ``y_history``: ``[b, T, *event_shape_y]``
-        ``design_history``: ``[b, T, *event_shape_design]``
-        ``mask``: ``[b, T]`` or None
+        ``y_history``: ``[*batch_shape, T, *event_shape_y]``
+        ``design_history``: ``[*batch_shape, T, *event_shape_design]``
+        ``mask``: ``[*batch_shape, T]`` or None
+        ``theta``: ``[*batch_shape, *event_shape_theta]``
 
     Args:
         event_shape_theta: Shape of theta.
@@ -75,13 +76,16 @@ class VariationalPosteriorNet(nn.Module, ABC):
         """Evaluates the variational posterior's log density at theta.
 
         Args:
-            theta: Parameters, shape ``[b, *event_shape_theta]``.
-            y_history: Outcomes so far, shape ``[b, T, *event_shape_y]``.
-            design_history: Designs so far, shape ``[b, T, *event_shape_design]``.
-            mask: Optional boolean mask for padded histories, shape ``[b, T]``.
+            theta: Parameters, shape ``[*batch_shape, *event_shape_theta]``.
+            y_history: Outcomes so far, shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Designs so far, shape
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional boolean mask for padded histories, shape
+                ``[*batch_shape, T]``.
 
         Returns:
-            Tensor: Log density, shape ``[b]``.
+            Tensor: Log density, shape ``[*batch_shape]``.
         """
         ...
 
@@ -93,31 +97,32 @@ class VariationalPosteriorNet(nn.Module, ABC):
         Optional: raises NotImplementedError unless a subclass provides it.
 
         Args:
-            y_history: Outcomes so far, shape ``[b, T, *event_shape_y]``.
-            design_history: Designs so far, shape ``[b, T, *event_shape_design]``.
+            y_history: Outcomes so far, shape
+                ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Designs so far, shape
+                ``[*batch_shape, T, *event_shape_design]``.
             n_samples: How many samples to draw per batch element.
-            mask: Optional boolean mask for padded histories, shape ``[b, T]``.
+            mask: Optional boolean mask for padded histories, shape
+                ``[*batch_shape, T]``.
 
         Returns:
-            Tensor: Shape ``[n_samples, b, *event_shape_theta]``.
+            Tensor: Shape ``[n_samples, *batch_shape, *event_shape_theta]``.
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement sampling.")
 
-    def _check_theta_shape(self, theta: Tensor) -> None:
-        """Raises if theta's trailing dims are not ``event_shape_theta``."""
-        trailing_shape = torch.Size(
-            theta.shape[len(theta.shape) - len(self.event_shape_theta) :]
-        )
-        if trailing_shape != self.event_shape_theta:
-            raise ValueError(
-                f"theta must have trailing shape {tuple(self.event_shape_theta)}; "
-                f"got {tuple(theta.shape)}."
-            )
+    def _flatten_theta(self, theta: Tensor, batch_shape: torch.Size) -> Tensor:
+        """Checks theta's shape and flattens it to ``[*batch_shape, dim_theta]``.
 
-    def _flatten_theta(self, theta: Tensor) -> Tensor:
-        """Checks theta's trailing event shape and flattens it to ``[b, dim_theta]``."""
-        self._check_theta_shape(theta)
-        return theta.reshape(theta.shape[0], self.dim_theta)
+        Raises:
+            ValueError: If theta is not shaped
+                ``[*batch_shape, *event_shape_theta]``.
+        """
+        if theta.shape != (*batch_shape, *self.event_shape_theta):
+            raise ValueError(
+                "theta must have shape [*batch_shape, *event_shape_theta] = "
+                f"{(*batch_shape, *self.event_shape_theta)}; got {tuple(theta.shape)}."
+            )
+        return theta.reshape(*batch_shape, self.dim_theta)
 
 
 class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
@@ -234,36 +239,37 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
             )
 
     def distribution(self, y_history, design_history, mask=None) -> Distribution:
-        """Returns the Gaussian-mixture posterior for a history."""
+        """Returns the Gaussian-mixture posterior with batch shape ``batch_shape``."""
         return TorchDistribution(self._mixture(y_history, design_history, mask=mask))
 
     def log_prob(self, theta: Tensor, y_history, design_history, mask=None) -> Tensor:
-        """Evaluates the mixture's log density at theta; shape ``[b]``."""
-        theta_flat = self._flatten_theta(self._maybe_canonicalize(theta))
-        return self.distribution(y_history, design_history, mask=mask).log_prob(
-            theta_flat
+        """Evaluates the mixture's log density at theta; shape ``[*batch_shape]``."""
+        mixture = self._mixture(y_history, design_history, mask=mask)
+        theta_flat = self._flatten_theta(
+            self._maybe_canonicalize(theta), mixture.batch_shape
         )
+        return mixture.log_prob(theta_flat)
 
     def sample(
         self, y_history, design_history, n_samples: int = 1, mask=None
     ) -> Tensor:
-        """Draws mixture samples; shape ``[n_samples, b, *event_shape_theta]``."""
-        dist = self.distribution(y_history, design_history, mask=mask)
-        samples = dist.sample(n_samples)  # [n_samples, b, dim_theta]
+        """Draws samples; shape ``[n_samples, *batch_shape, *event_shape_theta]``."""
+        mixture = self._mixture(y_history, design_history, mask=mask)
+        samples = mixture.sample((n_samples,))  # [n_samples, *batch, dim_theta]
         samples = samples.reshape(
-            n_samples, y_history.shape[0], *self.event_shape_theta
+            n_samples, *mixture.batch_shape, *self.event_shape_theta
         )
         return self._maybe_canonicalize(samples)
 
     def _mixture(self, y_history, design_history, mask=None) -> MixtureSameFamily:
-        """Builds the underlying torch Gaussian mixture for a history."""
-        emb = self.encoder(y_history, design_history, mask=mask)  # [b, dim_emb]
-        b = emb.shape[0]
+        """Builds the torch Gaussian mixture, with batch shape ``batch_shape``."""
+        emb = self.encoder(y_history, design_history, mask=mask)  # [*batch, dim_emb]
+        batch_shape = emb.shape[:-1]
         K, D = self.n_components, self.dim_latent
 
         h = self.trunk(emb)  # [b, dim_h]
-        loc = self.loc_head(h).reshape(b, K, D)
-        raw_log_scale = self.log_scale_head(h).reshape(b, K, D)
+        loc = self.loc_head(h).reshape(*batch_shape, K, D)
+        raw_log_scale = self.log_scale_head(h).reshape(*batch_shape, K, D)
         log_scale = self.log_scale_min + 0.5 * (
             self.log_scale_max - self.log_scale_min
         ) * (torch.tanh(raw_log_scale) + 1)
@@ -272,7 +278,7 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
         loc = self.theta_loc + self.theta_scale * loc
         scale = self.theta_scale * scale
 
-        logits = self.logit_head(h)  # [b, K]
+        logits = self.logit_head(h).reshape(*batch_shape, K)
         component = Independent(Normal(loc, scale), 1)
         return MixtureSameFamily(Categorical(logits=logits), component)
 
@@ -372,15 +378,12 @@ class ConstrainedGaussianMixtureVariationalPosteriorNet(
         )
 
     def log_prob(self, theta: Tensor, y_history, design_history, mask=None) -> Tensor:
-        """Evaluates the pushforward log density at theta; shape ``[b]``."""
+        """Evaluates the pushforward log density at theta; shape ``[*batch_shape]``."""
+        mixture = self._mixture(y_history, design_history, mask=mask)
         # Before transform.inv, so a wrong-shaped theta still raises ValueError
         # rather than an IndexError from slicing inside the transform.
-        self._check_theta_shape(theta)
-
-        raw = self.transform.inv(theta.reshape(theta.shape[0], self.dim_theta))
-        log_q_raw = self.raw_distribution(
-            y_history, design_history, mask=mask
-        ).log_prob(raw)
+        raw = self.transform.inv(self._flatten_theta(theta, mixture.batch_shape))
+        log_q_raw = mixture.log_prob(raw)
 
         # Change of variables into theta's coordinates. The correction lives here
         # rather than in the objective because the Barber-Agakov bound is
@@ -399,16 +402,15 @@ class ConstrainedGaussianMixtureVariationalPosteriorNet(
     def sample(
         self, y_history, design_history, n_samples: int = 1, mask=None
     ) -> Tensor:
-        """Draws samples in theta space; shape ``[n_samples, b, *event_shape_theta]``.
+        """Draws theta samples; shape ``[n_samples, *batch_shape, *event_shape_theta]``.
 
         Every draw satisfies theta's constraints by construction, since it is the
         image of an unconstrained draw under ``transform``.
         """
-        raw = self.raw_distribution(y_history, design_history, mask=mask).sample(
-            n_samples
-        )  # [n_samples, b, dim_raw]
+        mixture = self._mixture(y_history, design_history, mask=mask)
+        raw = mixture.sample((n_samples,))  # [n_samples, *batch_shape, dim_raw]
         theta = self.transform(raw)
-        return theta.reshape(n_samples, y_history.shape[0], *self.event_shape_theta)
+        return theta.reshape(n_samples, *mixture.batch_shape, *self.event_shape_theta)
 
 
 class AttentiveVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):

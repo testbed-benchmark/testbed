@@ -1,34 +1,112 @@
-"""Policy and value networks used by RL-BOED."""
+"""Q-networks used by RL-BOED's SAC critics."""
+
+from math import prod
 
 import torch
 from torch import Tensor, nn
 
-from testbed.design_nets.encoder import DeepSetEncoder, HistoryEncoder
-from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
-from testbed.envs.history import History
+from .encoder import DeepSetEncoder, HistoryEncoder
+from .history import normalize_history, prepare_history, rescale_designs
+from .modules import MLP, _initialize_linear_layers
 
 
-class RLBOEDQNetwork(nn.Module):
+class _RLBOEDCritic(nn.Module):
+    """Shared history handling for the RL-BOED critics.
+
+    Histories follow the shared design-net convention: outcomes shaped
+    ``[*batch_shape, T, *event_shape_y]``, designs shaped
+    ``[*batch_shape, T, *event_shape_design]`` and an optional boolean mask
+    shaped ``[*batch_shape, T]``.
+    """
+
+    def __init__(
+        self,
+        *,
+        event_shape_y,
+        event_shape_design,
+        design_low,
+        design_high,
+        outcome_low,
+        outcome_high,
+        dim_h,
+        dim_emb: int,
+        encoder: HistoryEncoder | None,
+    ):
+        super().__init__()
+        self.event_shape_y = torch.Size(event_shape_y)
+        self.event_shape_design = torch.Size(event_shape_design)
+        self.dim_y = prod(self.event_shape_y)
+        self.dim_design = prod(self.event_shape_design)
+        self.encoder = encoder or DeepSetEncoder(
+            (self.dim_y,), (self.dim_design,), dim_h=dim_h, dim_emb=dim_emb
+        )
+        if (self.encoder.dim_y, self.encoder.dim_design) != (
+            self.dim_y,
+            self.dim_design,
+        ):
+            raise ValueError(
+                "encoder event sizes must match event_shape_y and event_shape_design."
+            )
+        self.dim_emb = self.encoder.dim_emb
+        for name, value, size in (
+            ("design_low", design_low, self.dim_design),
+            ("design_high", design_high, self.dim_design),
+            ("outcome_low", outcome_low, self.dim_y),
+            ("outcome_high", outcome_high, self.dim_y),
+        ):
+            value = torch.as_tensor(value)
+            if value.numel() not in (1, size):
+                raise ValueError(
+                    f"{name} must be a scalar or have one entry per coordinate."
+                )
+            self.register_buffer(name, value.reshape(-1).clone())
+
+    def _encode(self, y_history, design_history, mask: Tensor | None) -> Tensor:
+        """Encodes a history to ``[*batch_shape, dim_emb]``.
+
+        Outcomes and designs are rescaled to ``[0, 1]`` before encoding.
+        """
+        history = prepare_history(
+            y_history,
+            design_history,
+            event_shape_y=self.event_shape_y,
+            event_shape_design=self.event_shape_design,
+            mask=mask,
+            device=self.design_low.device,
+            dtype=self.encoder.null_enc.dtype,
+        )
+        history = normalize_history(
+            history,
+            design_bounds=(self.design_low, self.design_high),
+            outcome_bounds=(self.outcome_low, self.outcome_high),
+        )
+        return self.encoder.encode(history)
+
+
+class RLBOEDQNetwork(_RLBOEDCritic):
     """Continuous critic with a configurable history encoder.
 
     Args:
-        dim_y: Flattened outcome dimension.
-        dim_design: Flattened design dimension.
-        design_low: Per-coordinate lower references for design normalization.
-        design_high: Per-coordinate upper references for design normalization.
-        outcome_low: Per-coordinate lower outcome bounds.
-        outcome_high: Per-coordinate upper outcome bounds.
+        event_shape_y: Shape of one outcome.
+        event_shape_design: Shape of one design.
+        design_low: Lower references for design normalization, either a scalar
+            or one entry per design coordinate.
+        design_high: Upper references for design normalization, shaped like
+            ``design_low``.
+        outcome_low: Lower outcome bounds, a scalar or one per coordinate.
+        outcome_high: Upper outcome bounds, shaped like ``outcome_low``.
         dim_h: Hidden layer widths; an integer specifies one layer.
         dim_emb: History-summary dimension for the default encoder.
-        encoder: Optional history encoder. Defaults to ``DeepSetEncoder``.
+        encoder: Optional history encoder over flattened events. Defaults to
+            ``DeepSetEncoder``.
         head: Optional readout of concatenated history encoding and design.
     """
 
     def __init__(
         self,
         *,
-        dim_y: int,
-        dim_design: int,
+        event_shape_y,
+        event_shape_design,
         design_low,
         design_high,
         outcome_low,
@@ -38,108 +116,90 @@ class RLBOEDQNetwork(nn.Module):
         encoder: HistoryEncoder | None = None,
         head: nn.Module | None = None,
     ):
-        """Initializes the continuous-action critic.
-
-        Args:
-            dim_y: Flattened outcome dimension.
-            dim_design: Flattened design dimension.
-            design_low: Per-coordinate lower references for design normalization.
-            design_high: Per-coordinate upper references for design normalization.
-            outcome_low: Per-coordinate lower outcome bounds.
-            outcome_high: Per-coordinate upper outcome bounds.
-            dim_h: Hidden layer widths; an integer specifies one layer.
-            dim_emb: History-summary dimension for the default encoder.
-            encoder: Optional history encoder. Defaults to ``DeepSetEncoder``.
-            head: Optional readout of concatenated history encoding and design.
-        """
-        super().__init__()
-        self.dim_y = dim_y
-        self.dim_design = dim_design
-        self.encoder = encoder or DeepSetEncoder(
-            (self.dim_y,), (self.dim_design,), dim_h=dim_h, dim_emb=dim_emb
+        """Initializes the continuous-action critic."""
+        super().__init__(
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
+            design_low=design_low,
+            design_high=design_high,
+            outcome_low=outcome_low,
+            outcome_high=outcome_high,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+            encoder=encoder,
         )
-        self.dim_emb = self.encoder.dim_emb
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         self.emitter_net = head
         if self.emitter_net is None:
             self.emitter_net = MLP(
-                [self.dim_emb + dim_design] + hidden_widths + [1],
+                [self.dim_emb + self.dim_design] + hidden_widths + [1],
                 activation=nn.ReLU,
             )
             _initialize_linear_layers(self.emitter_net)
-        self.register_buffer("design_low", torch.as_tensor(design_low))
-        self.register_buffer("design_high", torch.as_tensor(design_high))
-        self.register_buffer("outcome_low", torch.as_tensor(outcome_low))
-        self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
 
-    def forward(self, observation: History, design: Tensor) -> Tensor:
+    def forward(
+        self,
+        y_history,
+        design_history,
+        design: Tensor,
+        *,
+        mask: Tensor | None = None,
+    ) -> Tensor:
         """Estimates Q from an encoded history summary and candidate design.
 
         Args:
-            observation: History containing designs, outcomes, and an optional
-                padding mask.
-            design: Candidate physical designs with shape
-                ``[batch, *event_shape_design]``.
+            y_history: Outcomes shaped ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Physical designs shaped
+                ``[*batch_shape, T, *event_shape_design]``.
+            design: Candidate physical designs shaped
+                ``[*batch_shape, *event_shape_design]``.
+            mask: Optional boolean validity mask shaped ``[*batch_shape, T]``.
 
         Returns:
-            Tensor: Q-values with shape ``[batch, 1]``.
+            Tensor: Q-values with shape ``[*batch_shape, 1]``.
         """
-        hist_designs = observation.designs
-        outcomes = observation.outcomes
-        mask = observation.mask
-        batch_size = hist_designs.shape[0]
-        history_length = hist_designs.shape[1]
-        hist_designs = hist_designs.reshape(batch_size, history_length, self.dim_design)
-        outcomes = outcomes.reshape(batch_size, history_length, self.dim_y)
-        design = design.reshape(batch_size, self.dim_design)
-        hist_designs = affine_rescale(
-            hist_designs,
-            self.design_low,
-            self.design_high,
-            0.0,
-            1.0,
-        )
-        outcomes = affine_rescale(
-            outcomes,
-            self.outcome_low,
-            self.outcome_high,
-            0.0,
-            1.0,
-        )
-        design = affine_rescale(
-            design,
+        encoding = self._encode(y_history, design_history, mask)
+        batch_shape = encoding.shape[:-1]
+        design = torch.as_tensor(design, device=encoding.device)
+        if design.shape != (*batch_shape, *self.event_shape_design):
+            raise ValueError(
+                "design must have shape [*batch_shape, *event_shape_design]."
+            )
+        design = rescale_designs(
+            design.reshape(*batch_shape, self.dim_design).to(encoding.dtype),
             self.design_low,
             self.design_high,
             -1.0,
             1.0,
         )
-
-        history_summary = self.encoder(outcomes, hist_designs, mask=mask)
-
-        return self.emitter_net(torch.cat([history_summary, design], dim=-1))
+        return self.emitter_net(torch.cat([encoding, design], dim=-1))
 
 
-class RLBOEDDiscreteQNetwork(nn.Module):
+class RLBOEDDiscreteQNetwork(_RLBOEDCritic):
     """Configurable history critic returning Q-values for categorical designs.
 
-    Attributes:
-        dim_y: Flattened outcome dimension.
-        dim_design: Flattened design dimension.
+    Args:
+        event_shape_y: Shape of one outcome.
+        event_shape_design: Shape of one design.
         n_designs: Number of categorical designs.
+        design_low: Lower bounds for design normalization, a scalar or one
+            entry per design coordinate.
+        design_high: Upper bounds for design normalization, shaped like
+            ``design_low``.
+        outcome_low: Lower outcome bounds, a scalar or one per coordinate.
+        outcome_high: Upper outcome bounds, shaped like ``outcome_low``.
+        dim_h: Hidden layer widths; an integer specifies one layer.
         dim_emb: History-summary dimension.
-        design_low: Per-coordinate lower bounds for design normalization.
-        design_high: Per-coordinate upper bounds for design normalization.
-        outcome_low: Lower bound for outcome normalization.
-        outcome_high: Upper bound for outcome normalization.
-        encoder: Module that summarizes the masked experiment history.
-        emitter_net: Module that maps a history embedding to Q-values.
+        encoder: Optional history encoder over flattened events. Defaults to
+            ``DeepSetEncoder``.
+        head: Optional readout from history encoding to one Q-value per design.
     """
 
     def __init__(
         self,
         *,
-        dim_y: int,
-        dim_design: int,
+        event_shape_y,
+        event_shape_design,
         n_designs: int,
         design_low,
         design_high,
@@ -150,29 +210,19 @@ class RLBOEDDiscreteQNetwork(nn.Module):
         encoder: HistoryEncoder | None = None,
         head: nn.Module | None = None,
     ):
-        """Initializes the discrete critic.
-
-        Args:
-            dim_y: Flattened outcome dimension.
-            dim_design: Flattened design dimension.
-            n_designs: Number of categorical designs.
-            design_low: Per-coordinate lower bounds for design normalization.
-            design_high: Per-coordinate upper bounds for design normalization.
-            outcome_low: Lower bound for outcome normalization.
-            outcome_high: Upper bound for outcome normalization.
-            dim_h: Hidden layer widths; an integer specifies one layer.
-            dim_emb: History-summary dimension.
-            encoder: Optional history encoder. Defaults to ``DeepSetEncoder``.
-            head: Optional readout from history encoding to one Q-value per design.
-        """
-        super().__init__()
-        self.dim_y = int(dim_y)
-        self.dim_design = int(dim_design)
-        self.n_designs = int(n_designs)
-        self.encoder = encoder or DeepSetEncoder(
-            (self.dim_y,), (self.dim_design,), dim_h=dim_h, dim_emb=dim_emb
+        """Initializes the discrete critic."""
+        super().__init__(
+            event_shape_y=event_shape_y,
+            event_shape_design=event_shape_design,
+            design_low=design_low,
+            design_high=design_high,
+            outcome_low=outcome_low,
+            outcome_high=outcome_high,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+            encoder=encoder,
         )
-        self.dim_emb = self.encoder.dim_emb
+        self.n_designs = int(n_designs)
         hidden_widths = [dim_h] if isinstance(dim_h, int) else list(dim_h)
         self.emitter_net = head
         if self.emitter_net is None:
@@ -180,32 +230,19 @@ class RLBOEDDiscreteQNetwork(nn.Module):
                 [self.dim_emb] + hidden_widths + [self.n_designs], activation=nn.ReLU
             )
             _initialize_linear_layers(self.emitter_net)
-        self.register_buffer("design_low", torch.as_tensor(design_low))
-        self.register_buffer("design_high", torch.as_tensor(design_high))
-        self.register_buffer("outcome_low", torch.as_tensor(outcome_low))
-        self.register_buffer("outcome_high", torch.as_tensor(outcome_high))
 
-    def forward(self, observation: History) -> Tensor:
+    def forward(
+        self, y_history, design_history, *, mask: Tensor | None = None
+    ) -> Tensor:
         """Estimates all design Q-values from an encoded history.
 
         Args:
-            observation: History containing designs, outcomes, and an optional
-                padding mask.
+            y_history: Outcomes shaped ``[*batch_shape, T, *event_shape_y]``.
+            design_history: Physical designs shaped
+                ``[*batch_shape, T, *event_shape_design]``.
+            mask: Optional boolean validity mask shaped ``[*batch_shape, T]``.
 
         Returns:
-            Q-values with shape ``[batch, n_designs]``.
+            Q-values with shape ``[*batch_shape, n_designs]``.
         """
-        designs = observation.designs
-        outcomes = observation.outcomes
-        batch_size, history_length = designs.shape[:2]
-        designs = designs.reshape(batch_size, history_length, self.dim_design)
-        outcomes = outcomes.reshape(batch_size, history_length, self.dim_y)
-        width = self.design_high - self.design_low
-        scaled_designs = (designs - self.design_low) / width
-        designs = torch.where(
-            width == 0, torch.zeros_like(scaled_designs), scaled_designs
-        )
-        outcomes = affine_rescale(
-            outcomes, self.outcome_low, self.outcome_high, 0.0, 1.0
-        )
-        return self.emitter_net(self.encoder(outcomes, designs, mask=observation.mask))
+        return self.emitter_net(self._encode(y_history, design_history, mask))

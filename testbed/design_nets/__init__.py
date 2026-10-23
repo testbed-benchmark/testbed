@@ -18,15 +18,18 @@ from .encoder import (
     TimeEmbeddedDeepSetEncoder,
     make_history_encoder,
 )
-from .history import PreparedHistory, prepare_history
+from .history import (
+    PreparedHistory,
+    normalize_history,
+    prepare_history,
+    rescale_designs,
+)
 from .modules import BlockTransform, affine_rescale
 from .rlboed import RLBOEDDiscreteQNetwork, RLBOEDQNetwork
 from .stochastic import (
     CategoricalHead,
-    CategoricalPolicyActor,
     CategoricalPolicyNet,
     GaussianHead,
-    GaussianPolicyActor,
     GaussianPolicyNet,
     StochasticDesignNet,
     make_stochastic_policy,

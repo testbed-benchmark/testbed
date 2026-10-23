@@ -8,7 +8,7 @@ from testbed.core.design_spaces import BoxDesignSpace
 from testbed.core.hooks import ActionHook, apply_rollout_end
 from testbed.core.rollout import Rollout, RolloutState
 from testbed.core.util import sort_by_first_coordinate
-from testbed.design_nets import AlineOutput
+from testbed.design_nets.aline import AlineOutput
 
 from .base import Designer
 
@@ -159,7 +159,10 @@ class AlineDesigner(Designer):
             output = None
             if return_posterior_scores or (t < self.T and not random_policy):
                 output = self.model(
-                    y_history, design_history, candidates, available_mask
+                    y_history,
+                    design_history,
+                    candidates,
+                    available_mask=available_mask,
                 )
             if return_posterior_scores:
                 posterior_log_probs.append(self._mean_log_prob(output, theta))

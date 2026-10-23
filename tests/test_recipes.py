@@ -111,9 +111,9 @@ def test_rlboed_architecture_overrides(actor_architecture, critic_architecture):
     encoder_type = (
         AttentiveEncoder if actor_architecture == "attention" else DeepSetEncoder
     )
-    assert isinstance(policy.actor.encoder, encoder_type)
+    assert isinstance(policy.encoder, encoder_type)
     if actor_architecture == "attention":
-        assert policy.actor.encoder.max_T >= cfg.T
+        assert policy.encoder.max_T >= cfg.T
 
 
 def test_rlboed_rejects_unknown_architecture():
