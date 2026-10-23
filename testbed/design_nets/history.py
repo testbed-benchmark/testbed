@@ -120,9 +120,8 @@ def rescale_designs(
         Rescaled designs shaped like ``designs``. Coordinates whose bounds have
         zero width map to zero.
     """
-    width = high - low
-    scaled = target_low + (designs - low) * (target_high - target_low) / width
-    return torch.where(width == 0, torch.zeros_like(scaled), scaled)
+    scaled = affine_rescale(designs, low, high, target_low, target_high)
+    return torch.where(high == low, torch.zeros_like(scaled), scaled)
 
 
 def normalize_history(

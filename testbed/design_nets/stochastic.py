@@ -149,8 +149,8 @@ class StochasticDesignNet(DesignNet):
             event_shape_y=self.encoder.event_shape_y,
             event_shape_design=self.event_shape_design,
             mask=mask,
-            device=self.design_low.device,
-            dtype=self.design_low.dtype,
+            device=self.encoder.null_enc.device,
+            dtype=self.encoder.null_enc.dtype,
         )
         history = normalize_history(
             history,
@@ -404,7 +404,16 @@ class GaussianPolicyNet(StochasticDesignNet):
         self, y_history, design_history, mask: Tensor | None
     ) -> tuple[Tensor, Tensor]:
         """Returns Gaussian parameters shaped ``[*batch_shape, dim_design]``."""
-        return self.head(self._encode(y_history, design_history, mask))
+        encoding = self._encode(y_history, design_history, mask)
+        mean, log_std = self.head(encoding)
+        expected_shape = (*encoding.shape[:-1], self.dim_design)
+        for name, value in (("mean", mean), ("log_std", log_std)):
+            if value.shape != expected_shape:
+                raise ValueError(
+                    f"head {name} must have shape [*batch_shape, dim_design]; "
+                    f"expected {expected_shape}, got {tuple(value.shape)}."
+                )
+        return mean, log_std
 
 
 class CategoricalPolicyNet(StochasticDesignNet):
@@ -546,7 +555,15 @@ class CategoricalPolicyNet(StochasticDesignNet):
         Returns:
             Logits with shape ``[*batch_shape, n_designs]``.
         """
-        return self.head(self._encode(y_history, design_history, mask))
+        encoding = self._encode(y_history, design_history, mask)
+        logits = self.head(encoding)
+        expected_shape = (*encoding.shape[:-1], self.n_designs)
+        if logits.shape != expected_shape:
+            raise ValueError(
+                "head logits must have shape [*batch_shape, n_designs]; "
+                f"expected {expected_shape}, got {tuple(logits.shape)}."
+            )
+        return logits
 
     def design_probabilities(
         self, y_history, design_history, *, mask: Tensor | None = None

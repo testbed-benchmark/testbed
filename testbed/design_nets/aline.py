@@ -229,10 +229,15 @@ class AlineModel(nn.Module):
         return (outcomes - self.outcome_center) / self.outcome_scale
 
     def _attention_mask(
-        self, n_context: int, n_query: int, *, device: torch.device
+        self,
+        n_context: int,
+        n_query: int,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
     ) -> Tensor:
         n_total = n_context + n_query + self.dim_theta
-        mask = torch.full((n_total, n_total), float("-inf"), device=device)
+        mask = torch.full((n_total, n_total), float("-inf"), device=device, dtype=dtype)
         query_start = n_context
         target_start = n_context + n_query
 
@@ -284,7 +289,11 @@ class AlineModel(nn.Module):
         candidates = torch.as_tensor(
             candidates, device=self.design_center.device, dtype=self.design_center.dtype
         )
-        n_query = candidates.shape[len(batch_shape)] if candidates.ndim else 0
+        n_query = (
+            candidates.shape[len(batch_shape)]
+            if candidates.ndim > len(batch_shape)
+            else 0
+        )
         if candidates.shape != (*batch_shape, n_query, *self.event_shape_design):
             raise ValueError(
                 "candidates must have shape [*batch_shape, N, *event_shape_design] "
@@ -294,9 +303,14 @@ class AlineModel(nn.Module):
             raise ValueError("ALINE requires at least one candidate design.")
         candidates = candidates.reshape(batch_size, n_query, self.dim_design)
 
+        context_designs, context_y = history.design_flat, history.y_flat
+        if history.mask_flat is not None:
+            valid = history.mask_flat.unsqueeze(-1)
+            context_designs = context_designs.masked_fill(~valid, 0.0)
+            context_y = context_y.masked_fill(~valid, 0.0)
         context_embeddings = self.design_embedder(
-            self._normalize_designs(history.design_flat)
-        ) + self.outcome_embedder(self._normalize_outcomes(history.y_flat))
+            self._normalize_designs(context_designs)
+        ) + self.outcome_embedder(self._normalize_outcomes(context_y))
         query_embeddings = self.design_embedder(self._normalize_designs(candidates))
         target_embeddings = self.target_tokens.unsqueeze(0).expand(batch_size, -1, -1)
         embeddings = torch.cat(
@@ -304,15 +318,13 @@ class AlineModel(nn.Module):
         )
 
         attention_mask = self._attention_mask(
-            n_context, n_query, device=embeddings.device
+            n_context, n_query, device=embeddings.device, dtype=embeddings.dtype
         )
         padding_mask = None
         if history.mask_flat is not None:
             # Float, like attention_mask, so PyTorch merges the two without
             # a mismatched-mask-type warning.
-            padding_mask = torch.zeros(
-                batch_size, embeddings.shape[1], device=embeddings.device
-            )
+            padding_mask = embeddings.new_zeros(batch_size, embeddings.shape[1])
             padding_mask[:, :n_context] = padding_mask[:, :n_context].masked_fill(
                 ~history.mask_flat, float("-inf")
             )
