@@ -16,7 +16,7 @@ from . import (
 
 # Training methods and checkpoint evaluation need the optional ``[train]``
 # dependencies (Hydra/OmegaConf), so they load only when first touched.
-_LAZY_SUBMODULES = ("cli", "eval", "methods")
+_LAZY_SUBMODULES = ("eval", "methods")
 
 try:
     from omegaconf import OmegaConf

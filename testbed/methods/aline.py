@@ -12,7 +12,7 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from testbed.core.setup import instantiate_design_net, setup
+from testbed.core.setup import instantiate_design_net, make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import AlineModel
 from testbed.design_objectives import SPCE
@@ -440,3 +440,9 @@ def run(cfg) -> None:
     model = instantiate_design_net(cfg.design_net, task).to(cfg.device)
     trainer = Trainer(task, model, cfg, manager=manager, start_time=start_time)
     trainer.train()
+
+
+main = make_main(run, "method/aline")
+
+if __name__ == "__main__":
+    main()

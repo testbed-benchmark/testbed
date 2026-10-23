@@ -20,7 +20,7 @@ from testbed.core.design_spaces import (
     DesignSpace,
     FiniteDesignSpace,
 )
-from testbed.core.setup import instantiate_design_net, setup
+from testbed.core.setup import instantiate_design_net, make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import (
     CategoricalPolicyNet,
@@ -1258,7 +1258,7 @@ def run(cfg):
     Args:
         cfg: Composed Hydra configuration for the training run.
 
-    Run with ``python -m testbed.cli.rlboed [overrides...]``.
+    Run with ``python testbed/methods/rlboed.py [overrides...]``.
     """
     start_time = time.monotonic()
     manager, task = setup(cfg)
@@ -1290,3 +1290,9 @@ def run(cfg):
     )
 
     trainer.train()
+
+
+main = make_main(run, "experiments/location_finding/rlboed")
+
+if __name__ == "__main__":
+    main()

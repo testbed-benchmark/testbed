@@ -12,7 +12,7 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from testbed.core.setup import setup
+from testbed.core.setup import make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_objectives import BarberAgakov, BarberAgakovReinforce, posterior_nll
 from testbed.designers import PolicyDesigner, RandomDesigner
@@ -581,7 +581,7 @@ def run(cfg):
     Args:
         cfg: Composed Hydra configuration for the training run.
 
-    Run with ``python -m testbed.cli.var_post [overrides...]``.
+    Run with ``python testbed/methods/var_post.py [overrides...]``.
     """
     start_time = time.monotonic()
     manager, task = setup(cfg)
@@ -589,3 +589,9 @@ def run(cfg):
     # Setup counts toward the time budget.
     trainer.elapsed_seconds = time.monotonic() - start_time
     trainer.train()
+
+
+main = make_main(run, "method/var_post")
+
+if __name__ == "__main__":
+    main()

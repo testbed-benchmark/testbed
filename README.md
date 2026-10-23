@@ -34,7 +34,7 @@ cd testbed
 pip install -e ".[full,dev,docs]"
 ```
 
-The core library (tasks, designers, design nets and objectives) needs only PyTorch. The training methods (`testbed.methods`), their Hydra entry points (`python -m testbed.cli.<method>`) and the checkpoint evaluators in `testbed.eval` additionally need [Hydra](https://hydra.cc/), which is opt-in through the `train` extra (also included in `full`):
+The core library (tasks, designers, design nets and objectives) needs only PyTorch. The training methods (`testbed.methods`), their Hydra entry points (`python testbed/methods/<method>.py`) and the checkpoint evaluators in `testbed.eval` additionally need [Hydra](https://hydra.cc/), which is opt-in through the `train` extra (also included in `full`):
 
 ```
 pip install -e ".[train]"

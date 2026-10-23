@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from testbed.core.rollout import Rollout
-from testbed.core.setup import setup
+from testbed.core.setup import make_main, setup
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import StaticDesigner
 from testbed.eval import eval_spce_snmc
@@ -254,7 +254,7 @@ def run(cfg):
     Args:
         cfg: Composed Hydra configuration for the training run.
 
-    Run with ``python -m testbed.cli.static [overrides...]``.
+    Run with ``python testbed/methods/static.py [overrides...]``.
     """
     manager, task = setup(cfg)
 
@@ -291,3 +291,9 @@ def run(cfg):
     )
 
     trainer.train()
+
+
+main = make_main(run, "method/static")
+
+if __name__ == "__main__":
+    main()

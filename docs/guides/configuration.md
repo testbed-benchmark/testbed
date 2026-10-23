@@ -4,7 +4,7 @@ orphan: true
 
 # Configuration recipes
 
-Training entry points (`python -m testbed.cli.<method>`) use
+Training entry points (`python testbed/methods/<method>.py`) use
 [Hydra](https://hydra.cc/) recipes from `testbed/recipes/`. Hydra is an optional
 dependency; install it with `pip install -e ".[train]"`. Configuration is split into three layers:
 
@@ -46,12 +46,12 @@ seed: 42
 Run an experiment recipe by selecting it with Hydra:
 
 ```sh
-python -m testbed.cli.actionbed \
+python testbed/methods/actionbed.py \
   --config-name experiments/location_finding_2src/actionbed
 ```
 
 For a one-off change, use CLI overrides instead of editing a recipe:
 
 ```sh
-python -m testbed.cli.actionbed seed=42 lr=5e-4 wandb.enabled=true
+python testbed/methods/actionbed.py seed=42 lr=5e-4 wandb.enabled=true
 ```

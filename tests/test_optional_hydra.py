@@ -38,28 +38,48 @@ def test_eval_star_import_skips_hydra_evaluators():
     assert result.returncode == 0, result.stderr
 
 
-def _hydra_cli_unsupported():
-    import re
-    from importlib.metadata import version
-
-    major, minor = re.match(r"(\d+)\.(\d+)", version("hydra-core")).groups()
-    return sys.version_info >= (3, 14) and (int(major), int(minor)) < (1, 4)
-
-
-@pytest.mark.skipif(
-    _hydra_cli_unsupported(), reason="hydra-core<1.4 CLI does not run on Python 3.14"
-)
 @pytest.mark.parametrize(
     "module",
     ["action", "actionbed", "aline", "dad", "rlboed", "static", "var_post"],
 )
-def test_cli_wraps_the_method_run(module):
+def test_methods_expose_run_and_main(module):
     import importlib
 
-    cli = importlib.import_module(f"testbed.cli.{module}")
     method = importlib.import_module(f"testbed.methods.{module}")
-    assert cli.run is method.run
-    assert callable(cli.main)
+    assert callable(method.run)
+    assert callable(method.main)
+
+
+@pytest.mark.parametrize(
+    ("python", "hydra_version", "fails"),
+    [
+        ((3, 14, 0), "1.3.2", True),
+        ((3, 14, 0), "1.4.0rc1", False),
+        ((3, 13, 0), "1.3.2", False),
+    ],
+)
+def test_main_refuses_hydra_cli_it_cannot_run(
+    monkeypatch, python, hydra_version, fails
+):
+    from types import SimpleNamespace
+
+    import testbed.core.setup as setup_module
+
+    monkeypatch.setattr(setup_module, "sys", SimpleNamespace(version_info=python))
+    monkeypatch.setattr(setup_module.hydra, "__version__", hydra_version)
+    ran = []
+    monkeypatch.setattr(
+        setup_module.hydra, "main", lambda **_: lambda run: lambda: ran.append(run)
+    )
+
+    main = setup_module.make_main(object(), "method/dad")
+    if fails:
+        with pytest.raises(RuntimeError, match="Python 3.14"):
+            main()
+        assert not ran
+    else:
+        main()
+        assert len(ran) == 1
 
 
 def test_lazy_submodules_resolve():
