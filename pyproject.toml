@@ -14,7 +14,7 @@ authors = [
     {name = 'Marcel Hedman', email = 'marcel.hedman@jesus.ox.ac.uk'},
     {name = 'Sahel Iqbal', email = 'sahel.iqbal@stats.ox.ac.uk'}
 ]
-urls = {Homepage = 'https://github.com/testbed-benchmark/testbed'}
+urls = {Homepage = 'https://github.com/testbed-benchmark/testbed', Documentation = 'https://torch-testbed.readthedocs.io'}
 
 dependencies = [
     'numpy>=1.24',

@@ -53,7 +53,7 @@ The base class calls `_sample_outcome` and `_outcome_logp` only after broadcasti
 
 `_sample_outcome` returns `[b, *event_shape_y]`, and `_outcome_logp` returns `[b]`. Both methods always receive `y_history` and `design_history`. Memoryless tasks simply ignore these arguments.
 
-Outcomes here are Bernoulli, so we can't sample them with a pathwise gradient, and `reparameterizable_outcomes` is `False`. Gradient-based designers will then use score-function estimators. A task that can reparameterize (as {py:class}`~testbed.tasks.location_finding.LocationFinding` does with `loc + scale * randn_like(loc)`) should return `True`. The base class raises an error if a task declares `True` but its samples carry no gradient. `Task.__init__` reads this property, so any attributes it depends on must be set before calling `super().__init__`.
+Outcomes here are Bernoulli, so we can't sample them with a pathwise gradient, and `reparameterizable_outcomes` is `False`. Pathwise objectives such as `SPCE` then miss the gradient through the outcomes, so gradient-based training should use a score-function objective such as `SPCEReinforce` (see [Implementing Custom Methods](custom_methods.md)). A task that can reparameterize (as {py:class}`~testbed.tasks.location_finding.LocationFinding` does with `loc + scale * randn_like(loc)`) should return `True`. The base class raises an error if a task declares `True` but its samples carry no gradient. `Task.__init__` reads this property, so any attributes it depends on must be set before calling `super().__init__`.
 
 The `design_space` argument, which tracks any constraints on the designs, is passed through to the base class; it is covered in Custom Design Spaces below.
 
@@ -196,17 +196,16 @@ theta = task.sample_prior()
 task.sample_outcome(theta, torch.tensor([2.0, 0.0, 0.0]))
 ```
 
-Designers optimize in raw space and map each design through `to_design`, so the designs they produce always lie in the ball:
+Designers work with unconstrained raw designs and map each one through `to_design`, so the designs they produce always lie in the ball. For example, a {py:class}`~testbed.designers.non_adaptive.StaticDesigner` initializes its raw designs from a standard normal:
 
 ```{code-cell} ipython3
-from testbed.design_objectives import PCE
-from testbed.designers import SequentialDesigner
+from testbed.designers import StaticDesigner
 
-pce = PCE(task, n_outer=64, n_inner=64)
-designer = SequentialDesigner(task, T=3, objective=pce, lr=1e-2, n_step_opt=50)
-
-rollout = designer.rollout(theta)
-print(rollout.design_history.norm(dim=-1))
+designer = StaticDesigner(task, T=5)
+with torch.no_grad():
+    rollout = designer.rollout(theta.unsqueeze(0))
+    print(rollout.extra["raw_design_history"].norm(dim=-1))
+    print(rollout.design_history.norm(dim=-1))
 ```
 
 ## Contributing New Tasks
