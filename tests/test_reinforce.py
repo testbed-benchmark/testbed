@@ -5,13 +5,14 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from testbed.core import Rollout
 from testbed.core.design_spaces import BoxDesignSpace
 from testbed.design_nets import DeepSetPolicyNet, GaussianPolicyNet
 from testbed.design_objectives import SPCE, Reinforce, SPCEReinforce
 from testbed.design_objectives.reinforce import leave_one_out_baseline
-from testbed.designers import PolicyDesigner, Rollout
+from testbed.designers import PolicyDesigner
 from testbed.methods.dad import Trainer, build_objective
-from testbed.tasks import HyperbolicTemporalDiscounting
+from testbed.tasks import TemporalDiscounting
 
 
 class _ValueFnReinforce(Reinforce):
@@ -26,11 +27,11 @@ class _ValueFnReinforce(Reinforce):
 
 
 def _make_task():
-    return HyperbolicTemporalDiscounting()
+    return TemporalDiscounting()
 
 
 def _make_design_net(task):
-    # task.design_space (an HTDDesignSpace) maps raw (near-zero at init)
+    # task.design_space (a TDDesignSpace) maps raw (near-zero at init)
     # outputs to non-saturating (D_1, R_0); no wrapper needed.
     return DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,

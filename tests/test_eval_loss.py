@@ -39,7 +39,7 @@ def _make_action_net(task):
     return DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,
-        event_shape_out=task.action_space.event_shape,
+        event_shape_out=task.event_shape_theta,
     )
 
 

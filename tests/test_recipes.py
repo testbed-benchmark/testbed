@@ -41,7 +41,7 @@ def test_recipe_composes_and_builds_its_task(recipe):
     instantiate(cfg.task)
 
 
-@pytest.mark.parametrize("recipe", _recipes("experiments/*/action.yaml"))
+@pytest.mark.parametrize("recipe", _recipes("experiments/*/posthoc_action.yaml"))
 def test_action_recipes_report_losses_that_fit_their_task(recipe):
     """Reported losses must apply to the action net's output.
 
@@ -50,7 +50,7 @@ def test_action_recipes_report_losses_that_fit_their_task(recipe):
     """
     cfg = _compose(recipe)
     reported = {k for k, v in cfg.final_eval.losses.items() if v is not None}
-    objects = len(instantiate(cfg.task).action_space.event_shape) > 1
+    objects = len(instantiate(cfg.task).event_shape_theta) > 1
 
     assert all(("permutation_invariant" in k) == objects for k in reported)
     trained = cfg.loss._target_.rsplit(".", 1)[-1].replace("Loss", "").lower()
@@ -70,14 +70,13 @@ def test_actionbed_recipes_build_nets_that_fit_the_task(recipe):
 
     y = torch.zeros(2, cfg.T, *task.event_shape_y)
     designs = torch.zeros(2, cfg.T, *task.event_shape_design)
-    assert action_net(y, designs).shape == (2, *task.action_space.event_shape)
+    assert action_net(y, designs).shape == (2, *task.event_shape_theta)
 
 
 @pytest.mark.parametrize(
     "recipe",
     [
         "method/var_post",
-        "method/joint_var_post",
         *_recipes("experiments/*/var_post.yaml"),
         *_recipes("experiments/*/joint_var_post.yaml"),
     ],

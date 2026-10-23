@@ -17,7 +17,7 @@ from testbed.designers import (
     RandomDesigner,
     StaticDesigner,
 )
-from testbed.methods.action import Trainer, adopt_run_task, build_policy_net
+from testbed.methods.posthoc_action import Trainer, adopt_run_task, build_policy_net
 from testbed.tasks import LocationFinding
 
 T = 3
@@ -49,7 +49,7 @@ def _make_designer(kind, task, *, use_raw_history=False):
 
 
 def _make_trainer(designer, task, *, use_raw_history=None):
-    action_net = _make_net(task, task.action_space.event_shape)
+    action_net = _make_net(task, task.event_shape_theta)
     cfg = SimpleNamespace(
         n_outer=4,
         n_outer_eval=4,
@@ -116,7 +116,7 @@ def test_cfg_overrides_the_designers_history_convention():
 def test_history_convention_defaults_to_physical_without_either():
     task = _make_task()
     designer = RandomDesigner(task, T)
-    action_net = _make_net(task, task.action_space.event_shape)
+    action_net = _make_net(task, task.event_shape_theta)
     trainer = Trainer(
         task,
         designer,
@@ -179,14 +179,14 @@ def test_action_net_dims_are_refitted_to_the_task():
 
     y = torch.zeros(2, T, *task.event_shape_y)
     designs = torch.zeros(2, T, *task.event_shape_design)
-    assert net(y, designs).shape == (2, *task.action_space.event_shape)
+    assert net(y, designs).shape == (2, *task.event_shape_theta)
     # The recipe is left as written; the shapes live in the built net.
     assert cfg.action_net.dims == [1, 16, 1]
 
 
 def test_trainer_rejects_a_non_designer():
     task = _make_task()
-    action_net = _make_net(task, task.action_space.event_shape)
+    action_net = _make_net(task, task.event_shape_theta)
     with pytest.raises(AssertionError):
         Trainer(
             task,
@@ -216,7 +216,7 @@ def test_a_designer_that_skips_its_hooks_says_so():
 def test_train_scores_the_checkpoint_it_saved(tmp_path):
     task = _make_task()
     designer = _make_designer("random", task)
-    action_net = _make_net(task, task.action_space.event_shape)
+    action_net = _make_net(task, task.event_shape_theta)
     cfg = OmegaConf.create(
         {
             "T": T,
@@ -263,7 +263,7 @@ def test_train_scores_the_checkpoint_it_saved(tmp_path):
 
 def test_train_skips_the_final_eval_when_it_is_disabled(tmp_path):
     task = _make_task()
-    action_net = _make_net(task, task.action_space.event_shape)
+    action_net = _make_net(task, task.event_shape_theta)
     cfg = SimpleNamespace(
         n_outer=4,
         n_outer_eval=4,

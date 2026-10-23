@@ -16,7 +16,7 @@ def run_config(run_dir):
     """Returns the config a finished run recorded for itself.
 
     The Manager's ``config.yaml`` is what the run actually built, which for
-    ``methods.action`` includes the task and action-net widths it adopted at
+    ``methods.posthoc_action`` includes the task and action-net widths it adopted at
     startup; ``.hydra/config.yaml`` is what Hydra composed, and stands in for
     runs written before the Manager kept a copy.
     """

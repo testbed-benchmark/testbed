@@ -8,8 +8,6 @@ from ..tasks.base import Task
 from .base_objective import DesignObjective, RolloutObjective
 from .loss import _check_reduction
 
-__all__ = ["BarberAgakov", "MyopicBarberAgakov", "posterior_nll"]
-
 
 def _prepend_history(context, step):
     """Prepends the history so far to this step's ``[b, 1, *event_shape]`` entry.

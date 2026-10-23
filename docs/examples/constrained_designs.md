@@ -23,14 +23,14 @@ from torch.distributions import MultivariateNormal
 
 from testbed.design_objectives import PCE
 from testbed.designers import SequentialDesigner
-from testbed.tasks import HyperbolicTemporalDiscounting
+from testbed.tasks import TemporalDiscounting
 
 torch.manual_seed(2)
 
-task = HyperbolicTemporalDiscounting()
+task = TemporalDiscounting()
 ```
 
-Many tasks have constraints that the designs must respect. For example, in {py:class}`~testbed.tasks.hyperbolic_temporal_discounting.HyperbolicTemporalDiscounting`, designs $x = (D_1, R_0)$ are constrained such that $D_1 \ge 0$ and $0 \le R_0 \le 100$. 
+Many tasks have constraints that the designs must respect. For example, in {py:class}`~testbed.tasks.temporal_discounting.TemporalDiscounting`, designs $x = (D_1, R_0)$ are constrained such that $D_1 \ge 0$ and $0 \le R_0 \le 100$. 
 
 Generally, a {py:class}`~testbed.tasks.base.Task` expects valid designs to be passed into it, and will not automatically constrain or transform the designs. If we try to pass an invalid design into our `Task` we'll get an error.
 
@@ -43,7 +43,7 @@ design = torch.tensor([-1., -1.])
 task.sample_outcome(theta, design)
 ```
 
-We see this error relies on {py:class}`~testbed.tasks.hyperbolic_temporal_discounting.HTDDesignSpace`, which is a subclass of {py:class}`~testbed.core.design_spaces.DesignSpace`. A `DesignSpace` provides methods for checking if designs are valid, as well as for transforming raw (or latent) designs to be valid designs. This is provided by the `to_design()` method, and its inverse is given by the `to_raw()` method. For the `HyperbolicTemporalDiscounting` task, raw designs are reparametrized under the maps $D_1 \mapsto \exp(D_1 - \log \mathbb{E}[k])$ and $R_0 \mapsto 100 * \mathrm{sigmoid}(R_0)$.
+We see this error relies on {py:class}`~testbed.tasks.temporal_discounting.TDDesignSpace`, which is a subclass of {py:class}`~testbed.core.design_spaces.DesignSpace`. A `DesignSpace` provides methods for checking if designs are valid, as well as for transforming raw (or latent) designs to be valid designs. This is provided by the `to_design()` method, and its inverse is given by the `to_raw()` method. For the `TemporalDiscounting` task, raw designs are reparametrized under the maps $D_1 \mapsto \exp(D_1 - \log \mathbb{E}[k])$ and $R_0 \mapsto 100 * \mathrm{sigmoid}(R_0)$.
 
 ```{code-cell} ipython3
 design_space = task.design_space # Each task has a default design_space attribute
@@ -67,7 +67,7 @@ Let's make a toy `SequentialDesigner` for this task and create a rollout. If we 
 ```{code-cell} ipython3
 T = 5
 
-task = HyperbolicTemporalDiscounting()
+task = TemporalDiscounting()
 pce = PCE(task, n_outer=32, n_inner=32)
 designer = SequentialDesigner(task, T, objective=pce, lr=5e-3, n_step_opt=5)
 

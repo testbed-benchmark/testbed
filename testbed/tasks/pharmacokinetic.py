@@ -37,7 +37,7 @@ class PKPrior(LogNormal):
         super().__init__(theta_loc, theta_covmat)
 
 
-class PharmacoKinetic(Task):
+class Pharmacokinetic(Task):
     r"""Pharmacokinetic task.
 
     A one-compartment model with first-order absorption. The design is the time
@@ -105,7 +105,7 @@ class PharmacoKinetic(Task):
     def __repr__(self) -> str:
         """Returns a compact representation."""
         return (
-            f"PharmacoKinetic(mult_noise_scale={self.mult_noise_scale}, "
+            f"Pharmacokinetic(mult_noise_scale={self.mult_noise_scale}, "
             f"add_noise_scale={self.add_noise_scale}, "
             f"decay_const={self.decay_const})"
         )

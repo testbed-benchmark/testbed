@@ -1,8 +1,8 @@
 # @package _global_
 
 defaults:
-  - /method: action
-  - override /task: cart_pole
+  - /method: posthoc_action
+  - override /task: double_link
   - _self_
 
 eval_every: 0

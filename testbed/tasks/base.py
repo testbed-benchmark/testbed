@@ -46,8 +46,6 @@ class Task(ABC, nn.Module):
         design_space (optional):
             Constraints on the space of designs. Its event shape must match
             ``event_shape_design`` (default: None).
-        action_space (optional):
-            Constraints on the space of actions (default: None).
         validate_designs (bool):
             Whether outcome_logp/sample_outcome/history_logp/sample_joint check
             incoming designs against design_space.contains(...) and raise if a
@@ -105,7 +103,6 @@ class Task(ABC, nn.Module):
         memoryless: bool = True,
         implicit_likelihood: bool = False,
         design_space: DesignSpace | None = None,
-        action_space: DesignSpace | None = None,
         validate_designs: bool = True,
         reparameterize_outcomes: bool | None = None,
     ):
@@ -140,13 +137,6 @@ class Task(ABC, nn.Module):
             )
         self.design_space = resolved_design_space
         self.validate_designs = validate_designs
-
-        resolved_action_space = (
-            action_space
-            if action_space is not None
-            else DefaultDesignSpace(self.event_shape_theta)
-        )
-        self.action_space = resolved_action_space
 
         # None follows the task's own capability. An explicit True the task
         # cannot honour is an error: a

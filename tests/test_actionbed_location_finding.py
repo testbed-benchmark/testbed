@@ -129,15 +129,6 @@ def test_build_policy_nets_sizes_action_net_to_theta_by_default():
     assert action_net.event_shape_out == task.event_shape_theta
 
 
-def test_build_policy_nets_sizes_action_net_to_custom_action_space():
-    task = _make_task()
-    task.action_space = BoxDesignSpace(low=0.0, high=1.0, event_shape=[3])
-
-    _, action_net = build_policy_nets(_net_cfg(), task)
-
-    assert action_net.event_shape_out == torch.Size([3])
-
-
 def test_maybe_save_best_saves_checkpoint_on_improvement(tmp_path):
     manager = Manager(
         SimpleNamespace(),

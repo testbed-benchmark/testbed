@@ -2,7 +2,7 @@
 
 defaults:
   - /method: aline
-  - override /task: constant_elasticity_of_substitution
+  - override /task: ces
   - _self_
 
 task:

@@ -3,7 +3,7 @@
 The counterpart to `eval_policy.py`: where that scores a design policy by its
 sPCE/sNMC bounds, this scores a designer together with the action net that
 reads its rollouts, by the losses that action incurs. It is what a finished
-`methods.action` run is evaluated with, though nothing here assumes the action
+`methods.posthoc_action` run is evaluated with, though nothing here assumes the action
 net was trained that way -- any designer plus any action net can be scored.
 
 Every loss is evaluated on one shared set of rollouts, so the numbers are
@@ -31,9 +31,9 @@ from hydra.utils import get_class, instantiate
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
+from testbed.core import ActionHook
 from testbed.core.load import designer_from_run, run_checkpoint_path, run_config
 from testbed.core.setup import instantiate_action_net
-from testbed.designers import ActionHook
 
 # Scored when a run's config names no losses of its own. Deliberately just the
 # one every task supports: which of the sorted/permutation-invariant variants

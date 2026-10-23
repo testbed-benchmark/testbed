@@ -1,9 +1,0 @@
-# @package _global_
-
-defaults:
-  - /method: var_post
-  - _self_
-
-# The posterior keeps training alongside the policy instead of being frozen.
-joint: true
-n_posterior_pretrain_iter: 0

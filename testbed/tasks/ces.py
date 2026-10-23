@@ -171,7 +171,6 @@ class CES(Task):
         epsilon: float = 2**-22,
         prior=None,
         design_space: DesignSpace | None = None,
-        action_space: DesignSpace | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the CES task."""
@@ -189,7 +188,6 @@ class CES(Task):
             event_shape_design=[6],
             prior=prior,
             design_space=design_space,
-            action_space=action_space,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 

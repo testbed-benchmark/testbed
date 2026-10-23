@@ -1,8 +1,8 @@
 # @package _global_
 
 defaults:
-  - /method: action
-  - override /task: constant_elasticity_of_substitution
+  - /method: posthoc_action
+  - override /task: ces
   - _self_
 
 eval_every: 0
