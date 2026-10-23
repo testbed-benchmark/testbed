@@ -38,7 +38,7 @@ docs = [
     "sphinx-autobuild", 
     "sphinx-book-theme",
     "myst-nb",
-    "jupyter-cache",
+    "matplotlib",
 ]
 
 [tool.setuptools.packages.find]
