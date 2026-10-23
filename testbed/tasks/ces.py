@@ -7,8 +7,9 @@ References:
 
 Note: there is some disagreement in the literature about which prior to use for u.
 Using a smaller prior variance significantly simplifies the task. We thus follow SGBOED and use a prior variance of 9.
-    - SGBOED uses a prior variance of 9 (https://github.com/ae-foster/pyro/blob/sgboed-reproduce/ces.py#L156)
-    - PASOA uses a prior variance of 3 (https://github.com/jcopo/pasoa/blob/main/exptax/models/model_ces.py#L28)
+
+- SGBOED uses a prior variance of 9 (https://github.com/ae-foster/pyro/blob/sgboed-reproduce/ces.py#L156)
+- PASOA uses a prior variance of 3 (https://github.com/jcopo/pasoa/blob/main/exptax/models/model_ces.py#L28)
 """
 
 import math
