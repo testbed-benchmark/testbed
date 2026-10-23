@@ -25,7 +25,6 @@ from testbed.core.setup import instantiate_design_net, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import (
     CategoricalPolicyNet,
-    GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
     StochasticDesignNet,
@@ -408,29 +407,20 @@ def make_networks(
     if not isinstance(actor, StochasticDesignNet):
         raise TypeError("cfg.design_net must construct a StochasticDesignNet.")
 
+    # The critics normalize histories with the same design bounds as the actor.
     critic_type = RLBOEDQNetwork
     critic_kwargs = {
         "event_shape_y": event_shape_y,
         "event_shape_design": event_shape_design,
         "dim_h": cfg.design_net.dim_h,
+        "design_low": actor.design_low,
+        "design_high": actor.design_high,
         "outcome_low": cfg.reward.outcome_low,
         "outcome_high": cfg.reward.outcome_high,
     }
-    if isinstance(design_space, BoxDesignSpace):
-        design_low = design_space.low.to(device).clone()
-        design_high = design_space.high.to(device).clone()
-    elif isinstance(design_space, DefaultDesignSpace):
-        if not isinstance(actor, GaussianPolicyNet):
-            raise TypeError(
-                "Unconstrained RLBOED design spaces require a GaussianPolicyNet."
-            )
-        design_low, design_high = actor.design_low, actor.design_high
-    else:
-        values = design_space.values.reshape(design_space.n_designs, dim_design)
-        design_low, design_high = values.amin(dim=0), values.amax(dim=0)
+    if isinstance(actor, CategoricalPolicyNet):
         critic_type = RLBOEDDiscreteQNetwork
-        critic_kwargs["n_designs"] = design_space.n_designs
-    critic_kwargs.update(design_low=design_low, design_high=design_high)
+        critic_kwargs["n_designs"] = actor.n_designs
 
     def make_critic():
         # Each network owns fresh parameters, constructed from the same encoder settings.

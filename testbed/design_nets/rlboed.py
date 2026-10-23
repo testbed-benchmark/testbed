@@ -48,7 +48,6 @@ class _RLBOEDCritic(nn.Module):
                 "encoder event sizes must match event_shape_y and event_shape_design."
             )
         self.dim_emb = self.encoder.dim_emb
-        # Buffers keep the shapes they were given so existing checkpoints load.
         for name, value, size in (
             ("design_low", design_low, self.dim_design),
             ("design_high", design_high, self.dim_design),
@@ -60,7 +59,7 @@ class _RLBOEDCritic(nn.Module):
                 raise ValueError(
                     f"{name} must be a scalar or have one entry per coordinate."
                 )
-            self.register_buffer(name, value)
+            self.register_buffer(name, value.reshape(-1).clone())
 
     def _encode(self, y_history, design_history, mask: Tensor | None) -> Tensor:
         """Encodes a history to ``[*batch_shape, dim_emb]``.

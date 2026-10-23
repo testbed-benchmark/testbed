@@ -28,10 +28,8 @@ from .modules import BlockTransform, affine_rescale
 from .rlboed import RLBOEDDiscreteQNetwork, RLBOEDQNetwork
 from .stochastic import (
     CategoricalHead,
-    CategoricalPolicyActor,
     CategoricalPolicyNet,
     GaussianHead,
-    GaussianPolicyActor,
     GaussianPolicyNet,
     StochasticDesignNet,
     make_stochastic_policy,
