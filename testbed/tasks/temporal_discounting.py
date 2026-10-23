@@ -24,7 +24,7 @@ _D1_FLOOR = 1e-30
 
 
 class TDDesignSpace(DesignSpace):
-    r"""Design space for HTD: :math:`D_1 \ge 0` and :math:`0 \le R_0 \le 100`.
+    r"""Design space for TD: :math:`D_1 \ge 0` and :math:`0 \le R_0 \le 100`.
 
     Supports the raw<->design reparametrization
     :math:`D_1 = \exp(x_d - \texttt{log_k_mean})`,
@@ -136,7 +136,7 @@ class TDPrior(Distribution):
     """
 
     def __init__(self, k_loc=-4.25, k_scale=1.5, alpha_scale=2.0) -> None:
-        """Initializes HTD prior parameters.
+        """Initializes TD prior parameters.
 
         The scales are standard deviations, matching the official DAD code
         (log_k ~ Normal(-4.25, 1.5), alpha ~ HalfNormal(2)).
@@ -255,7 +255,7 @@ class TemporalDiscounting(Task):
         design_space: DesignSpace | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
-        """Initializes the HTD task."""
+        """Initializes the TD task."""
         if prior is None:
             prior = TDPrior()
 

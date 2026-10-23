@@ -1,4 +1,4 @@
-"""Tests for the hyperbolic temporal-discounting task."""
+"""Tests for the temporal-discounting task."""
 
 import math
 
@@ -172,14 +172,14 @@ def test_outcome_logp_normalized():
     assert torch.allclose(total, torch.ones_like(total))
 
 
-def test_task_computes_htd_design_space_from_prior():
+def test_task_computes_td_design_space_from_prior():
     task = _make_task()
     assert isinstance(task.design_space, TDDesignSpace)
     expected = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
     assert task.design_space.log_k_mean == pytest.approx(expected)
 
 
-def test_htd_design_space_transform():
+def test_td_design_space_transform():
     # Raw (x_d, x_r) map to D_1 = exp(x_d - log_k_mean), R_0 = 100 * sigmoid(x_r).
     log_k_mean = -3.125
     space = TDDesignSpace(log_k_mean=log_k_mean)
@@ -191,7 +191,7 @@ def test_htd_design_space_transform():
     assert space.contains(design)
 
 
-def test_htd_design_space_keeps_gradients():
+def test_td_design_space_keeps_gradients():
     # Near-zero raw outputs saturate the task likelihood directly (zero gradient);
     # the transform maps them to non-saturating (D_1, R_0), keeping gradients alive.
     torch.manual_seed(0)

@@ -1,6 +1,6 @@
 """Tests for ActionBED's REINFORCE objective, checkpointing, and stop conditions.
 
-The HTD outcomes are discrete, so the plain loss only reaches the design net
+The TD outcomes are discrete, so the plain loss only reaches the design net
 through the action net's input and misses the trajectory score term. These
 cover the wiring that puts that term back, that a run using it still resumes
 exactly, and that a diverged run stops instead of spending its budget.
@@ -18,11 +18,11 @@ from testbed.design_objectives import LossReinforce
 from testbed.methods.actionbed import build_trainer, load_checkpoint
 
 RECIPES_DIR = str(Path(__file__).resolve().parents[1] / "testbed" / "recipes")
-HTD_RECIPE = "experiments/temporal_discounting/actionbed"
+TD_RECIPE = "experiments/temporal_discounting/actionbed"
 
 
 def _cfg(**overrides):
-    """Composes the HTD recipe, shrunk to a few cheap steps on the CPU."""
+    """Composes the TD recipe, shrunk to a few cheap steps on the CPU."""
     base = {
         "device": "cpu",
         "n_outer": 32,
@@ -41,7 +41,7 @@ def _cfg(**overrides):
     base.update(overrides)
     with initialize_config_dir(version_base="1.3", config_dir=RECIPES_DIR):
         return compose(
-            config_name=HTD_RECIPE,
+            config_name=TD_RECIPE,
             overrides=[f"{k}={v}" for k, v in base.items()],
         )
 
@@ -57,7 +57,7 @@ def _design_net_grad(trainer):
     )
 
 
-def test_htd_recipe_selects_the_reinforce_objective():
+def test_td_recipe_selects_the_reinforce_objective():
     trainer = build_trainer(_cfg(), instantiate(_cfg().task))
 
     assert isinstance(trainer.objective, LossReinforce)
