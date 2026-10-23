@@ -1,6 +1,4 @@
 # @package _global_
-# Hydra owns the run directory; reproduce the historical run-dir name.
-# Shared by every recipe via the `hydra_run` defaults group.
 hydra:
   job:
     chdir: false

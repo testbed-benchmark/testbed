@@ -18,29 +18,3 @@ from .loss import (
 from .reinforce import BarberAgakovReinforce, LossReinforce, Reinforce, SPCEReinforce
 from .snmc import NMC, SNMC
 from .spce import PCE, SPCE
-
-__all__ = [
-    "NMC",
-    "PCE",
-    "SNMC",
-    "SPCE",
-    "BarberAgakov",
-    "BarberAgakovReinforce",
-    "DesignObjective",
-    "LogLoss",
-    "LogMSELoss",
-    "LossReinforce",
-    "MSELoss",
-    "MyopicBarberAgakov",
-    "Objective",
-    "PermutationInvariantLogMSELoss",
-    "PermutationInvariantMSELoss",
-    "PermutationInvariantTrueLogMSELoss",
-    "Reinforce",
-    "RolloutObjective",
-    "SPCEReinforce",
-    "SortedLogMSELoss",
-    "SortedMSELoss",
-    "TrueLogMSELoss",
-    "posterior_nll",
-]

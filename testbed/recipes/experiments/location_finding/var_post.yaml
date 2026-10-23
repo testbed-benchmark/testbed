@@ -10,7 +10,3 @@ pretrain_design_distr:
   _target_: testbed.core.RandomScaleGaussianDesignDistribution
   scale_low: 0.5
   scale_high: 2.0
-
-wandb:
-  project: location_finding  # one project per task; methods separate by group
-  group: var_post

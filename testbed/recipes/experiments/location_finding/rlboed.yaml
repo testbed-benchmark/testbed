@@ -4,14 +4,12 @@ defaults:
   - /method: rlboed
   - _self_
 
-# Reference range used to normalize outcome histories for RL-BOED's policy and
-# critic networks. This does not constrain or clip task outcomes; observations
-# outside the range are simply mapped outside [0, 1].
+# Normalization range for the outcomes; outcomes are not clipped.
 reward:
   outcome_low: -3.0
   outcome_high: 10.0
 
-# RL-BOED requires a bounded design space for this otherwise unbounded task.
+# RL-BOED needs a bounded design space.
 task:
   design_space:
     _target_: testbed.core.design_spaces.BoxDesignSpace

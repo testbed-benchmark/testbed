@@ -34,7 +34,7 @@ from omegaconf import OmegaConf
 
 from testbed.core.setup import instantiate_design_net
 from testbed.designers import PolicyDesigner
-from testbed.eval import eval_spce_snmc
+from testbed.eval.base import eval_spce_snmc
 
 
 def build_design_net(cfg, task):

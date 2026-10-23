@@ -1,0 +1,11 @@
+# @package _global_
+
+defaults:
+  - /method: static
+  - override /task: cart_pole
+  - _self_
+
+objective:
+  n_inner: 8_192  # 4_096 saturates: a random design already scores near log(4097)
+
+eval_every: 0

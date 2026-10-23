@@ -5,12 +5,12 @@ import math
 import torch
 
 from testbed.designers import RandomDesigner, StaticDesigner
-from testbed.tasks import PharmacoKinetic
+from testbed.tasks import Pharmacokinetic
 from testbed.tasks.pharmacokinetic import PKPrior
 
 
 def test_event_shapes_and_flags():
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
 
     assert task.event_shape_y == torch.Size([1])
     assert task.event_shape_theta == torch.Size([3])
@@ -22,7 +22,7 @@ def test_event_shapes_and_flags():
 
 def test_default_noise_scales_match_reference():
     """iDAD uses epsilon_scale=sqrt(0.01) and nu_scale=sqrt(0.1)."""
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
 
     assert task.mult_noise_scale == math.sqrt(0.01)
     assert task.add_noise_scale == math.sqrt(0.1)
@@ -55,7 +55,7 @@ def test_prior_keeps_absorption_faster_than_elimination():
 
 
 def test_concentration_matches_closed_form():
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
     theta = torch.tensor([[1.2, 0.15, 18.0]])  # ka, ke, V
     design = torch.tensor([[3.0]])
 
@@ -70,7 +70,7 @@ def test_concentration_matches_closed_form():
 
 
 def test_concentration_is_zero_at_time_zero_and_batches_elementwise():
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
     theta = task.sample_prior(7)
 
     assert torch.allclose(
@@ -81,7 +81,7 @@ def test_concentration_is_zero_at_time_zero_and_batches_elementwise():
 
 
 def test_obs_std_combines_multiplicative_and_additive_noise():
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
     conc = torch.tensor([[0.0], [10.0]])
 
     expected = torch.sqrt((task.mult_noise_scale * conc) ** 2 + task.add_noise_scale**2)
@@ -92,7 +92,7 @@ def test_obs_std_combines_multiplicative_and_additive_noise():
 
 
 def test_outcome_logp_matches_analytic_gaussian_density():
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
     theta = torch.tensor([[1.2, 0.15, 18.0]])
     design = torch.tensor([[3.0]])
     y = torch.tensor([[12.0]])
@@ -108,7 +108,7 @@ def test_outcome_logp_matches_analytic_gaussian_density():
 
 
 def test_sample_outcome_is_reparametrized():
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
     theta = task.sample_prior(8)
     design = task.design_space.sample((8,)).requires_grad_(True)
 
@@ -122,7 +122,7 @@ def test_sample_outcome_is_reparametrized():
 
 def test_sample_outcome_matches_conditional_moments():
     torch.manual_seed(0)
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
     theta = torch.tensor([[1.2, 0.15, 18.0]]).expand(200_000, -1)
     design = torch.tensor([[3.0]]).expand(200_000, -1)
 
@@ -136,7 +136,7 @@ def test_sample_outcome_matches_conditional_moments():
 
 def test_random_designer_rollout_end_to_end():
     torch.manual_seed(0)
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
     designer = RandomDesigner(task, T=5)
     theta = task.sample_prior(4)
 
@@ -150,7 +150,7 @@ def test_random_designer_rollout_end_to_end():
 
 def test_static_designer_rollout_end_to_end():
     torch.manual_seed(0)
-    task = PharmacoKinetic()
+    task = Pharmacokinetic()
     designer = StaticDesigner(task, T=5)
     theta = task.sample_prior(4)
 

@@ -1,0 +1,66 @@
+# @package _global_
+
+defaults:
+  - /system: default
+  - /task: location_finding
+  - /wandb: default
+  - /hydra_run: default
+  - _self_
+
+seed: 0
+torch_deterministic: true
+
+# The designer whose rollouts train the action net. `designer_run_dir` points at
+# a finished run whose designer is frozen; its task, T, design net and history
+# convention all come from that run's config. Left null, `designer` is built as
+# written.
+designer:
+  _target_: testbed.designers.RandomDesigner
+designer_run_dir: null
+
+# false: the action net conditions on physical designs; true: on the raw
+# designs the designer emitted, before task.design_space.to_design; null:
+# follow the designer's own convention.
+use_raw_history: null
+
+loss:
+  _target_: testbed.design_objectives.MSELoss
+  reduction: mean
+
+n_train_iter: 25_000
+n_outer: 2_000
+
+eval_every: 0
+n_outer_eval: 2_048
+
+lr: 5e-4
+betas: [0.8, 0.998]
+grad_clip: null
+lr_gamma: 0.95
+lr_period: 1000
+
+# Scores the final checkpoint on one shared set of rollouts and writes the
+# results to eval.json.
+final_eval:
+  enabled: true
+  checkpoint: final_step.pt
+  # These losses are heavy-tailed, so 2_048 rollouts leave a ~25% standard error.
+  n_outer: 8_192
+  outer_batch_size: 256
+  # Element-wise losses, valid for any task. Tasks whose parameters are a set
+  # of objects add the sorted and permutation-invariant variants, and tasks
+  # with positive parameters add the TrueLogMSE ones.
+  losses:
+    mse:
+      _target_: testbed.design_objectives.MSELoss
+    log_mse:
+      _target_: testbed.design_objectives.LogMSELoss
+
+# The first and last entries of `dims` are refitted to the task and T; only the
+# hidden widths matter here.
+action_net:
+  _target_: testbed.design_nets.MLPPolicyNet
+  dims: [30, 512, 256, 128, 2]
+  activation:
+    _target_: torch.nn.GELU
+    _partial_: true

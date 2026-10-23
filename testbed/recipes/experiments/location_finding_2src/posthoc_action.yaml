@@ -1,0 +1,21 @@
+# @package _global_
+
+defaults:
+  - /method: posthoc_action
+  - override /task: location_finding_2src
+  - _self_
+
+eval_every: 0
+
+loss:
+  _target_: testbed.design_objectives.PermutationInvariantMSELoss
+  reduction: mean
+
+final_eval:
+  losses:
+    mse: null
+    log_mse: null
+    permutation_invariant_mse:
+      _target_: testbed.design_objectives.PermutationInvariantMSELoss
+    permutation_invariant_log_mse:
+      _target_: testbed.design_objectives.PermutationInvariantLogMSELoss

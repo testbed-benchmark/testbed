@@ -31,22 +31,10 @@ You can install an editable version of the current library as follows:
 ```
 git clone git@github.com:testbed-benchmark/testbed.git
 cd testbed
-pip install -e .[full,dev,docs]
+pip install -e ".[full,dev,docs]"
 ```
 
-## Installing with conda
-
-If you prefer conda, create and activate an environment first, then install the package into it with pip:
-
-```
-conda create -n testbed python=3.11
-conda activate testbed
-git clone git@github.com:testbed-benchmark/testbed.git
-cd testbed
-pip install -e .[full,dev]
-```
-
-To do a basic check of your installation, run `pytest`. A more extensive test can be run with `python tests/manual/location_finding.py` (nb: this second test requires the `stepdad` [package](https://github.com/marcelhedman/stepdad/tree/master)).
+To do a basic check of your installation, run `pytest`.
 
 Check out the [Location Finding](docs/examples/location_finding.md) example for a quick overview of the package.
 

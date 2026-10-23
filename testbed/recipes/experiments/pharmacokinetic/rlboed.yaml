@@ -5,22 +5,19 @@ defaults:
   - override /task: pharmacokinetic
   - _self_
 
-# Use the task's standard sampling-time box [0, 24] hours.
-# Normalization reference only: the log-normal prior and Gaussian observations
-# are unbounded, and observations outside this range are not clipped.
-# At four log-space standard deviations below the prior median V, D_V / V
-# is about 49; allowing four observation-noise standard deviations gives < 70.
+actor_architecture: attention
+
+# Normalization range for the outcomes; outcomes are not clipped. Four prior
+# standard deviations below the median V give D_V / V ~ 49, and four noise
+# standard deviations on top stay under 70.
 reward:
   outcome_low: -2.0
   outcome_high: 70.0
   n_contrastive: 100_000
 
 sac:
-  num_training_iterations: 20_001
+  num_training_iterations: 40_000
+  entropy_anneal_total: 1.429  # 20_001 * entropy_anneal_rate
   buffer_size: 1_000_000
   tau: 0.005
   policy_lr: 0.0003
-
-wandb:
-  project: pharmacokinetic
-  group: rlboed

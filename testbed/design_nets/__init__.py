@@ -4,6 +4,7 @@ from .base import DesignNet, DesignProposal
 from .deterministic import (
     AttentivePolicyNet,
     DeepSetPolicyNet,
+    DeterministicPolicyNet,
     GatedDeepSetPolicyNet,
     MLPPolicyNet,
     TimeEmbeddedDeepSetPolicyNet,

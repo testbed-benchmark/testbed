@@ -27,13 +27,11 @@ dependencies = [
 [project.optional-dependencies]
 full = [
     'matplotlib',
-    'jupyterlab',
-    'notebook',
     'pyro-ppl',
     'wandb',
 ]
 wandb = ['wandb']
-dev = ["pytest", "pre-commit", "ruff", 'rich']
+dev = ["pytest", "pre-commit", "ruff"]
 docs = [
     "sphinx", 
     "sphinx-autoapi", 
@@ -46,6 +44,9 @@ docs = [
 [tool.setuptools.packages.find]
 include = ["testbed*"]
 
+[tool.setuptools.package-data]
+testbed = ["recipes/**/*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = [
@@ -54,8 +55,6 @@ filterwarnings = [
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning:torch.jit._script",
 ]
 
-[tool.ruff]
-extend-exclude = ["testbed/notebooks/**/*.ipynb"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*.py" = ["F401", "D"]

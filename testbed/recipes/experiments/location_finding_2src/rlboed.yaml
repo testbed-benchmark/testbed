@@ -5,14 +5,14 @@ defaults:
   - override /task: location_finding_2src
   - _self_
 
-# Reference range used to normalize outcome histories for RL-BOED's policy and
-# critic networks. This does not constrain or clip task outcomes; observations
-# outside the range are simply mapped outside [0, 1].
+actor_architecture: attention
+
+# Normalization range for the outcomes; outcomes are not clipped.
 reward:
   outcome_low: -3.0
   outcome_high: 10.0
 
-# RL-BOED requires a bounded design space for this otherwise unbounded task.
+# RL-BOED needs a bounded design space.
 task:
   design_space:
     _target_: testbed.core.design_spaces.BoxDesignSpace
@@ -22,8 +22,5 @@ task:
       - ${task.dim_theta}
 
 sac:
-  num_training_iterations: 20_001
-
-wandb:
-  project: location_finding_2src  # one project per task; methods separate by group
-  group: rlboed
+  num_training_iterations: 40_000
+  entropy_anneal_total: 1.429  # 20_001 * entropy_anneal_rate

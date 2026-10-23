@@ -12,11 +12,11 @@ from testbed.designers import (
     RandomDesigner,
     StaticDesigner,
 )
-from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
+from testbed.tasks import LocationFinding, TemporalDiscounting
 
 
-def _htd():
-    return HyperbolicTemporalDiscounting()
+def _td():
+    return TemporalDiscounting()
 
 
 def _policy_designer(task, **kwargs):
@@ -68,7 +68,7 @@ def test_step_design_is_required_of_a_subclass():
             return self.task.device
 
     with pytest.raises(TypeError):
-        NoStepDesign(_htd(), T=2)
+        NoStepDesign(_td(), T=2)
 
 
 def test_a_designer_needs_only_step_design():
@@ -84,7 +84,7 @@ def test_a_designer_needs_only_step_design():
             design = torch.full((b, *self.task.event_shape_design), float(state.t) + 1)
             return design, None, None
 
-    task = _htd()
+    task = _td()
     designer = ConstantDesigner(task, T=3)
 
     rollout = designer.rollout(task.sample_prior(4))
@@ -108,7 +108,7 @@ def test_step_design_sees_the_step_index_and_prior_histories():
             b = state.y_history.shape[0]
             return torch.ones(b, *self.task.event_shape_design), None, None
 
-    task = _htd()
+    task = _td()
     RecordingDesigner(task, T=3).rollout(task.sample_prior(2))
 
     # Histories hold the steps completed strictly before t, and T is visible.
@@ -118,7 +118,7 @@ def test_step_design_sees_the_step_index_and_prior_histories():
 def test_step_design_can_read_hook_scratch():
     # The reason for passing the state: a designer can depend on what a hook
     # recorded, with no signature change anywhere.
-    from testbed.designers import RolloutHook
+    from testbed.core import RolloutHook
 
     class CountingHook(RolloutHook):
         def after_step(self, state):
@@ -136,7 +136,7 @@ def test_step_design_can_read_hook_scratch():
             b = state.y_history.shape[0]
             return torch.ones(b, *self.task.event_shape_design), None, None
 
-    task = _htd()
+    task = _td()
     designer = ScratchReadingDesigner(task, T=3, hooks=[CountingHook()])
     designer.rollout(task.sample_prior(2))
 
@@ -163,7 +163,7 @@ def _step_state(designer, task, b=4):
 
 @pytest.mark.parametrize("kind", ["static", "random", "policy"])
 def test_step_design_returns_a_design_of_the_right_shape(kind):
-    task = _htd()
+    task = _td()
     designer = {
         "static": lambda: StaticDesigner(task, T=3),
         "random": lambda: RandomDesigner(task, T=3),
@@ -180,7 +180,7 @@ def test_step_design_is_a_thin_adapter_over_a_semantic_method():
     # Each designer's real logic lives in a method with explicit, documented
     # inputs; _step_design only pulls those pieces off the state. Calling the
     # semantic method directly must give the same answer.
-    task = _htd()
+    task = _td()
 
     static = StaticDesigner(task, T=3)
     via_state = static._step_design(_step_state(static, task))
@@ -208,24 +208,24 @@ def test_stochastic_designer_base_class_is_gone():
     from testbed import designers
 
     assert not hasattr(designers, "StochasticDesigner")
-    assert isinstance(RandomDesigner(_htd(), T=2), Designer)
+    assert isinstance(RandomDesigner(_td(), T=2), Designer)
 
 
 def test_use_raw_history_is_not_a_general_designer_concern():
     # Only policy designers condition on the design history at all.
     assert not hasattr(Designer, "use_raw_history")
-    assert not hasattr(StaticDesigner(_htd(), T=2), "use_raw_history")
+    assert not hasattr(StaticDesigner(_td(), T=2), "use_raw_history")
 
     with pytest.raises(TypeError):
-        StaticDesigner(_htd(), T=2, use_raw_history=True)
+        StaticDesigner(_td(), T=2, use_raw_history=True)
 
 
 @pytest.mark.parametrize("use_raw_history", [True, False])
 def test_policy_designer_conditions_on_the_requested_history(use_raw_history):
-    # HTD's constrained designs satisfy D_1 > 0 and 0 < R_0 < 100; raw ones
+    # TD's constrained designs satisfy D_1 > 0 and 0 < R_0 < 100; raw ones
     # are unconstrained, so the two are easy to tell apart.
     torch.manual_seed(0)
-    task = _htd()
+    task = _td()
     net = DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,
         event_shape_design=task.event_shape_design,

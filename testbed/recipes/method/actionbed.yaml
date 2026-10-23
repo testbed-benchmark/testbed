@@ -9,42 +9,36 @@ defaults:
   - /final_eval: default
   - /hydra_run: default
   - _self_
-  
-# system (device/save_dir come from the system group)
+
 seed: 0
 torch_deterministic: true
 
 use_raw_history: true
 
-# objective
-# "loss": backprop the loss as-is; needs reparameterizable outcomes.
-# "reinforce": also add the trajectory score term, for discrete outcomes.
+# name: "loss" backpropagates the loss directly and needs reparameterizable
+# outcomes; "reinforce" adds the trajectory score term for discrete outcomes.
 objective:
   name: loss
   reparameterize_policy: false
   baseline: null
   requires_policy_log_probs: false
 
-# loss
 loss:
   _target_: testbed.design_objectives.PermutationInvariantMSELoss
   reduction: mean
-# training
+
 n_train_iter: 150_000
 n_action_warmup_iter: 50_000
 n_outer: 2_048
 
-# eval
 eval_every: 100
 n_outer_eval: 2_048
 
-# budget / checkpointing
 train_time_budget_seconds: null  # null for no time limit
 checkpoint_every: 10_000  # 0 to disable
 
-# optimizer
 lr: 5e-4
 betas: [0.8, 0.998]
-grad_clip: null # can help improve stability; try ~1.0 as a default
+grad_clip: null
 lr_gamma: 0.95
 lr_period: 2000

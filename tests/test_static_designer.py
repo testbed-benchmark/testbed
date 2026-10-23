@@ -4,8 +4,9 @@ import pytest
 import torch
 from torch import nn
 
-from testbed.designers import ActionHook, RolloutHook, StaticDesigner
-from testbed.tasks import HyperbolicTemporalDiscounting, LocationFinding
+from testbed.core import ActionHook, RolloutHook
+from testbed.designers import StaticDesigner
+from testbed.tasks import LocationFinding, TemporalDiscounting
 
 
 def test_rollout_shapes():
@@ -23,7 +24,7 @@ def test_rollout_shapes():
 def test_raw_design_is_always_exposed():
     # The designer computes a raw design either way, so it is always reported;
     # callers that don't need it can ignore the key.
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     designer = StaticDesigner(task, T=3)
     theta = task.sample_prior(4)
 
@@ -33,7 +34,7 @@ def test_raw_design_is_always_exposed():
 
 
 def test_raw_design_history_matches_design_parameter():
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     designer = StaticDesigner(task, T=3)
     theta = task.sample_prior(4)
 
@@ -53,7 +54,7 @@ def test_raw_design_history_matches_design_parameter():
 def test_raw_design_agrees_between_vectorized_and_per_step_paths():
     # StaticDesigner.rollout() has a vectorized fast path (no hooks) and a
     # per-step fallback (with hooks); both must expose the same raw designs.
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     designer = StaticDesigner(task, T=3)
     theta = task.sample_prior(4)
 
@@ -69,7 +70,7 @@ def test_raw_design_agrees_between_vectorized_and_per_step_paths():
 
 
 def test_default_transform_designs_matches_task_design_space():
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     designer = StaticDesigner(task, T=3)
     theta = task.sample_prior(4)
 
@@ -79,15 +80,15 @@ def test_default_transform_designs_matches_task_design_space():
     assert torch.allclose(
         task.design_space.to_design(raw_design_history), rollout.design_history
     )
-    # HTDDesignSpace.to_design is a real (non-identity) transform, so raw and
+    # TDDesignSpace.to_design is a real (non-identity) transform, so raw and
     # design must actually differ here.
     assert not torch.allclose(raw_design_history, rollout.design_history)
 
 
 def test_transform_designs_false_opts_out():
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     # With transform_designs=False, the raw learnable parameter (~N(0,1)) is
-    # used directly as the design, which won't satisfy HTDDesignSpace's real
+    # used directly as the design, which won't satisfy TDDesignSpace's real
     # domain constraints (D1 > 0, 0 < R0 < 100) -- disable validation since
     # this test is only about the designer-level opt-out, not design validity.
     task.validate_designs = False
@@ -101,7 +102,7 @@ def test_transform_designs_false_opts_out():
 
 
 def test_transform_designs_false_agrees_between_vectorized_and_per_step_paths():
-    task = HyperbolicTemporalDiscounting()
+    task = TemporalDiscounting()
     task.validate_designs = False
     designer = StaticDesigner(task, T=3, transform_designs=False)
     theta = task.sample_prior(4)

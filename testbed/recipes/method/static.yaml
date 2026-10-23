@@ -8,45 +8,37 @@ defaults:
   - /hydra_run: default
   - _self_
 
-# system (device/save_dir come from the system group)
 seed: 0
 
-# restarts: M independently initialized static designs, optimized simultaneously.
-# Only the best survives, chosen by the `select` block below.
+# Independently initialized static designs, optimized together; the best one,
+# chosen by `select` below, is kept.
 n_restarts: 5
 
-# objective
 objective:
   name: spce
   n_inner: 4_096  # contrastive samples for sPCE
-  chunk_size: null  # null -> score all contrastive samples at once
+  chunk_size: null  # null: score all contrastive samples at once
   fused: true
 
-# training
 n_train_iter: 10_000
-n_outer: 512  # outer samples per restart, so n_restarts * n_outer per step
+n_outer: 512  # per restart
 
-# optimizer
-lr: 5e-3  # a raw design tolerates a much larger LR than a policy net
+lr: 5e-3
 betas: [0.9, 0.999]
 grad_clip: 1.0
-lr_anneal_every: null  # null -> constant LR. Otherwise exponential decay
+lr_anneal_every: null  # null: constant LR; otherwise exponential decay every this many steps
 lr_gamma: null
 
-# checkpointing
 save_best_after: 500  # skip best.pt writes for this many steps
 
-# a StaticDesigner target routes eval_run.py to eval_static.py, which reloads
-# the winning restart's raw_design from final_step.pt
 final_eval:
   enabled: true
   designer:
     _target_: testbed.designers.StaticDesigner
 
-# final selection of the winning restart
 select:
   n_outer: 2_048
   n_contrastive: 1_000_000
   outer_batch_size: 256
   contrastive_chunk_size: 20_000
-  fused: true  # one compiled call per chunk rather than a loop over T steps
+  fused: true

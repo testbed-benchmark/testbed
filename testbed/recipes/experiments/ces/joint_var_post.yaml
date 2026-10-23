@@ -1,0 +1,87 @@
+# @package _global_
+
+defaults:
+  - /method: var_post
+  - override /task: ces
+  - _self_
+
+# Joint variational posterior (Foster et al. 2020): the posterior and the
+# policy are co-optimised on the Barber-Agakov bound, with no pretraining
+# phase. Optimiser settings follow ScoreBED's released code.
+
+seed: 0
+
+checkpoint_every: 5_000
+
+joint: true
+
+task:
+  # The outcome is censored, so train with REINFORCE.
+  reparameterize_outcomes: false
+
+objective:
+  name: barber_agakov_reinforce
+  reparameterize_policy: false
+  baseline: leave_one_out
+  requires_policy_log_probs: false
+  use_current_prior: false
+
+n_posterior_pretrain_iter: 0
+n_posterior_outer: 2_048
+pretrain_design_distr: null
+
+n_train_iter: 200_000
+n_outer: 2_048
+
+lr: 1e-5
+betas: [0.9, 0.999]
+grad_clip: 1.0
+policy_cosine_alpha: 5e-6
+ema_decay: 0.99
+
+posterior_lr: 1e-3
+posterior_betas: [0.9, 0.999]
+posterior_grad_clip: 1.0
+posterior_warmup_frac: 0.001
+posterior_lr_floor: 1e-6
+
+eval_every: 0
+
+# theta lies on a 4-manifold in R^5 (rho in (0, 1), alpha on the 2-simplex,
+# u > 0), so the mixture is fitted over 4 unconstrained coordinates and pushed
+# forward onto theta.
+posterior_net:
+  _target_: testbed.design_nets.ConstrainedAttentiveVariationalPosteriorNet
+  n_components: 10
+  encoder_dim_h: 256
+  dim_emb: 128
+  num_heads: 4
+  num_blocks: 3
+  trunk_dim_h: null
+  trunk_activation:
+    _target_: torch.nn.GELU
+    _partial_: true
+  log_scale_min: -7.0
+  log_scale_max: 3.0
+  init_scale: 1.0
+  theta_loc: null
+  theta_scale: null
+  canonicalize_theta: false
+  # 4 unconstrained coordinates -> 5 constrained ones:
+  #   z_rho          -> rho    in (0.01, 1)
+  #   (z_a1, z_a2)   -> alpha  on the 2-simplex
+  #   z_u            -> u      in (0, inf)
+  # The rho affine must match CESPrior's 0.01 + 0.99 * rho squash.
+  transform:
+    _target_: testbed.design_nets.BlockTransform
+    raw_sizes: [1, 2, 1]
+    theta_sizes: [1, 3, 1]
+    transforms:
+      - _target_: torch.distributions.transforms.ComposeTransform
+        parts:
+          - _target_: torch.distributions.transforms.SigmoidTransform
+          - _target_: torch.distributions.transforms.AffineTransform
+            loc: 0.01
+            scale: 0.99
+      - _target_: torch.distributions.transforms.StickBreakingTransform
+      - _target_: torch.distributions.transforms.ExpTransform

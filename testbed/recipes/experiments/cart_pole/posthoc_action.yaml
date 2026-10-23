@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - /method: posthoc_action
+  - override /task: cart_pole
+  - _self_
+
+eval_every: 0
+
+loss:
+  _target_: testbed.design_objectives.MSELoss
+  reduction: mean

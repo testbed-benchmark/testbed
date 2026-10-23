@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - /method: static
+  - override /task: stochastic_pendulum
+  - _self_
+
+objective:
+  n_inner: 8_192
+  chunk_size: 1_024
+
+eval_every: 0

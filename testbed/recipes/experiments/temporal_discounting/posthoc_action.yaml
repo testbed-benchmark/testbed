@@ -1,0 +1,28 @@
+# @package _global_
+
+defaults:
+  - /method: posthoc_action
+  - override /task: temporal_discounting
+  - _self_
+
+eval_every: 0
+
+# The action net predicts log(theta), so raw-scale losses are not reported.
+loss:
+  _target_: testbed.design_objectives.TrueLogMSELoss
+  reduction: mean
+  transform_input: false
+  transform_target: true
+
+final_eval:
+  losses:
+    mse: null
+    log_mse: null
+    true_log_mse:
+      _target_: testbed.design_objectives.TrueLogMSELoss
+      transform_input: false
+      transform_target: true
+    log_mse_log_scale:
+      _target_: testbed.design_objectives.LogMSELoss
+      transform_input: false
+      transform_target: true
