@@ -17,7 +17,8 @@ class Objective(ABC):
         Args:
             task: Task whose expected information gain is estimated.
             fused: If True, score a trajectory in one compiled call rather
-                than looping over the T steps. See :meth:`Task.history_logp`.
+                than looping over the T steps. See
+                :meth:`~testbed.tasks.base.Task.history_logp`.
         """
         self.task = task
         self.fused = bool(fused)
@@ -26,8 +27,10 @@ class Objective(ABC):
 class DesignObjective(Objective):
     """Estimates the gain of a single design given the history so far.
 
-    Used by :class:`SequentialDesigner`, which optimizes one design at a time
-    by gradient ascent. Examples include :class:`NMC` and :class:`PCE`.
+    Used by :class:`~testbed.designers.sequential.SequentialDesigner`, which
+    optimizes one design at a time by gradient ascent. Examples include
+    :class:`~testbed.design_objectives.snmc.NMC` and
+    :class:`~testbed.design_objectives.spce.PCE`.
     """
 
     def __call__(
@@ -52,10 +55,14 @@ class DesignObjective(Objective):
 
         Args:
             design: Candidate design of shape ``[*event_shape_design]``.
-            y_history: Outcomes observed so far, or None at the first step.
-                ``task.current_prior`` is assumed to already condition on them.
-            design_history: Designs observed so far, aligned with
-                ``y_history``, or None at the first step.
+            y_history: Outcomes observed so far, of shape
+                ``[1, t, *event_shape_y]``. ``task.current_prior`` is assumed
+                to already condition on them. At the first step ``t == 0``
+                (see :meth:`~testbed.tasks.base.Task.null_history`). None
+                means no history and is only meant for direct calls.
+            design_history: Designs observed so far, of shape
+                ``[1, t, *event_shape_design]``, aligned with ``y_history``.
+                None means no history.
 
         Returns:
             Scalar gain estimate.
@@ -66,12 +73,29 @@ class DesignObjective(Objective):
 class RolloutObjective(Objective):
     """Estimates a gain, or a training surrogate for it, from a full rollout.
 
-    Used to train amortized policies for :class:`PolicyDesigner`. Examples
-    include :class:`SNMC`, :class:`SPCE` and :class:`Reinforce`.
+    Used to train amortized policies for
+    :class:`~testbed.designers.amortized.PolicyDesigner` and static designs
+    (see :mod:`testbed.methods.static`). Examples include
+    :class:`~testbed.design_objectives.snmc.SNMC`,
+    :class:`~testbed.design_objectives.spce.SPCE` and
+    :class:`~testbed.design_objectives.reinforce.Reinforce`.
+
+    Subclasses may add their own keyword arguments to :meth:`estimate_gain`
+    and :meth:`per_sample_gain`, e.g. ``y_context`` and ``design_context`` on
+    SPCE and SNMC.
     """
 
     def __call__(self, rollout: Rollout, **kwargs) -> Tensor:
-        """Estimates the gain of a rollout. Alias for :meth:`estimate_gain`."""
+        """Estimates the gain of a rollout. Alias for :meth:`estimate_gain`.
+
+        Args:
+            rollout: Batch of ``b`` simulated rollouts.
+            **kwargs: Subclass-specific keyword arguments, forwarded to
+                :meth:`estimate_gain`.
+
+        Returns:
+            Scalar gain estimate.
+        """
         return self.estimate_gain(rollout, **kwargs)
 
     @abstractmethod

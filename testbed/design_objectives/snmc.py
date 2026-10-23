@@ -36,7 +36,12 @@ class SNMC(RolloutObjective):
         self.n_contrastive = int(n_contrastive)
         self.chunk_size = None if chunk_size is None else int(chunk_size)
 
-    def estimate_gain(self, rollout: Rollout, y_context=None, design_context=None):
+    def estimate_gain(
+        self,
+        rollout: Rollout,
+        y_context: Tensor | None = None,
+        design_context: Tensor | None = None,
+    ) -> Tensor:
         """Estimates gain from a batched rollout.
 
         returns: scalar EIG estimate.
@@ -45,7 +50,12 @@ class SNMC(RolloutObjective):
             rollout, y_context=y_context, design_context=design_context
         ).mean()
 
-    def per_sample_gain(self, rollout: Rollout, y_context=None, design_context=None):
+    def per_sample_gain(
+        self,
+        rollout: Rollout,
+        y_context: Tensor | None = None,
+        design_context: Tensor | None = None,
+    ) -> Tensor:
         """Estimates per-sample gains from a batched rollout.
 
         A context is history already absorbed into ``task.current_prior``; it is
@@ -99,7 +109,7 @@ class NMC(DesignObjective):
         design: Tensor,
         y_history: Tensor | None = None,
         design_history: Tensor | None = None,
-    ):
+    ) -> Tensor:
         """Estimates gain for one fixed design.
 
         design: ``[*event_shape_design]``. Leading size-1 batch dims are tolerated and stripped.
