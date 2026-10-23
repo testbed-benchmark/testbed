@@ -1,11 +1,13 @@
 """Shared validation and flattening for experiment histories."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import prod
 
 import torch
 from torch import Tensor
+
+from .modules import affine_rescale
 
 
 @dataclass(frozen=True)
@@ -132,3 +134,61 @@ def prepare_history(
         mask_flat = mask.reshape(batch_size, history_length)
 
     return PreparedHistory(batch_shape, y_flat, design_flat, mask_flat)
+
+
+def _flat_bounds(bound: Tensor) -> Tensor:
+    """Flattens per-coordinate bounds, leaving a scalar bound to broadcast."""
+    return bound.reshape(-1) if bound.numel() > 1 else bound
+
+
+def rescale_designs(
+    designs: Tensor, low: Tensor, high: Tensor, target_low: float, target_high: float
+) -> Tensor:
+    """Maps flattened designs from ``[low, high]`` into ``[target_low, target_high]``.
+
+    Args:
+        designs: Designs with shape ``[..., dim_design]``.
+        low: Lower bounds, a scalar or one entry per design coordinate.
+        high: Upper bounds, shaped like ``low``.
+        target_low: Lower end of the target range.
+        target_high: Upper end of the target range.
+
+    Returns:
+        Rescaled designs shaped like ``designs``. Coordinates whose bounds have
+        zero width map to zero.
+    """
+    low = _flat_bounds(low)
+    width = _flat_bounds(high) - low
+    scaled = target_low + (designs - low) * (target_high - target_low) / width
+    return torch.where(width == 0, torch.zeros_like(scaled), scaled)
+
+
+def normalize_history(
+    history: PreparedHistory,
+    *,
+    design_bounds: tuple[Tensor, Tensor] | None = None,
+    design_target: tuple[float, float] = (0.0, 1.0),
+    outcome_bounds: tuple[Tensor, Tensor] | None = None,
+) -> PreparedHistory:
+    """Rescales a prepared history's designs and outcomes.
+
+    Args:
+        history: History from :func:`prepare_history`.
+        design_bounds: Optional ``(low, high)`` design bounds, each a scalar or
+            one entry per design coordinate. Designs are left unchanged if
+            omitted.
+        design_target: Range that ``design_bounds`` map onto.
+        outcome_bounds: Optional ``(low, high)`` outcome bounds, each a scalar
+            or one entry per outcome coordinate, mapped onto ``[0, 1]``.
+            Outcomes are left unchanged if omitted.
+
+    Returns:
+        A :class:`PreparedHistory` with the same shapes and mask.
+    """
+    y_flat, design_flat = history.y_flat, history.design_flat
+    if design_bounds is not None:
+        design_flat = rescale_designs(design_flat, *design_bounds, *design_target)
+    if outcome_bounds is not None:
+        low, high = outcome_bounds
+        y_flat = affine_rescale(y_flat, _flat_bounds(low), _flat_bounds(high), 0.0, 1.0)
+    return replace(history, y_flat=y_flat, design_flat=design_flat)

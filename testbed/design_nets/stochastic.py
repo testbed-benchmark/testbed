@@ -19,8 +19,12 @@ from testbed.design_nets.encoder import (
     HistoryEncoder,
     make_history_encoder,
 )
-from testbed.design_nets.history import PreparedHistory, prepare_history
-from testbed.design_nets.modules import MLP, _initialize_linear_layers, affine_rescale
+from testbed.design_nets.history import (
+    PreparedHistory,
+    normalize_history,
+    prepare_history,
+)
+from testbed.design_nets.modules import MLP, _initialize_linear_layers
 
 
 class StochasticDesignNet(DesignNet):
@@ -33,6 +37,111 @@ class StochasticDesignNet(DesignNet):
 
     produces_policy_log_probs = True
     raw_designs_are_physical = False
+
+    def __init__(
+        self,
+        design_space: DesignSpace,
+        *,
+        normalize_design_history: bool,
+        design_history_bounds: tuple[float, float],
+    ):
+        """Stores the design shape and history-normalization settings.
+
+        Args:
+            design_space: Design space whose event shape defines one design.
+            normalize_design_history: Whether to rescale design histories.
+            design_history_bounds: Range that design histories are rescaled to.
+
+        Raises:
+            ValueError: If ``design_history_bounds`` is not a ``(low, high)``
+                pair with ``low < high``.
+        """
+        super().__init__()
+        self.event_shape_design = torch.Size(design_space.event_shape)
+        self.dim_design = self.event_shape_design.numel()
+        self.normalize_design_history = bool(normalize_design_history)
+        self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
+        if (
+            len(self.design_history_bounds) != 2
+            or self.design_history_bounds[0] >= self.design_history_bounds[1]
+        ):
+            raise ValueError("design_history_bounds must satisfy low < high.")
+
+    def _build_actor(
+        self,
+        actor: nn.Module | None,
+        *,
+        encoder: HistoryEncoder | None,
+        head: nn.Module | None,
+        event_shape_y: Sequence[int] | None,
+        actor_type,
+        make_head,
+    ) -> nn.Module:
+        """Returns ``actor``, or composes one from an encoder and a head.
+
+        Args:
+            actor: Optional complete actor. Cannot be combined with ``encoder``
+                or ``head``.
+            encoder: Optional history encoder. Defaults to a ``DeepSetEncoder``.
+            head: Optional readout paired with ``encoder``. Defaults to
+                ``make_head(encoder.dim_emb)``.
+            event_shape_y: Outcome event shape for the default encoder.
+            actor_type: Class composing an encoder and a head into an actor.
+            make_head: Builds the default head from an embedding width.
+
+        Raises:
+            ValueError: If the arguments do not describe exactly one actor.
+        """
+        if actor is not None:
+            if encoder is not None or head is not None:
+                raise ValueError("actor cannot be combined with encoder or head.")
+            return actor
+        if encoder is None:
+            if head is not None:
+                raise ValueError("head requires an encoder.")
+            if event_shape_y is None:
+                raise ValueError(
+                    "event_shape_y is required when creating the default actor."
+                )
+            encoder = DeepSetEncoder(
+                event_shape_y, self.event_shape_design, dim_h=(128, 128), dim_emb=64
+            )
+        if head is None:
+            head = make_head(encoder.dim_emb)
+        return actor_type(encoder, head)
+
+    def _register_bounds(
+        self,
+        design_low: Tensor,
+        design_high: Tensor,
+        outcome_bounds: tuple[float, float] | None,
+    ) -> None:
+        """Registers the design and outcome bounds used to normalize histories.
+
+        Args:
+            design_low: Per-coordinate lower design bounds, flattened.
+            design_high: Per-coordinate upper design bounds, flattened.
+            outcome_bounds: Optional ``(low, high)`` outcome bounds. If omitted,
+                outcomes are not normalized.
+
+        Raises:
+            ValueError: If ``outcome_bounds`` does not satisfy ``low < high``.
+        """
+        self.register_buffer("design_low", design_low)
+        self.register_buffer("design_high", design_high)
+        if outcome_bounds is None:
+            outcome_low = torch.tensor(float("nan"), dtype=design_low.dtype)
+            outcome_high = torch.tensor(float("nan"), dtype=design_low.dtype)
+        else:
+            outcome_low, outcome_high = (
+                torch.as_tensor(bound, dtype=design_low.dtype)
+                for bound in outcome_bounds
+            )
+            if torch.any(outcome_low >= outcome_high):
+                raise ValueError("outcome_bounds must satisfy low < high.")
+        self.register_buffer("outcome_low", outcome_low)
+        self.register_buffer("outcome_high", outcome_high)
+        self._normalize_outcomes = outcome_bounds is not None
 
     def _prepare_histories(
         self, y_history, design_history, *, mask: Tensor | None = None
@@ -51,7 +160,7 @@ class StochasticDesignNet(DesignNet):
         event_shape_y = getattr(self.actor, "event_shape_y", None)
         if event_shape_y is None and encoder is not None:
             event_shape_y = encoder.event_shape_y
-        prepared = prepare_history(
+        history = prepare_history(
             y_history,
             design_history,
             event_shape_y=event_shape_y,
@@ -60,26 +169,19 @@ class StochasticDesignNet(DesignNet):
             device=self.design_low.device,
             dtype=self.design_low.dtype,
         )
-
-        y_flat = prepared.y_flat
-        design_flat = prepared.design_flat
-        if self.normalize_design_history:
-            low, high = self.design_history_bounds
-            width = self.design_high - self.design_low
-            normalized = low + (design_flat - self.design_low) * (high - low) / width
-            design_flat = torch.where(
-                width == 0, torch.zeros_like(normalized), normalized
-            )
-        if self._normalize_outcomes:
-            y_flat = affine_rescale(
-                y_flat,
-                self.outcome_low.reshape(-1),
-                self.outcome_high.reshape(-1),
-                0.0,
-                1.0,
-            )
-        return PreparedHistory(
-            prepared.batch_shape, y_flat, design_flat, prepared.mask_flat
+        return normalize_history(
+            history,
+            design_bounds=(
+                (self.design_low, self.design_high)
+                if self.normalize_design_history
+                else None
+            ),
+            design_target=self.design_history_bounds,
+            outcome_bounds=(
+                (self.outcome_low, self.outcome_high)
+                if self._normalize_outcomes
+                else None
+            ),
         )
 
 
@@ -223,7 +325,8 @@ class GaussianPolicyActor(nn.Module):
             Gaussian mean and log standard deviation, both with shape
             ``[batch, dim_design]``.
         """
-        return self.head(self.encoder.encode_flat(y_history, design_history, mask=mask))
+        history = PreparedHistory(y_history.shape[:1], y_history, design_history, mask)
+        return self.head(self.encoder.encode(history))
 
 
 class CategoricalPolicyActor(nn.Module):
@@ -258,7 +361,8 @@ class CategoricalPolicyActor(nn.Module):
         Returns:
             Tensor: One logit per design with shape ``[batch, n_designs]``.
         """
-        return self.head(self.encoder.encode_flat(y_history, design_history, mask=mask))
+        history = PreparedHistory(y_history.shape[:1], y_history, design_history, mask)
+        return self.head(self.encoder.encode(history))
 
 
 class GaussianPolicyNet(StochasticDesignNet):
@@ -302,34 +406,19 @@ class GaussianPolicyNet(StochasticDesignNet):
             outcome_bounds: Optional lower and upper bounds used to affinely map
                 physical outcome histories to [0, 1] before actor evaluation.
         """
-        super().__init__()
-
-        self.event_shape_design = torch.Size(design_space.event_shape)
-        self.dim_design = self.event_shape_design.numel()
-        self.normalize_design_history = bool(normalize_design_history)
-        self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
-        if (
-            len(self.design_history_bounds) != 2
-            or self.design_history_bounds[0] >= self.design_history_bounds[1]
-        ):
-            raise ValueError("design_history_bounds must satisfy low < high.")
-        if actor is not None and (encoder is not None or head is not None):
-            raise ValueError("actor cannot be combined with encoder or head.")
-        if actor is None:
-            if encoder is None:
-                if head is not None:
-                    raise ValueError("head requires an encoder.")
-                if event_shape_y is None:
-                    raise ValueError(
-                        "event_shape_y is required when creating the default actor."
-                    )
-                encoder = DeepSetEncoder(
-                    event_shape_y, self.event_shape_design, dim_h=(128, 128), dim_emb=64
-                )
-            if head is None:
-                head = GaussianHead(encoder.dim_emb, self.dim_design)
-            actor = GaussianPolicyActor(encoder, head)
-        self.actor = actor
+        super().__init__(
+            design_space,
+            normalize_design_history=normalize_design_history,
+            design_history_bounds=design_history_bounds,
+        )
+        self.actor = self._build_actor(
+            actor,
+            encoder=encoder,
+            head=head,
+            event_shape_y=event_shape_y,
+            actor_type=GaussianPolicyActor,
+            make_head=lambda dim_emb: GaussianHead(dim_emb, self.dim_design),
+        )
 
         if isinstance(design_space, BoxDesignSpace):
             low = design_space.low.reshape(self.dim_design)
@@ -347,21 +436,7 @@ class GaussianPolicyNet(StochasticDesignNet):
             raise ValueError(
                 "GaussianPolicyNet requires finite-width reference bounds."
             )
-        self.register_buffer("design_low", low.clone())
-        self.register_buffer("design_high", high.clone())
-
-        if outcome_bounds is None:
-            outcome_low = torch.tensor(float("nan"), dtype=low.dtype)
-            outcome_high = torch.tensor(float("nan"), dtype=low.dtype)
-        else:
-            outcome_low, outcome_high = (
-                torch.as_tensor(bound, dtype=low.dtype) for bound in outcome_bounds
-            )
-            if torch.any(outcome_low >= outcome_high):
-                raise ValueError("outcome_bounds must satisfy low < high.")
-        self.register_buffer("outcome_low", outcome_low)
-        self.register_buffer("outcome_high", outcome_high)
-        self._normalize_outcomes = outcome_bounds is not None
+        self._register_bounds(low.clone(), high.clone(), outcome_bounds)
 
     def forward(
         self, y_history, design_history, *, mask: Tensor | None = None
@@ -380,15 +455,8 @@ class GaussianPolicyNet(StochasticDesignNet):
             Gaussian mean with shape
             ``[*batch_shape, *event_shape_design]``.
         """
-        history = self._prepare_histories(
-            y_history,
-            design_history,
-            mask=mask,
-        )
-        mean, _ = self._normal_params(
-            history.y_flat, history.design_flat, history.mask_flat
-        )
-        return mean.reshape(*history.batch_shape, *self.event_shape_design)
+        mean, _ = self._normal_params(y_history, design_history, mask)
+        return self._as_design(mean)
 
     def propose(
         self,
@@ -412,42 +480,36 @@ class GaussianPolicyNet(StochasticDesignNet):
             DesignProposal: A raw sampled design, its summed raw log density,
             and its deterministic mean counterpart.
         """
-        history = self._prepare_histories(
-            y_history,
-            design_history,
-            mask=mask,
-        )
-        mean, log_std = self._normal_params(
-            history.y_flat, history.design_flat, history.mask_flat
-        )
+        mean, log_std = self._normal_params(y_history, design_history, mask)
         normal = Normal(mean, log_std.exp())
         if reparameterize_policy:
             raw_design = normal.rsample()
         else:
             raw_design = normal.sample()
 
-        log_prob = normal.log_prob(raw_design).sum(dim=-1)
-        raw_design = raw_design.reshape(*history.batch_shape, *self.event_shape_design)
-        deterministic_raw_design = mean.reshape(
-            *history.batch_shape, *self.event_shape_design
+        return DesignProposal(
+            raw_design=self._as_design(raw_design),
+            log_prob=normal.log_prob(raw_design).sum(dim=-1),
+            deterministic_raw_design=self._as_design(mean),
         )
 
-        return DesignProposal(
-            raw_design=raw_design,
-            log_prob=log_prob.reshape(history.batch_shape),
-            deterministic_raw_design=deterministic_raw_design,
-        )
+    def _as_design(self, value: Tensor) -> Tensor:
+        """Reshapes ``[*batch_shape, dim_design]`` to the design event shape."""
+        return value.reshape(*value.shape[:-1], *self.event_shape_design)
 
     def _normal_params(
-        self,
-        y_flat: Tensor,
-        design_flat: Tensor,
-        mask_flat: Tensor | None,
+        self, y_history, design_history, mask: Tensor | None
     ) -> tuple[Tensor, Tensor]:
-        """Returns validated Gaussian parameters in flattened actor coordinates."""
-        mean, log_std = self.actor(y_flat, design_flat, mask=mask_flat)
-        self._validate_actor_params(mean, log_std, batch_size=design_flat.shape[0])
-        return mean, log_std
+        """Returns validated Gaussian parameters shaped ``[*batch_shape, dim_design]``."""
+        history = self._prepare_histories(y_history, design_history, mask=mask)
+        mean, log_std = self.actor(
+            history.y_flat, history.design_flat, mask=history.mask_flat
+        )
+        self._validate_actor_params(
+            mean, log_std, batch_size=history.design_flat.shape[0]
+        )
+        shape = (*history.batch_shape, self.dim_design)
+        return mean.reshape(shape), log_std.reshape(shape)
 
     def _validate_actor_params(
         self, mean: Tensor, log_std: Tensor, *, batch_size: int
@@ -517,50 +579,26 @@ class CategoricalPolicyNet(StochasticDesignNet):
         Raises:
             ValueError: If history or outcome bounds are invalid.
         """
-        super().__init__()
-        self.event_shape_design = torch.Size(design_space.event_shape)
-        self.dim_design = self.event_shape_design.numel()
+        super().__init__(
+            design_space,
+            normalize_design_history=normalize_design_history,
+            design_history_bounds=design_history_bounds,
+        )
         self.n_designs = design_space.n_designs
-        self.normalize_design_history = bool(normalize_design_history)
-        self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
-        if self.design_history_bounds[0] >= self.design_history_bounds[1]:
-            raise ValueError("design_history_bounds must satisfy low < high.")
-        if actor is not None and (encoder is not None or head is not None):
-            raise ValueError("actor cannot be combined with encoder or head.")
-        if actor is None:
-            if encoder is None:
-                if head is not None:
-                    raise ValueError("head requires an encoder.")
-                if event_shape_y is None:
-                    raise ValueError(
-                        "event_shape_y is required when creating the default actor."
-                    )
-                encoder = DeepSetEncoder(
-                    event_shape_y, self.event_shape_design, dim_h=(128, 128), dim_emb=64
-                )
-            if head is None:
-                head = CategoricalHead(encoder.dim_emb, self.n_designs)
-            actor = CategoricalPolicyActor(encoder, head)
-        self.actor = actor
+        self.actor = self._build_actor(
+            actor,
+            encoder=encoder,
+            head=head,
+            event_shape_y=event_shape_y,
+            actor_type=CategoricalPolicyActor,
+            make_head=lambda dim_emb: CategoricalHead(dim_emb, self.n_designs),
+        )
 
         self.register_buffer("design_values", design_space.values.clone())
         values = self.design_values.reshape(self.n_designs, self.dim_design)
         if not torch.is_floating_point(values):
             values = values.to(torch.get_default_dtype())
-        self.register_buffer("design_low", values.amin(dim=0))
-        self.register_buffer("design_high", values.amax(dim=0))
-        if outcome_bounds is None:
-            outcome_low = torch.tensor(float("nan"), dtype=values.dtype)
-            outcome_high = torch.tensor(float("nan"), dtype=values.dtype)
-        else:
-            outcome_low, outcome_high = (
-                torch.as_tensor(bound, dtype=values.dtype) for bound in outcome_bounds
-            )
-            if torch.any(outcome_low >= outcome_high):
-                raise ValueError("outcome_bounds must satisfy low < high.")
-        self.register_buffer("outcome_low", outcome_low)
-        self.register_buffer("outcome_high", outcome_high)
-        self._normalize_outcomes = outcome_bounds is not None
+        self._register_bounds(values.amin(dim=0), values.amax(dim=0), outcome_bounds)
 
     def forward(
         self, y_history, design_history, *, mask: Tensor | None = None
@@ -578,14 +616,8 @@ class CategoricalPolicyNet(StochasticDesignNet):
             Most probable designs with shape
             ``[*batch_shape, *event_shape_design]``.
         """
-        history = self._prepare_histories(y_history, design_history, mask=mask)
-        logits = self._validated_logits(
-            history.y_flat, history.design_flat, history.mask_flat
-        )
-        design_index = logits.argmax(dim=-1)
-        return self.design_values[design_index].reshape(
-            *history.batch_shape, *self.event_shape_design
-        )
+        logits = self.logits(y_history, design_history, mask=mask)
+        return self.design_values[logits.argmax(dim=-1)]
 
     def propose(
         self,
@@ -611,38 +643,15 @@ class CategoricalPolicyNet(StochasticDesignNet):
             with the selected index in ``info["design_index"]``.
         """
         del reparameterize_policy
-        history = self._prepare_histories(y_history, design_history, mask=mask)
-        logits = self._validated_logits(
-            history.y_flat, history.design_flat, history.mask_flat
-        )
+        logits = self.logits(y_history, design_history, mask=mask)
         distribution = Categorical(logits=logits)
         design_index = distribution.sample()
-        deterministic_design_index = logits.argmax(dim=-1)
-        design = self.design_values[design_index].reshape(
-            *history.batch_shape, *self.event_shape_design
-        )
-        deterministic_design = self.design_values[deterministic_design_index].reshape(
-            *history.batch_shape, *self.event_shape_design
-        )
         return DesignProposal(
-            raw_design=design,
-            log_prob=distribution.log_prob(design_index).reshape(history.batch_shape),
-            deterministic_raw_design=deterministic_design,
-            info={"design_index": design_index.reshape(history.batch_shape)},
+            raw_design=self.design_values[design_index],
+            log_prob=distribution.log_prob(design_index),
+            deterministic_raw_design=self.design_values[logits.argmax(dim=-1)],
+            info={"design_index": design_index},
         )
-
-    def _validated_logits(
-        self, y_flat: Tensor, design_flat: Tensor, mask_flat: Tensor | None
-    ) -> Tensor:
-        """Returns validated categorical logits in flattened actor coordinates."""
-        logits = self.actor(y_flat, design_flat, mask=mask_flat)
-        expected_shape = (design_flat.shape[0], self.n_designs)
-        if logits.shape != expected_shape:
-            raise ValueError(
-                "actor logits must have shape "
-                f"{expected_shape}; got {tuple(logits.shape)}."
-            )
-        return logits
 
     def logits(
         self, y_history, design_history, *, mask: Tensor | None = None
@@ -660,9 +669,13 @@ class CategoricalPolicyNet(StochasticDesignNet):
             Logits with shape ``[*batch_shape, n_designs]``.
         """
         history = self._prepare_histories(y_history, design_history, mask=mask)
-        logits = self._validated_logits(
-            history.y_flat, history.design_flat, history.mask_flat
-        )
+        logits = self.actor(history.y_flat, history.design_flat, mask=history.mask_flat)
+        expected_shape = (history.design_flat.shape[0], self.n_designs)
+        if logits.shape != expected_shape:
+            raise ValueError(
+                "actor logits must have shape "
+                f"{expected_shape}; got {tuple(logits.shape)}."
+            )
         return logits.reshape(*history.batch_shape, self.n_designs)
 
     def design_probabilities(

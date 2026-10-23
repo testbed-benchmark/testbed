@@ -6,13 +6,8 @@ import torch
 from torch import Tensor, nn
 
 from .encoder import DeepSetEncoder, HistoryEncoder
-from .history import PreparedHistory, prepare_history
-from .modules import MLP, _initialize_linear_layers, affine_rescale
-
-
-def _flat_bounds(bound: Tensor) -> Tensor:
-    """Flattens per-coordinate bounds, leaving a scalar bound to broadcast."""
-    return bound.reshape(-1) if bound.numel() > 1 else bound
+from .history import normalize_history, prepare_history, rescale_designs
+from .modules import MLP, _initialize_linear_layers
 
 
 class _RLBOEDCritic(nn.Module):
@@ -67,18 +62,12 @@ class _RLBOEDCritic(nn.Module):
                 )
             self.register_buffer(name, value)
 
-    def _normalize_designs(self, designs: Tensor, low: float, high: float) -> Tensor:
-        """Maps flattened physical designs into ``[low, high]`` coordinates."""
-        design_low = _flat_bounds(self.design_low)
-        width = _flat_bounds(self.design_high) - design_low
-        scaled = low + (designs - design_low) * (high - low) / width
-        return torch.where(width == 0, torch.zeros_like(scaled), scaled)
+    def _encode(self, y_history, design_history, mask: Tensor | None) -> Tensor:
+        """Encodes a history to ``[*batch_shape, dim_emb]``.
 
-    def _prepare(
-        self, y_history, design_history, mask: Tensor | None
-    ) -> PreparedHistory:
-        """Validates, flattens, and normalizes a history for the encoder."""
-        prepared = prepare_history(
+        Outcomes and designs are rescaled to ``[0, 1]`` before encoding.
+        """
+        history = prepare_history(
             y_history,
             design_history,
             event_shape_y=self.event_shape_y,
@@ -87,23 +76,12 @@ class _RLBOEDCritic(nn.Module):
             device=self.design_low.device,
             dtype=self.encoder.null_enc.dtype,
         )
-        y_flat = affine_rescale(
-            prepared.y_flat,
-            _flat_bounds(self.outcome_low),
-            _flat_bounds(self.outcome_high),
-            0.0,
-            1.0,
+        history = normalize_history(
+            history,
+            design_bounds=(self.design_low, self.design_high),
+            outcome_bounds=(self.outcome_low, self.outcome_high),
         )
-        design_flat = self._normalize_designs(prepared.design_flat, 0.0, 1.0)
-        return PreparedHistory(
-            prepared.batch_shape, y_flat, design_flat, prepared.mask_flat
-        )
-
-    def _encode(self, history: PreparedHistory) -> Tensor:
-        """Encodes a prepared history to ``[prod(batch_shape), dim_emb]``."""
-        return self.encoder.encode_flat(
-            history.y_flat, history.design_flat, mask=history.mask_flat
-        )
+        return self.encoder.encode(history)
 
 
 class RLBOEDQNetwork(_RLBOEDCritic):
@@ -181,19 +159,21 @@ class RLBOEDQNetwork(_RLBOEDCritic):
         Returns:
             Tensor: Q-values with shape ``[*batch_shape, 1]``.
         """
-        history = self._prepare(y_history, design_history, mask)
-        design = torch.as_tensor(design, device=history.design_flat.device)
-        if design.shape != (*history.batch_shape, *self.event_shape_design):
+        encoding = self._encode(y_history, design_history, mask)
+        batch_shape = encoding.shape[:-1]
+        design = torch.as_tensor(design, device=encoding.device)
+        if design.shape != (*batch_shape, *self.event_shape_design):
             raise ValueError(
                 "design must have shape [*batch_shape, *event_shape_design]."
             )
-        design = self._normalize_designs(
-            design.reshape(-1, self.dim_design).to(history.design_flat.dtype),
+        design = rescale_designs(
+            design.reshape(*batch_shape, self.dim_design).to(encoding.dtype),
+            self.design_low,
+            self.design_high,
             -1.0,
             1.0,
         )
-        q = self.emitter_net(torch.cat([self._encode(history), design], dim=-1))
-        return q.reshape(*history.batch_shape, 1)
+        return self.emitter_net(torch.cat([encoding, design], dim=-1))
 
 
 class RLBOEDDiscreteQNetwork(_RLBOEDCritic):
@@ -266,6 +246,4 @@ class RLBOEDDiscreteQNetwork(_RLBOEDCritic):
         Returns:
             Q-values with shape ``[*batch_shape, n_designs]``.
         """
-        history = self._prepare(y_history, design_history, mask)
-        q = self.emitter_net(self._encode(history))
-        return q.reshape(*history.batch_shape, self.n_designs)
+        return self.emitter_net(self._encode(y_history, design_history, mask))

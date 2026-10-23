@@ -10,7 +10,6 @@ from torch.distributions import Categorical, Independent, MixtureSameFamily, Nor
 from testbed.core.distributions import Distribution, TorchDistribution
 from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
-from testbed.design_nets.history import prepare_history
 from testbed.design_nets.modules import MLP, BlockTransform
 
 
@@ -264,19 +263,8 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
 
     def _mixture(self, y_history, design_history, mask=None) -> MixtureSameFamily:
         """Builds the torch Gaussian mixture, with batch shape ``batch_shape``."""
-        history = prepare_history(
-            y_history,
-            design_history,
-            event_shape_y=self.encoder.event_shape_y,
-            event_shape_design=self.encoder.event_shape_design,
-            mask=mask,
-            device=self.theta_loc.device,
-            dtype=self.theta_loc.dtype,
-        )
-        emb = self.encoder.encode_flat(
-            history.y_flat, history.design_flat, mask=history.mask_flat
-        )  # [b, dim_emb]
-        batch_shape = history.batch_shape
+        emb = self.encoder(y_history, design_history, mask=mask)  # [*batch, dim_emb]
+        batch_shape = emb.shape[:-1]
         K, D = self.n_components, self.dim_latent
 
         h = self.trunk(emb)  # [b, dim_h]
