@@ -1,4 +1,11 @@
-"""Policy-training method exports."""
+"""Policy-training methods.
+
+These build their components from Hydra configs, so they need the optional
+``[train]`` dependencies: ``pip install testbed[train]``. Each module's ``main``
+is its Hydra command-line entry point::
+
+    python testbed/methods/<name>.py [overrides...]
+"""
 
 from .actionbed import Trainer as ActionBEDTrainer
 from .aline import Trainer as AlineTrainer

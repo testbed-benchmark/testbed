@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "TestBED is a library for Bayesian experimental design."
 readme = "README.md"
 license = { text = 'Apache-2.0' }
-requires-python = ">=3.10,<3.14"  # hydra-core 1.3.x CLI is incompatible with Python 3.14
+requires-python = ">=3.10"
 authors = [
     {name = 'Gavin Kerrigan', email = 'kerrigan@stats.ox.ac.uk'},
     {name = 'Marcel Hedman', email = 'marcel.hedman@jesus.ox.ac.uk'},
@@ -20,12 +20,15 @@ dependencies = [
     'numpy>=1.24',
     "torch>=2.5",
     'pyyaml',
-    'hydra-core',
     'tqdm',
 ]
 
 [project.optional-dependencies]
+# Training methods, their Hydra entry points and checkpoint
+# evaluation. Stable hydra-core 1.3 cannot run the CLI on Python 3.14.
+train = ['hydra-core>=1.3']
 full = [
+    'testbed[train]',
     'matplotlib',
     'pyro-ppl',
     'wandb',
