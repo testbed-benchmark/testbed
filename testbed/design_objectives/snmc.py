@@ -36,10 +36,6 @@ class SNMC(RolloutObjective):
         self.n_contrastive = int(n_contrastive)
         self.chunk_size = None if chunk_size is None else int(chunk_size)
 
-    def __call__(self, rollout: Rollout):
-        """Estimates gain for a simulated rollout."""
-        return self.estimate_gain(rollout)
-
     def estimate_gain(self, rollout: Rollout, y_context=None, design_context=None):
         """Estimates gain from a batched rollout.
 
@@ -98,16 +94,11 @@ class NMC(DesignObjective):
         self.n_inner = int(n_inner)
         self.inner_snmc = SNMC(task, n_contrastive=n_inner, fused=fused)
 
-    def __call__(
-        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
-    ):
-        """Estimates gain for one design."""
-        return self.estimate_gain(
-            design, y_history=y_history, design_history=design_history
-        )
-
     def estimate_gain(
-        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
+        self,
+        design: Tensor,
+        y_history: Tensor | None = None,
+        design_history: Tensor | None = None,
     ):
         """Estimates gain for one fixed design.
 

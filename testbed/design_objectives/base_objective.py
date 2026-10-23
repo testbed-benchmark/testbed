@@ -28,9 +28,31 @@ class DesignObjective(Objective):
     gradient ascent (e.g. `NMC`, `PCE`).
     """
 
+    def __call__(
+        self,
+        design: Tensor,
+        y_history: Tensor | None = None,
+        design_history: Tensor | None = None,
+    ) -> Tensor:
+        """Estimates gain for one design."""
+        return self.estimate_gain(
+            design, y_history=y_history, design_history=design_history
+        )
+
     @abstractmethod
-    def estimate_gain(self, design: Tensor) -> Tensor:
-        """Estimates expected information gain for a design."""
+    def estimate_gain(
+        self,
+        design: Tensor,
+        y_history: Tensor | None = None,
+        design_history: Tensor | None = None,
+    ) -> Tensor:
+        """Estimates expected information gain for a design.
+
+        design: ``[*event_shape_design]``.
+        y_history, design_history: the history observed so far, which
+        ``task.current_prior`` already conditions on (None at the first step).
+        returns: scalar gain estimate.
+        """
         ...
 
 
@@ -41,7 +63,22 @@ class RolloutObjective(Objective):
     `Reinforce`).
     """
 
+    def __call__(self, rollout: Rollout, **kwargs) -> Tensor:
+        """Estimates gain for a simulated rollout."""
+        return self.estimate_gain(rollout, **kwargs)
+
     @abstractmethod
     def estimate_gain(self, rollout: Rollout) -> Tensor:
-        """Estimates expected information gain (or a training surrogate) from a rollout."""
+        """Estimates expected information gain (or a training surrogate) from a rollout.
+
+        returns: scalar, typically ``per_sample_gain(rollout).mean()``.
+        """
+        ...
+
+    @abstractmethod
+    def per_sample_gain(self, rollout: Rollout) -> Tensor:
+        """Estimates per-sample gains (or surrogates) from a batched rollout.
+
+        returns: [b]
+        """
         ...

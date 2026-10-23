@@ -46,11 +46,12 @@ class SequentialDesigner(Designer):
     ):
         """Initializes the sequential designer.
 
-        objective: a DesignObjective -- `estimate_gain(design) -> scalar` for
-            a single design (e.g. NMC, PCE). NOT a RolloutObjective like SPCE/
-            SNMC/Reinforce, which score a full rollout; use their
-            DesignObjective wrapper instead, e.g. PCE(task, n_outer=...,
-            n_inner=...) rather than SPCE(task, n_contrastive=...).
+        objective: a DesignObjective -- `estimate_gain(design, y_history,
+            design_history) -> scalar` for a single design (e.g. NMC, PCE).
+            NOT a RolloutObjective like SPCE/SNMC/Reinforce, which score a
+            full rollout; use their DesignObjective wrapper instead, e.g.
+            PCE(task, n_outer=..., n_inner=...) rather than
+            SPCE(task, n_contrastive=...).
         init_design_dist controls how the initial design is drawn before each gradient optimization:
         None             -- standard normal N(0, I)  [default]
         "current_prior"  -- sample one design from task.current_prior (useful when the design
@@ -77,7 +78,7 @@ class SequentialDesigner(Designer):
         """
         if not isinstance(objective, DesignObjective):
             raise TypeError(
-                "SequentialDesigner requires a DesignObjective (estimate_gain(design) "
+                "SequentialDesigner requires a DesignObjective (estimate_gain(design, ...) "
                 f"for a single design, e.g. NMC/PCE); got {type(objective).__name__}. "
                 "RolloutObjectives (SPCE/SNMC/Reinforce) score a full rollout instead -- "
                 "use their DesignObjective wrapper, e.g. PCE(task, n_outer=..., n_inner=...) "
