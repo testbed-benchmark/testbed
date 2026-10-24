@@ -11,7 +11,7 @@ from torch import Tensor
 from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoulli
 
 from ..core.design_spaces import DesignSpace
-from ..core.distributions import Distribution
+from ..core.distributions import Distribution, as_sample_shape
 from ..core.util import normal_cdf
 from .base import Task
 
@@ -141,7 +141,7 @@ class TDPrior(Distribution):
         The scales are standard deviations, matching the official DAD code
         (log_k ~ Normal(-4.25, 1.5), alpha ~ HalfNormal(2)).
         """
-        super().__init__()
+        super().__init__(event_shape=(2,))
 
         self.register_buffer("k_loc", torch.tensor(k_loc))
         self.register_buffer("k_scale", torch.tensor(k_scale))
@@ -157,36 +157,35 @@ class TDPrior(Distribution):
         """Distribution for the choice-noise scale alpha."""
         return HalfNormal(self.alpha_scale)
 
-    def sample(self, n_samples: int = 1) -> Tensor:
+    def sample(self, sample_shape=()) -> Tensor:
         """Draws samples of parameters from the prior.
 
         Args:
-            n_samples (int):
-                How many samples to draw.
+            sample_shape (int or iterable):
+                Shape of the batch of draws (default: ()).
 
         Returns:
             Tensor:
-                Samples, shape ``[n_samples, 2]``.
+                Samples, shape ``[*sample_shape, 2]``.
         """
-        k_samples = self.k_lognormal.sample((n_samples, 1))
-        alpha_samples = self.alpha_halfnormal.sample((n_samples, 1))
-
-        samples = torch.hstack([k_samples, alpha_samples])
-        return samples
+        shape = (*as_sample_shape(sample_shape), 1)
+        k_samples = self.k_lognormal.sample(shape)
+        alpha_samples = self.alpha_halfnormal.sample(shape)
+        return torch.cat([k_samples, alpha_samples], dim=-1)
 
     def log_prob(self, theta: Tensor) -> Tensor:
         """Evaluates prior log probabilities.
 
         Args:
             theta (Tensor):
-                Points at which to evaluate the log-probability. Shape ``[b, 2]``.
+                Points at which to evaluate the log-probability. Shape ``[..., 2]``.
 
         Returns:
             Tensor:
-                Log probabilities, shape ``[b]``.
+                Log probabilities, shape ``[...]``.
         """
-        k = theta[:, 0]
-        alpha = theta[:, 1]
+        k = theta[..., 0]
+        alpha = theta[..., 1]
 
         logp_k = self.k_lognormal.log_prob(k)
         logp_alpha = self.alpha_halfnormal.log_prob(alpha)

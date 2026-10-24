@@ -50,18 +50,18 @@ def _design(batch_shape=(4,)):
     return torch.randn(*batch_shape, 2, requires_grad=True)
 
 
-@pytest.mark.parametrize("n_samples", [1, 3])
-def test_sample_joint_detaches_when_reparameterize_is_off(n_samples):
+@pytest.mark.parametrize("sample_shape", [(), 1, 3])
+def test_sample_joint_detaches_when_reparameterize_is_off(sample_shape):
     task = _ReparameterizableTask(reparameterize_outcomes=False)
-    y, _ = task.sample_joint(_design(), n_samples=n_samples)
+    y, _ = task.sample_joint(_design(), sample_shape=sample_shape)
     assert not y.requires_grad
 
 
-@pytest.mark.parametrize("n_samples", [1, 3])
-def test_sample_joint_keeps_gradient_when_reparameterize_is_on(n_samples):
+@pytest.mark.parametrize("sample_shape", [(), 1, 3])
+def test_sample_joint_keeps_gradient_when_reparameterize_is_on(sample_shape):
     task = _ReparameterizableTask(reparameterize_outcomes=True)
     design = _design()
-    y, _ = task.sample_joint(design, n_samples=n_samples)
+    y, _ = task.sample_joint(design, sample_shape=sample_shape)
     assert y.requires_grad
     y.sum().backward()
     assert design.grad is not None and design.grad.abs().sum() > 0
@@ -80,7 +80,7 @@ def test_sample_marginal_detaches_when_reparameterize_is_off():
 
 def test_sample_outcome_and_sample_joint_agree_on_gating():
     task = _ReparameterizableTask(reparameterize_outcomes=False)
-    theta = task.sample_prior(n_samples=4)
+    theta = task.sample_prior(4)
     design = _design()
     assert not task.sample_outcome(theta, design).requires_grad
     assert not task.sample_joint(design)[0].requires_grad

@@ -70,9 +70,7 @@ class LogLoss(nn.Module):
                 (b, self.n_outer_samples), device=task.device
             )
 
-        # Distributions take a flat sample count, so draw then unflatten.
-        designs = self.design_distr.sample(b * self.n_outer_samples)
-        return designs.reshape(b, self.n_outer_samples, *task.event_shape_design)
+        return self.design_distr.sample((b, self.n_outer_samples))
 
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         """Computes the loss.

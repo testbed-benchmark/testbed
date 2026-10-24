@@ -138,11 +138,7 @@ class SequentialDesigner(Designer):
             design_constrained = self.task.sample_current_prior().to(self.task.device)
             design_raw = self._to_raw(design_constrained)
         else:
-            design_raw = (
-                dist.sample(1)
-                .reshape(self.task.event_shape_design)
-                .to(self.task.device)
-            )
+            design_raw = dist.sample().to(self.task.device)
         return design_raw.requires_grad_(True)
 
     def _optimize_design(self, y_history, design_history):

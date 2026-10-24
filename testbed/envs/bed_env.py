@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from math import prod
 from typing import Any
 
 import torch
@@ -115,11 +114,8 @@ class BEDEnv:
                 )
             self.theta_0 = theta_0
         else:
-            n = prod(self.batch_shape)
             self.theta_0 = self._detach_if_needed(
-                self.task.sample_current_prior(n).reshape(
-                    *self.batch_shape, *event_shape
-                )
+                self.task.sample_current_prior(self.batch_shape)
             )
 
         self._history = History.empty(

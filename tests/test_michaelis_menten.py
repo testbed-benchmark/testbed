@@ -103,7 +103,7 @@ def test_sample_joint_shapes():
     task = make_task()
     design = torch.rand(5, 1) * 100 + 20
 
-    y, theta = task.sample_joint(design, n_samples=4)
+    y, theta = task.sample_joint(design, sample_shape=4)
     assert y.shape == (4, 5, 1)
     assert theta.shape == (4, 5, 2)
 
@@ -127,7 +127,7 @@ def test_sample_outcome_mean_matches_conditional_mean():
     theta = torch.tensor([[120.0, 40.0]])
     design = torch.tensor([[80.0]])
 
-    samples = task.sample_outcome(theta, design, n_samples=20_000)
+    samples = task.sample_outcome(theta, design, sample_shape=20_000)
     empirical_mean = samples.mean()
     expected_mean = task.make_mean(theta, design).squeeze()
 

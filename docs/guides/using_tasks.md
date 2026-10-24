@@ -48,16 +48,16 @@ Tasks also provide helper methods for the other distributions in the model:
 
 | Method | Samples from | Returns |
 |---|---|---|
-| `sample_prior(n_samples)` | $p(\theta)$, the original prior | `theta` |
-| `sample_current_prior(n_samples)` | the current prior (see Updating the Prior) | `theta` |
+| `sample_prior(sample_shape)` | $p(\theta)$, the original prior | `theta` |
+| `sample_current_prior(sample_shape)` | the current prior (see Updating the Prior) | `theta` |
 | `sample_outcome(theta, design, ...)` | $p(y \mid \theta, x, h_t)$ | `y` |
 | `sample_joint(design, ...)` | $p(y, \theta \mid x, h_t)$, using the current prior | `(y, theta)` |
 | `sample_marginal(design, ...)` | $p(y \mid x, h_t)$, using the current prior | `y` |
 
-The `n_samples` argument adds a leading sample dimension when it is greater than 1.
+Every sampler takes a `sample_shape` argument, as in `torch.distributions`, which is prepended to the shape of the result. It defaults to `()`, i.e. a single draw with no sample dimension. An integer `n` is shorthand for `(n,)`, so `n = 1` still gives a sample dimension of size 1.
 
 ```{code-cell} ipython3
-y, theta = task.sample_joint(design, n_samples=100)  # [100, 1], [100, 2, 3]
+y, theta = task.sample_joint(design, sample_shape=100)  # [100, 1], [100, 2, 3]
 print(y.shape, theta.shape)
 ```
 
@@ -66,11 +66,11 @@ print(y.shape, theta.shape)
 Batch dimensions broadcast in the same way as in `torch.distributions`. For example, we can sample outcomes for every pair of 100 parameters and 5 designs:
 
 ```{code-cell} ipython3
-theta = task.sample_prior(n_samples=100)  # [100, 2, 3]
-designs = torch.randn(5, 1, 3)            # [5, 1, 3]
+theta = task.sample_prior(100)   # [100, 2, 3]
+designs = torch.randn(5, 1, 3)   # [5, 1, 3]
 
-y = task.sample_outcome(theta, designs)                     # [5, 100, 1]
-y_many = task.sample_outcome(theta, designs, n_samples=10)  # [10, 5, 100, 1]
+y = task.sample_outcome(theta, designs)                        # [5, 100, 1]
+y_many = task.sample_outcome(theta, designs, sample_shape=10)  # [10, 5, 100, 1]
 print(y.shape, y_many.shape)
 ```
 

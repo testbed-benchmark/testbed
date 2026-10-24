@@ -33,7 +33,7 @@ class PreyPopulationPrior(Distribution):
             loc: Mean of both latent log-parameters.
             scale: Standard deviation of both latent log-parameters.
         """
-        super().__init__()
+        super().__init__(event_shape=(2,))
         self.register_buffer("loc", torch.tensor(loc))
         self.register_buffer("scale", torch.tensor(scale))
 
@@ -46,17 +46,17 @@ class PreyPopulationPrior(Distribution):
         """
         return LogNormal(self.loc, self.scale)
 
-    def sample(self, n_samples: int = 1) -> Tensor:
+    def sample(self, sample_shape=()) -> Tensor:
         """Draws samples of attack rate and handling time.
 
         Args:
-            n_samples: Number of independent samples to draw.
+            sample_shape: Shape of the batch of draws (default: ()).
 
         Returns:
-            Parameter samples with shape ``[n_samples, 2]`` and columns
+            Parameter samples with shape ``[*sample_shape, 2]`` and columns
             ``(a, T_h)``.
         """
-        return self.lognormal.sample((n_samples, 2))
+        return self.lognormal.sample(self._extended_shape(sample_shape))
 
     def log_prob(self, theta: Tensor) -> Tensor:
         """Evaluates the joint log probability of attack rate and handling time.

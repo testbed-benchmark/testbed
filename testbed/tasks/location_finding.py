@@ -37,7 +37,7 @@ class LocationFindingPrior(Distribution):
         theta_covmat=None,
     ) -> None:
         """Initializes source-location prior parameters."""
-        super().__init__()
+        super().__init__(event_shape=(n_sources, dim_theta))
 
         if theta_loc is None:
             theta_loc = torch.zeros((n_sources, dim_theta))
@@ -55,19 +55,18 @@ class LocationFindingPrior(Distribution):
 
         self.dim = dim_theta
 
-    def sample(self, n_samples: int) -> Tensor:
+    def sample(self, sample_shape=()) -> Tensor:
         """Draws samples of parameters from the prior.
 
         Args:
-            n_samples (int):
-                How many samples to draw.
+            sample_shape (int or iterable):
+                Shape of the batch of draws (default: ()).
 
         Returns:
             Tensor:
-                Samples, shape ``[n_samples, n_sources, dim_theta]``
+                Samples, shape ``[*sample_shape, n_sources, dim_theta]``
         """
-        # [n_samples, n_sources, dim_theta]
-        eps = torch.randn(n_samples, *self.loc.shape, device=self.loc.device)
+        eps = torch.randn(self._extended_shape(sample_shape), device=self.loc.device)
         return self.loc + eps @ self.chol.T
 
     def log_prob(self, theta: Tensor) -> Tensor:

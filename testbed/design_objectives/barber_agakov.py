@@ -112,7 +112,7 @@ class MyopicBarberAgakov(DesignObjective):
 
         b = self.n_outer
         y, theta = self.task.sample_joint(
-            design, y_history=y_history, design_history=design_history, n_samples=b
+            design, y_history=y_history, design_history=design_history, sample_shape=b
         )
         # A context history contributes a batch dim of its own, so reshape
         # explicitly rather than trusting the returned shape.

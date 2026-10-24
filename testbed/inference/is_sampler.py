@@ -31,7 +31,7 @@ def run_importance_sampling(
             Number of proposal samples. Larger values give a better IS estimate
             at the cost of memory and compute. Keep <= 10^6 for practical use.
         proposal: Distribution or None
-            Proposal distribution. Must implement sample(n_samples) and, if
+            Proposal distribution. Must implement sample(sample_shape) and, if
             different from the prior, log_prob(theta) -> [n_proposal].
             Defaults to task.prior, in which case the IS weights are proportional
             to the likelihood alone.
@@ -50,7 +50,7 @@ def run_importance_sampling(
     design_history = squeeze_history(design_history, task.event_shape_design)
 
     src = task.prior if proposal is None else proposal
-    theta = src.sample(n_samples=n_proposal)  # [n_proposal, *event_theta]
+    theta = src.sample(n_proposal)  # [n_proposal, *event_theta]
 
     # theta batch=[n_proposal] broadcasts with y/design batch=[]; returns [n_proposal]
     log_lik = task.history_logp(y_history, design_history, theta)

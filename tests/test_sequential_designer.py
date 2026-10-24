@@ -52,7 +52,7 @@ def test_sequential_designer_matches_pre_refactor_reference():
 
     ref_task = _make_task()
     torch.manual_seed(seed)
-    theta_batched = ref_task.prior.sample(n_samples=1)  # [1, *event_shape_theta]
+    theta_batched = ref_task.prior.sample(1)  # [1, *event_shape_theta]
     theta_true = theta_batched.reshape(*ref_task.event_shape_theta)
 
     ref_objective = NMC(ref_task, n_outer=8, n_inner=8)
@@ -62,7 +62,7 @@ def test_sequential_designer_matches_pre_refactor_reference():
 
     new_task = _make_task()
     torch.manual_seed(seed)
-    theta_batched_new = new_task.prior.sample(n_samples=1)  # [1, *event_shape_theta]
+    theta_batched_new = new_task.prior.sample(1)  # [1, *event_shape_theta]
     torch.testing.assert_close(theta_batched_new, theta_batched)
 
     new_objective = NMC(new_task, n_outer=8, n_inner=8)

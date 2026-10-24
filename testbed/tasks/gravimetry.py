@@ -66,7 +66,7 @@ class GravimetryPrior(Distribution):
         gravitational_const: float = 6.674e-11,
     ) -> None:
         """Initializes source-location prior parameters."""
-        super().__init__()
+        super().__init__(event_shape=(3,))
 
         self.x0_loc = x0_loc
         self.x0_scale = x0_scale
@@ -114,18 +114,20 @@ class GravimetryPrior(Distribution):
         r = self.r_min + (self.r_max - self.r_min) * normal_cdf(u[..., 2:3])
         return torch.cat([x0, z, self.kappa_coeff * r**3], dim=-1)
 
-    def sample(self, n_samples: int = 1) -> Tensor:
+    def sample(self, sample_shape=()) -> Tensor:
         """Draws samples of parameters from the prior.
 
         Args:
-            n_samples (int):
-                How many samples to draw.
+            sample_shape (int or iterable):
+                Shape of the batch of draws (default: ()).
 
         Returns:
             Tensor:
-                Samples, shape ``[n_samples, 3]``
+                Samples, shape ``[*sample_shape, 3]``
         """
-        return self.transform(torch.randn(n_samples, self.dim, device=self.device))
+        return self.transform(
+            torch.randn(self._extended_shape(sample_shape), device=self.device)
+        )
 
     def log_prob(self, theta: Tensor) -> Tensor:
         """Evaluates prior log probabilities.

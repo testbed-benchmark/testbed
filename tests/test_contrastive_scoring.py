@@ -134,10 +134,10 @@ def test_fused_scoring_still_chunks_exactly(chunk_size):
     pool = task.sample_prior(b * L).reshape(b, L, *task.event_shape_theta)
     cursor = 0
 
-    def pinned(n_samples=1):
+    def pinned(sample_shape=()):
         nonlocal cursor
-        k = n_samples // b
-        out = pool[:, cursor : cursor + k].reshape(b * k, *task.event_shape_theta)
+        _, k = sample_shape
+        out = pool[:, cursor : cursor + k]
         cursor += k
         return out
 

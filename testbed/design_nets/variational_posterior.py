@@ -235,7 +235,10 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
 
     def distribution(self, y_history, design_history, mask=None) -> Distribution:
         """Returns the Gaussian-mixture posterior for a history."""
-        return TorchDistribution(self._mixture(y_history, design_history, mask=mask))
+        return TorchDistribution(
+            self._mixture(y_history, design_history, mask=mask),
+            reinterpreted_batch_ndims=0,
+        )
 
     def log_prob(self, theta: Tensor, y_history, design_history, mask=None) -> Tensor:
         """Evaluates the mixture's log density at theta; shape ``[b]``."""
@@ -356,7 +359,10 @@ class ConstrainedGaussianMixtureVariationalPosteriorNet(
 
     def raw_distribution(self, y_history, design_history, mask=None) -> Distribution:
         """Returns the mixture over unconstrained coordinates for a history."""
-        return TorchDistribution(self._mixture(y_history, design_history, mask=mask))
+        return TorchDistribution(
+            self._mixture(y_history, design_history, mask=mask),
+            reinterpreted_batch_ndims=0,
+        )
 
     def distribution(self, y_history, design_history, mask=None) -> Distribution:
         """Unavailable: this family has no explicit distribution object over theta.
