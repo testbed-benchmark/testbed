@@ -116,8 +116,7 @@ class Task(ABC, nn.Module):
         self.event_shape_theta = torch.Size(event_shape_theta)
         self.event_shape_design = torch.Size(event_shape_design)
 
-        self._check_prior(prior)
-        self._check_prior_draw(prior)
+        self._validate_prior(prior)
         self.prior = prior
         self._current_prior = prior
 
@@ -171,8 +170,8 @@ class Task(ABC, nn.Module):
             except StopIteration:
                 return torch.device("cpu")
 
-    def _check_prior(self, prior):
-        """Raises if prior's declared shapes break the contract for this task."""
+    def _validate_prior(self, prior):
+        """Checks declared shapes and one draw without advancing the RNG."""
         if prior.event_shape != self.event_shape_theta or prior.batch_shape:
             raise ValueError(
                 f"{type(self).__name__}'s prior must have event_shape "
@@ -183,13 +182,6 @@ class Task(ABC, nn.Module):
                 "says otherwise."
             )
 
-    def _check_prior_draw(self, prior):
-        """Raises if one prior draw breaks the shape contract for this task.
-
-        Checks that the draw has shape ``event_shape_theta`` and that
-        ``log_prob`` reduces it to a scalar. The draw uses a forked RNG, so
-        constructing a task leaves seeded runs unchanged.
-        """
         name = type(self).__name__
         device = prior.device
         rng_devices = [device] if device.type == "cuda" else []
@@ -702,37 +694,24 @@ class Task(ABC, nn.Module):
         """
         sample_shape = as_sample_shape(sample_shape)
         self._check_design(design)
-        y_history, design_history = self._context_history(y_history, design_history)
+        y_context, design_context = self._context_history(y_history, design_history)
 
-        # T_y and T_design agree unless only one history was supplied.
-        T_y = y_history.shape[-(len(self.event_shape_y) + 1)]
-        T_design = design_history.shape[-(len(self.event_shape_design) + 1)]
-        (
-            (design_flat, y_history_flat, design_history_flat),
-            batch_shape,
-        ) = broadcast_and_flatten(
-            (design, self.event_shape_design),
-            (y_history, (T_y, *self.event_shape_y)),
-            (design_history, (T_design, *self.event_shape_design)),
+        batch_shape = torch.broadcast_shapes(
+            design.shape[: design.ndim - len(self.event_shape_design)],
+            y_context.shape[: y_context.ndim - len(self.event_shape_y) - 1],
+            design_context.shape[
+                : design_context.ndim - len(self.event_shape_design) - 1
+            ],
         )
-        design_flat, y_history_flat, design_history_flat = self._expand_samples(
-            sample_shape.numel(), design_flat, y_history_flat, design_history_flat
+        # Keep the prior draw flat to preserve seeded sampling across priors.
+        shape = sample_shape + batch_shape
+        theta = self.sample_current_prior(shape.numel()).reshape(
+            *shape, *self.event_shape_theta
         )
-        total = design_flat.shape[0]
-        theta_flat = self.sample_current_prior(total)  # [total, *event_theta]
-        y_flat = self._gate_outcome_gradients(
-            self._sample_outcome(
-                theta_flat,
-                design_flat,
-                y_history=y_history_flat,
-                design_history=design_history_flat,
-            ),
-            design_flat,
-        )  # [total, *event_y]
-        return (
-            y_flat.reshape(*sample_shape, *batch_shape, *self.event_shape_y),
-            theta_flat.reshape(*sample_shape, *batch_shape, *self.event_shape_theta),
+        y = self.sample_outcome(
+            theta, design, y_history=y_history, design_history=design_history
         )
+        return y, theta
 
     def sample_marginal(
         self, design, y_history=None, design_history=None, sample_shape=()
@@ -799,6 +778,5 @@ class Task(ABC, nn.Module):
                 ``sample`` and ``log_prob`` must honour them; this is checked
                 on one draw, as in ``__init__``.
         """
-        self._check_prior(new_prior)
-        self._check_prior_draw(new_prior)
+        self._validate_prior(new_prior)
         self._current_prior = new_prior
