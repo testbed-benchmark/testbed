@@ -1,5 +1,7 @@
 """Prey-population task from Blau et al. (2022)."""
 
+from collections.abc import Iterable
+
 import torch
 from torch import Tensor
 from torch.distributions import Binomial, LogNormal
@@ -46,7 +48,7 @@ class PreyPopulationPrior(Distribution):
         """
         return LogNormal(self.loc, self.scale)
 
-    def sample(self, sample_shape=()) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of attack rate and handling time.
 
         Args:

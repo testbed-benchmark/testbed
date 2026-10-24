@@ -5,6 +5,7 @@ References:
 """
 
 import math
+from collections.abc import Iterable
 
 import torch
 from torch import Tensor
@@ -157,7 +158,7 @@ class TDPrior(Distribution):
         """Distribution for the choice-noise scale alpha."""
         return HalfNormal(self.alpha_scale)
 
-    def sample(self, sample_shape=()) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of parameters from the prior.
 
         Args:

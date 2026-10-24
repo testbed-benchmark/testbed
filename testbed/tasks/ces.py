@@ -13,6 +13,7 @@ Using a smaller prior variance significantly simplifies the task. We thus follow
 """
 
 import math
+from collections.abc import Iterable
 
 import torch
 from torch import Tensor
@@ -98,7 +99,7 @@ class CESPrior(Distribution):
         """Distribution for the scale u."""
         return LogNormal(self.u_loc, self.u_scale)
 
-    def sample(self, sample_shape=()) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples from the prior distribution.
 
         Args:

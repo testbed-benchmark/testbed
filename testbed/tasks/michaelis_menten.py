@@ -4,6 +4,8 @@ References:
     1. https://openreview.net/forum?id=uyNJLdCvFG
 """
 
+from collections.abc import Iterable
+
 import torch
 from torch import Tensor
 
@@ -51,7 +53,7 @@ class MichaelisMentenPrior(Distribution):
         # log normalizing constant
         self.register_buffer("log_z", -torch.log(self.ubs - self.lbs).sum())
 
-    def sample(self, sample_shape=()) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of parameters from the prior.
 
         Args:

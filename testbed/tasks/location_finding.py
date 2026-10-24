@@ -1,5 +1,7 @@
 """Location-finding task."""
 
+from collections.abc import Iterable
+
 import torch
 from torch import Tensor
 
@@ -55,7 +57,7 @@ class LocationFindingPrior(Distribution):
 
         self.dim = dim_theta
 
-    def sample(self, sample_shape=()) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of parameters from the prior.
 
         Args:

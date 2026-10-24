@@ -8,6 +8,7 @@ from testbed.core.distributions import (
     Distribution,
     EmpiricalDistribution,
     TorchDistribution,
+    as_sample_shape,
 )
 from testbed.tasks import (
     CES,
@@ -40,10 +41,6 @@ TASKS = [
 SAMPLE_SHAPES = [(), 1, (4,), (2, 3)]
 
 
-def _shape(sample_shape):
-    return (sample_shape,) if isinstance(sample_shape, int) else tuple(sample_shape)
-
-
 @pytest.mark.parametrize("make_task", TASKS)
 @pytest.mark.parametrize("sample_shape", SAMPLE_SHAPES)
 def test_prior_honours_shape_contract(make_task, sample_shape):
@@ -53,8 +50,8 @@ def test_prior_honours_shape_contract(make_task, sample_shape):
     theta = task.sample_prior(sample_shape)
 
     assert prior.event_shape == task.event_shape_theta
-    assert theta.shape == (*_shape(sample_shape), *task.event_shape_theta)
-    assert prior.log_prob(theta).shape == _shape(sample_shape)
+    assert theta.shape == (*as_sample_shape(sample_shape), *task.event_shape_theta)
+    assert prior.log_prob(theta).shape == as_sample_shape(sample_shape)
 
 
 @pytest.mark.parametrize("make_task", TASKS)
@@ -74,7 +71,7 @@ def test_prior_log_prob_agrees_across_batch_shapes(make_task):
 @pytest.mark.parametrize("sample_shape", SAMPLE_SHAPES)
 def test_samplers_prepend_sample_shape_and_never_squeeze(make_task, sample_shape):
     task = make_task()
-    shape = _shape(sample_shape)
+    shape = as_sample_shape(sample_shape)
     design = task.design_space.sample((5,))
     theta = task.sample_prior(5)
 

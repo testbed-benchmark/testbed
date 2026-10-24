@@ -1,5 +1,7 @@
 """Design-sampling distributions to be used with RandomDesigner."""
 
+from collections.abc import Iterable
+
 import torch
 from torch import Tensor
 
@@ -57,7 +59,7 @@ class RandomScaleGaussianDesignDistribution(Distribution):
         """Returns the device this distribution samples on."""
         return self._device_tracker.device
 
-    def sample(self, sample_shape=()) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws designs, whole trajectories' worth at once.
 
         Args:

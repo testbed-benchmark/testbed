@@ -1,6 +1,7 @@
 """Linear-Gaussian regression task."""
 
 import math
+from collections.abc import Iterable
 
 import torch
 from torch import Tensor
@@ -57,7 +58,7 @@ class LinearRegressionPrior(Distribution):
         self.register_buffer("chol", chol)
         self.register_buffer("logdet", logdet)
 
-    def sample(self, sample_shape=()):
+    def sample(self, sample_shape: int | Iterable[int] = ()):
         """Draws samples of parameters from the prior.
 
         Args:

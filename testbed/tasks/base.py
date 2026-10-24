@@ -116,7 +116,8 @@ class Task(ABC, nn.Module):
         self.event_shape_theta = torch.Size(event_shape_theta)
         self.event_shape_design = torch.Size(event_shape_design)
 
-        self._check_prior(prior, draw=True)
+        self._check_prior(prior)
+        self._check_prior_draw(prior)
         self.prior = prior
         self._current_prior = prior
 
@@ -170,27 +171,26 @@ class Task(ABC, nn.Module):
             except StopIteration:
                 return torch.device("cpu")
 
-    def _check_prior(self, prior, draw=False):
-        """Raises if prior breaks the Distribution shape contract for this task.
-
-        With ``draw``, also samples once and checks that the draw has shape
-        ``event_shape_theta`` and that ``log_prob`` reduces it to a scalar. The
-        draw uses a forked RNG, so constructing a task leaves seeded runs
-        unchanged.
-        """
-        name = type(self).__name__
+    def _check_prior(self, prior):
+        """Raises if prior's declared shapes break the contract for this task."""
         if prior.event_shape != self.event_shape_theta or prior.batch_shape:
             raise ValueError(
-                f"{name}'s prior must have event_shape "
+                f"{type(self).__name__}'s prior must have event_shape "
                 f"{tuple(self.event_shape_theta)} and an empty batch_shape; got "
                 f"event_shape {tuple(prior.event_shape)} and batch_shape "
                 f"{tuple(prior.batch_shape)}. A TorchDistribution folds its "
                 "batch dims into the event unless reinterpreted_batch_ndims "
                 "says otherwise."
             )
-        if not draw:
-            return
 
+    def _check_prior_draw(self, prior):
+        """Raises if one prior draw breaks the shape contract for this task.
+
+        Checks that the draw has shape ``event_shape_theta`` and that
+        ``log_prob`` reduces it to a scalar. The draw uses a forked RNG, so
+        constructing a task leaves seeded runs unchanged.
+        """
+        name = type(self).__name__
         device = prior.device
         rng_devices = [device] if device.type == "cuda" else []
         with torch.random.fork_rng(devices=rng_devices), torch.no_grad():
@@ -602,15 +602,13 @@ class Task(ABC, nn.Module):
             )
         return logp.reshape(batch_shape)
 
-    def _expand_samples(self, n, *tensors):
+    @staticmethod
+    def _expand_samples(n, *tensors):
         """Repeats each ``[b, *rest]`` tensor n times into ``[n * b, *rest]``.
 
         Sample-major, so that reshaping to ``[n, b, ...]`` recovers the sample dim.
         """
-        return tuple(
-            x.unsqueeze(0).expand(n, *x.shape).reshape(n * x.shape[0], *x.shape[1:])
-            for x in tensors
-        )
+        return tuple(x.expand(n, *x.shape).flatten(0, 1) for x in tensors)
 
     def sample_outcome(
         self, theta, design, y_history=None, design_history=None, sample_shape=()

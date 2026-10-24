@@ -5,6 +5,7 @@ References:
 """
 
 import math
+from collections.abc import Iterable
 
 import torch
 from torch import Tensor
@@ -86,7 +87,6 @@ class GravimetryPrior(Distribution):
         self.z_floor_cdf = normal_cdf(
             torch.tensor((math.log(z_floor) - z_loc) / z_scale)
         ).item()
-        self.dim = 3
 
         # exists to give .to() something to move and so
         # Distribution.device reports where samples should be drawn
@@ -114,7 +114,7 @@ class GravimetryPrior(Distribution):
         r = self.r_min + (self.r_max - self.r_min) * normal_cdf(u[..., 2:3])
         return torch.cat([x0, z, self.kappa_coeff * r**3], dim=-1)
 
-    def sample(self, sample_shape=()) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of parameters from the prior.
 
         Args:
