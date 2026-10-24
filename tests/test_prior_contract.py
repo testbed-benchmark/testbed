@@ -7,6 +7,7 @@ from torch.distributions import MultivariateNormal, Normal
 from testbed.core.distributions import (
     Distribution,
     EmpiricalDistribution,
+    LogNormal,
     TorchDistribution,
     as_sample_shape,
 )
@@ -182,6 +183,21 @@ def test_update_prior_checks_the_event_shape():
 
     with pytest.raises(ValueError, match="event_shape"):
         task.update_prior(TorchDistribution(Normal(torch.zeros(2), 1.0)))
+
+
+def test_update_prior_checks_one_draw():
+    task = _PriorTask(TorchDistribution(Normal(torch.zeros(3, 2), 1.0)))
+
+    with pytest.raises(ValueError, match="reduce over all event dims"):
+        task.update_prior(_UnreducedPrior())
+
+
+def test_lognormal_declares_the_batch_shape_it_samples():
+    dist = LogNormal(torch.zeros(4, 2), torch.eye(2))
+
+    assert dist.batch_shape == (4,)
+    assert dist.event_shape == (2,)
+    assert dist.sample((5,)).shape == dist._extended_shape((5,)) == (5, 4, 2)
 
 
 def test_constructing_a_task_leaves_the_rng_untouched():

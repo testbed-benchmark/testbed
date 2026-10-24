@@ -46,7 +46,6 @@ class RandomScaleGaussianDesignDistribution(Distribution):
         """
         super().__init__(event_shape=event_shape_design)
         self.T = int(T)
-        self.event_shape_design = torch.Size(event_shape_design)
         self.scale_low = float(scale_low)
         self.scale_high = float(scale_high)
         self._last_scale_flat = None
@@ -90,8 +89,8 @@ class RandomScaleGaussianDesignDistribution(Distribution):
         )  # [n_samples(==b*T)], shared within each trajectory
         self._last_scale_flat = scale_flat
 
-        extra_dims = (1,) * len(self.event_shape_design)
-        noise = torch.randn(n_samples, *self.event_shape_design, device=self.device)
+        extra_dims = (1,) * len(self.event_shape)
+        noise = torch.randn(n_samples, *self.event_shape, device=self.device)
         designs = noise * scale_flat.reshape(n_samples, *extra_dims)
         return designs.reshape(self._extended_shape(sample_shape))
 

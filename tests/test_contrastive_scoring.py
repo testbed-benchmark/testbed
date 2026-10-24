@@ -50,7 +50,7 @@ def _replicated_reference(task, rollout, L):
         return x.unsqueeze(1).expand(b, L, *x.shape[1:]).reshape(b * L, *x.shape[1:])
 
     torch.manual_seed(0)
-    theta = task.sample_current_prior(b * L).reshape(b * L, *task.event_shape_theta)
+    theta = task.sample_current_prior(b * L)
     return task.history_logp(
         replicate(rollout.y_history), replicate(rollout.design_history), theta
     ).reshape(b, L)
@@ -131,7 +131,7 @@ def test_fused_scoring_still_chunks_exactly(chunk_size):
     b, L = 3, 12
     torch.manual_seed(1)
     rollout = _rollout(task, b, T=4)
-    pool = task.sample_prior(b * L).reshape(b, L, *task.event_shape_theta)
+    pool = task.sample_prior((b, L))
     cursor = 0
 
     def pinned(sample_shape=()):

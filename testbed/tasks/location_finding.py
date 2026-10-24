@@ -55,8 +55,6 @@ class LocationFindingPrior(Distribution):
         self.register_buffer("chol", chol)
         self.register_buffer("logdet", logdet)
 
-        self.dim = dim_theta
-
     def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of parameters from the prior.
 
@@ -92,7 +90,9 @@ class LocationFindingPrior(Distribution):
         maha = (solve**2).sum(dim=-1)  # [..., n_sources]
 
         logp_per_source = -0.5 * (
-            maha + self.logdet + self.dim * torch.log(torch.tensor(2 * torch.pi))
+            maha
+            + self.logdet
+            + self.event_shape[-1] * torch.log(torch.tensor(2 * torch.pi))
         )
         return logp_per_source.sum(dim=-1)  # [...] — independent sources
 

@@ -164,19 +164,29 @@ class LogNormal(Distribution):
 
     Args:
         loc (Tensor):
-            Mean :math:`\mu` of the underlying normal. Shape ``[d]``.
+            Mean :math:`\mu` of the underlying normal. Shape ``[*batch, d]``.
         cov (Tensor):
-            Covariance :math:`\Sigma` of the underlying normal. Shape ``[d, d]``.
+            Covariance :math:`\Sigma` of the underlying normal. Shape
+            ``[*batch, d, d]``. Leading dims of ``loc`` and ``cov`` broadcast
+            to the ``batch_shape``.
     """
 
     def __init__(self, loc: Tensor, cov: Tensor) -> None:
         """Initializes the underlying normal's parameters."""
         loc = torch.as_tensor(loc)
-        super().__init__(event_shape=loc.shape[-1:])
+        cov = torch.as_tensor(cov)
+        super().__init__(
+            event_shape=loc.shape[-1:],
+            batch_shape=torch.broadcast_shapes(loc.shape[:-1], cov.shape[:-2]),
+        )
 
         self.register_buffer("loc", loc)
-        self.register_buffer("cov", torch.as_tensor(cov))
-        self.dim = loc.shape[-1]
+        self.register_buffer("cov", cov)
+
+    @property
+    def dim(self) -> int:
+        """Dimension of a single draw."""
+        return self.event_shape[0]
 
     @property
     def lognormal(self) -> torch.distributions.Distribution:
@@ -193,7 +203,7 @@ class LogNormal(Distribution):
 
         Returns:
             Tensor:
-                Samples, shape ``[*sample_shape, d]``.
+                Samples, shape ``[*sample_shape, *batch_shape, d]``.
         """
         return self.lognormal.sample(as_sample_shape(sample_shape))
 

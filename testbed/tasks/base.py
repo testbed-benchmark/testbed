@@ -795,7 +795,10 @@ class Task(ABC, nn.Module):
         Args:
             new_prior (Distribution):
                 Prior to update to. Must have the same ``event_shape`` as the
-                original prior and an empty ``batch_shape``.
+                original prior and an empty ``batch_shape``, and its
+                ``sample`` and ``log_prob`` must honour them; this is checked
+                on one draw, as in ``__init__``.
         """
         self._check_prior(new_prior)
+        self._check_prior_draw(new_prior)
         self._current_prior = new_prior

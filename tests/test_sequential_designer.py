@@ -8,7 +8,7 @@ import torch
 from testbed.design_objectives import NMC, PCE
 from testbed.designers import SequentialDesigner
 from testbed.inference.is_sampler import run_importance_sampling
-from testbed.tasks import LocationFinding, TemporalDiscounting
+from testbed.tasks import LocationFinding, MichaelisMenten, TemporalDiscounting
 
 
 def _make_task():
@@ -199,3 +199,23 @@ def test_transform_designs_false_current_prior_init_is_identity():
     design_raw = designer.initialize_design()
 
     torch.testing.assert_close(design_raw.detach(), design_constrained)
+
+
+def test_scalar_init_design_dist_gives_a_design_of_the_event_shape():
+    # Regression: a scalar dist for a [1] design used to come back 0-d once
+    # initialize_design stopped reshaping its draw.
+    task = MichaelisMenten()
+    designer = SequentialDesigner(
+        task,
+        T=2,
+        objective=NMC(task, n_outer=4, n_inner=4),
+        lr=1e-2,
+        n_step_opt=1,
+        init_design_dist=torch.distributions.Uniform(0.0, 1.0),
+        update_posterior=False,
+    )
+
+    assert designer.initialize_design().shape == task.event_shape_design
+
+    rollout = designer.rollout(task.sample_prior(1))
+    assert rollout.design_history.shape == (1, 2, *task.event_shape_design)
