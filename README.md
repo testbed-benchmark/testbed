@@ -71,3 +71,5 @@ pytest
 ```
 5. Submit a pull request with a clear description of your changes and why they
    are needed.
+
+Please also read our [Code of Conduct](CODE_OF_CONDUCT.md).

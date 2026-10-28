@@ -59,8 +59,12 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-TODO.
+reported to any of the community leaders responsible for enforcement:
+
+* [Gavin Kerrigan](mailto:kerrigan@stats.ox.ac.uk)
+* [Marcel Hedman](mailto:marcel.hedman@jesus.ox.ac.uk)
+* [Sahel Iqbal](mailto:sahel.iqbal@stats.ox.ac.uk)
+
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
