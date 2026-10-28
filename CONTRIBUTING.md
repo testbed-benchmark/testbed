@@ -2,10 +2,10 @@
 
 We welcome contributions to TestBED!
 
-We especially welcome new tasks. Progress in Bayesian experimental design
-depends on testing algorithms against harder problems they haven't seen before,
-so if you have an experimental design problem from your own field, we would
-love to see it in TestBED. See
+We especially welcome new tasks. Many of the standard benchmark tasks are now
+too easy for current algorithms, so they no longer tell us much. Harder tasks
+that break existing methods are what drive the field forward, so please
+consider contributing one. See
 [Implementing New Tasks](https://torch-testbed.readthedocs.io/en/latest/guides/custom_tasks.html)
 to get started.
 
