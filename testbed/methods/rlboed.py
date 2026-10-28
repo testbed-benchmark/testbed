@@ -8,7 +8,6 @@ import warnings
 from dataclasses import dataclass
 from math import ceil, inf, isfinite, isinf, log
 
-import hydra
 import torch
 import torch.nn.functional as F
 from hydra.utils import instantiate
@@ -21,7 +20,7 @@ from testbed.core.design_spaces import (
     DesignSpace,
     FiniteDesignSpace,
 )
-from testbed.core.setup import instantiate_design_net, setup
+from testbed.core.setup import instantiate_design_net, make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import (
     CategoricalPolicyNet,
@@ -1253,12 +1252,7 @@ def build_replay_buffer(cfg, task):
 # ============================================================================
 
 
-@hydra.main(
-    version_base="1.3",
-    config_path="../recipes",
-    config_name="experiments/location_finding/rlboed",
-)
-def main(cfg):
+def run(cfg):
     """Entry point for RL-BOED (SAC) training.
 
     Args:
@@ -1297,6 +1291,8 @@ def main(cfg):
 
     trainer.train()
 
+
+main = make_main(run, "experiments/location_finding/rlboed")
 
 if __name__ == "__main__":
     main()

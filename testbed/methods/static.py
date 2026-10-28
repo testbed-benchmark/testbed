@@ -1,11 +1,10 @@
 """Training for static (non-adaptive) designs, with random restarts."""
 
-import hydra
 import torch
 from torch import nn
 
 from testbed.core.rollout import Rollout
-from testbed.core.setup import setup
+from testbed.core.setup import make_main, setup
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import StaticDesigner
 from testbed.eval import eval_spce_snmc
@@ -249,8 +248,7 @@ def build_objective(cfg, task):
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/static")
-def main(cfg):
+def run(cfg):
     """Entry point for static-design training.
 
     Args:
@@ -294,6 +292,8 @@ def main(cfg):
 
     trainer.train()
 
+
+main = make_main(run, "method/static")
 
 if __name__ == "__main__":
     main()

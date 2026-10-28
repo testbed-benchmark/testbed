@@ -4,13 +4,12 @@ import inspect
 import time
 from math import inf, isfinite
 
-import hydra
 import torch
 from hydra.utils import get_class, instantiate
 from omegaconf import OmegaConf
 
 from testbed.core import ActionHook
-from testbed.core.setup import setup
+from testbed.core.setup import make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_objectives import LossReinforce
 from testbed.designers import PolicyDesigner, RandomDesigner
@@ -493,10 +492,7 @@ def load_checkpoint(
 # ============================================================================
 
 
-@hydra.main(
-    version_base="1.3", config_path="../recipes", config_name="method/actionbed"
-)
-def main(cfg):
+def run(cfg):
     """Entry point for ActionBED training.
 
     Args:
@@ -511,6 +507,8 @@ def main(cfg):
     trainer.elapsed_seconds = time.monotonic() - start_time
     trainer.train()
 
+
+main = make_main(run, "method/actionbed")
 
 if __name__ == "__main__":
     main()
