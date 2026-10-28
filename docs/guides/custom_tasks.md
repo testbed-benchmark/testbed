@@ -210,7 +210,7 @@ with torch.no_grad():
 
 ## Contributing New Tasks
 
-We welcome pull requests that add tasks of interest to the community. Please follow the [contributing guidelines](https://github.com/testbed-benchmark/testbed#contributing). A new task should usually include:
+We welcome pull requests that add tasks of interest to the community. Please follow the [contributing guidelines](https://github.com/testbed-benchmark/testbed/blob/main/CONTRIBUTING.md). A new task should usually include:
 
 - a module `testbed/tasks/<task>.py`, with the task exported from `testbed/tasks/__init__.py` and a reference to the source paper in its module docstring,
 - tests in `tests/test_<task>.py` (see `tests/test_location_finding.py`), and
