@@ -71,7 +71,7 @@ def test_per_rollout_matches_the_losss_own_mean_reduction(cls):
 
     assert values.shape == (64,)
     assert values.mean() == pytest.approx(
-        cls(reduction="mean")(action, theta), rel=1e-5
+        cls(reduction="mean")(action, theta).item(), rel=1e-5
     )
 
 
@@ -86,7 +86,7 @@ def test_per_rollout_averages_log_loss_over_its_outer_samples():
     expected = LogLoss(task, 8, reduction="mean")(action, theta)
 
     assert values.shape == (64,)
-    assert values.mean() == pytest.approx(expected, rel=1e-5)
+    assert values.mean() == pytest.approx(expected.item(), rel=1e-5)
 
 
 def test_per_rollout_rejects_a_loss_that_reduced_over_the_batch():
