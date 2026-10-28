@@ -46,7 +46,7 @@ def test_sample_joint_shapes():
     task = make_task()
     design = make_design((4,))
 
-    y, theta = task.sample_joint(design, n_samples=3)
+    y, theta = task.sample_joint(design, sample_shape=3)
     assert y.shape == (3, 4, 1)
     assert theta.shape == (3, 4, 5)
 
@@ -54,7 +54,7 @@ def test_sample_joint_shapes():
 def test_outcome_logp_broadcasts():
     task = make_task()
     design = make_design((4,))
-    y, theta = task.sample_joint(design, n_samples=3)
+    y, theta = task.sample_joint(design, sample_shape=3)
 
     logp = task.outcome_logp(y, theta, design)
     assert logp.shape == (3, 4)
@@ -66,7 +66,7 @@ def test_outcomes_respect_censoring_bounds():
     design = make_design((8,))
     theta = task.sample_prior(8)
 
-    y = task.sample_outcome(theta, design, n_samples=500)
+    y = task.sample_outcome(theta, design, sample_shape=500)
     assert (y >= task.epsilon).all()
     assert (y <= 1.0 - task.epsilon).all()
 

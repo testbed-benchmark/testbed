@@ -39,13 +39,15 @@ TestBED needs the *event shape* of each variable, i.e. its shape without any bat
 
 ### Prior
 
-The prior can be any {py:class}`~testbed.core.distributions.Distribution`. Its `sample(n_samples)` method returns `[n_samples, *event_shape_theta]` and its `log_prob(theta)` method returns one value per batch element. You can wrap a `torch.distributions` object in {py:class}`~testbed.core.distributions.TorchDistribution`. Use `Independent` so that `log_prob` sums over all $2 \times 3$ entries of $\theta$ rather than returning one value per entry:
+The prior can be any {py:class}`~testbed.core.distributions.Distribution` whose `event_shape` equals `event_shape_theta`. Shapes follow `torch.distributions`: `sample(sample_shape)` returns `[*sample_shape, *event_shape_theta]`, and `log_prob(theta)` maps `[*batch_shape, *event_shape_theta]` to `[*batch_shape]`, i.e. it sums over every entry of $\theta$ and returns one value per batch element.
+
+You can wrap a `torch.distributions` object in {py:class}`~testbed.core.distributions.TorchDistribution`. The wrapper folds the wrapped distribution's batch dimensions into the event (via `Independent`), so `Normal(torch.zeros(2, 3), torch.ones(2, 3))`, whose own `log_prob` returns one value per entry, becomes a prior over $2 \times 3$ matrices whose `log_prob` sums over all six entries:
 
 ```python
-prior = TorchDistribution(Independent(Normal(torch.zeros(2, 3), torch.ones(2, 3)), 2))
+prior = TorchDistribution(Normal(torch.zeros(2, 3), torch.ones(2, 3)))
 ```
 
-If `torch.distributions` doesn't have the prior you need, subclass `Distribution` directly, as {py:class}`~testbed.tasks.location_finding.LocationFindingPrior` does. Register any tensors as buffers so that `.to(device)` moves them.
+If `torch.distributions` doesn't have the prior you need, subclass `Distribution` directly, as {py:class}`~testbed.tasks.location_finding.LocationFindingPrior` does: pass the event shape to `Distribution.__init__`, and make `sample` and `log_prob` work for any batch shape, including none. Register any tensors as buffers so that `.to(device)` moves them. `Task.__init__` draws one prior sample and raises an error if its shape or the shape of its `log_prob` is wrong.
 
 ### Likelihood
 
@@ -61,7 +63,7 @@ The `design_space` argument, which tracks any constraints on the designs, is pas
 :tags: [remove-stderr]
 
 import torch
-from torch.distributions import Bernoulli, Independent, Normal
+from torch.distributions import Bernoulli, Normal
 
 from testbed.core.distributions import TorchDistribution
 from testbed.tasks import Task
@@ -76,9 +78,7 @@ class MultiLogistic(Task):
 
     def __init__(self, design_space=None):
 
-        prior = TorchDistribution(
-            Independent(Normal(torch.zeros(2, 3), torch.ones(2, 3)), 2)
-        )
+        prior = TorchDistribution(Normal(torch.zeros(2, 3), torch.ones(2, 3)))
 
         super().__init__(
             event_shape_y=[2],
@@ -128,13 +128,13 @@ print(theta.shape, design.shape, y.shape)
 Batch dimensions broadcast in the same way as in `torch.distributions`:
 
 ```{code-cell} ipython3
-theta = task.sample_prior(n_samples=16)      # [16, 2, 3]
+theta = task.sample_prior(16)                # [16, 2, 3]
 designs = torch.randn(4, 1, 3)               # [4, 1, 3]
 y = task.sample_outcome(theta, designs)      # [4, 16, 2]
 logp = task.outcome_logp(y, theta, designs)  # [4, 16]
 print(y.shape, logp.shape)
 
-y, theta = task.sample_joint(design, n_samples=8)  # [8, 2], [8, 2, 3]
+y, theta = task.sample_joint(design, sample_shape=8)  # [8, 2], [8, 2, 3]
 print(y.shape, theta.shape)
 ```
 

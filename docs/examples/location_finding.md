@@ -144,7 +144,7 @@ print(rollout)
 plot(rollout)
 ```
 
-Notice that we now have `posterior = rollout.extra["posterior"]` available to us. Using importance sampling, this is an {py:class}`~testbed.core.distributions.EmpiricalDistribution` object, which is represented a set of weighted samples. We can use `posterior.sample(n_samples)` to draw from this distribution, which we used to create the visualization in the above plot. We see that the posterior is fairly concentrated around the true source location. 
+Notice that we now have `posterior = rollout.extra["posterior"]` available to us. Using importance sampling, this is an {py:class}`~testbed.core.distributions.EmpiricalDistribution` object, which is represented a set of weighted samples. We can use `posterior.sample(sample_shape)` to draw from this distribution, which we used to create the visualization in the above plot. We see that the posterior is fairly concentrated around the true source location. 
 
 ## What's Next?
 

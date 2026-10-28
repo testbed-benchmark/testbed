@@ -135,11 +135,10 @@ class PCE(DesignObjective):
 
         b = self.n_outer
 
-        # sample_joint drops the leading batch dim when n_samples==1 (its
-        # contract for a single design/sample), so reshape explicitly rather
-        # than trusting the returned shape -- this must hold for b==1 too.
+        # A context history contributes a batch dim of its own, so reshape
+        # explicitly rather than trusting the returned shape.
         y_outer, theta_outer = self.task.sample_joint(
-            design, y_history=y_history, design_history=design_history, n_samples=b
+            design, y_history=y_history, design_history=design_history, sample_shape=b
         )
         y_outer = y_outer.reshape(b, *self.task.event_shape_y)
         theta_outer = theta_outer.reshape(b, *self.task.event_shape_theta)

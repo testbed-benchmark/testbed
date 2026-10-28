@@ -126,14 +126,13 @@ class NMC(DesignObjective):
 
         b = self.n_outer
 
-        # sample_joint drops the leading batch dim when n_samples==1, and a
-        # context history contributes a batch dim of its own, so reshape
+        # A context history contributes a batch dim of its own, so reshape
         # explicitly rather than trusting the returned shape.
         y_outer, theta_outer = self.task.sample_joint(
             design,
             y_history=y_history,
             design_history=design_history,
-            n_samples=b,
+            sample_shape=b,
         )
         y_outer = y_outer.reshape(b, *self.task.event_shape_y)
         theta_outer = theta_outer.reshape(b, *self.task.event_shape_theta)

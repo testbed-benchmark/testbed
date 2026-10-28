@@ -17,6 +17,7 @@ from torch.distributions.transforms import (
 
 from testbed.core import RandomScaleGaussianDesignDistribution, Rollout
 from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core.distributions import as_sample_shape
 from testbed.core.hooks import RolloutHook
 from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets import (
@@ -144,10 +145,11 @@ class _ExactPosterior(VariationalPosteriorNet):
             theta_flat
         )
 
-    def sample(self, y_history, design_history, n_samples: int = 1, mask=None):
+    def sample(self, y_history, design_history, sample_shape=(), mask=None):
+        sample_shape = as_sample_shape(sample_shape)
         dist = self.distribution(y_history, design_history, mask=mask)
-        return dist.sample((n_samples,)).reshape(
-            n_samples, y_history.shape[0], *self.event_shape_theta
+        return dist.sample(sample_shape).reshape(
+            *sample_shape, y_history.shape[0], *self.event_shape_theta
         )
 
 
@@ -217,14 +219,15 @@ def test_posterior_sample_shapes():
     posterior = _make_posterior(task)
     rollout = _make_rollout(task, _make_design_net(task), b=5)
 
-    s1 = posterior.sample(rollout.y_history, rollout.design_history, n_samples=1)
-    s3 = posterior.sample(rollout.y_history, rollout.design_history, n_samples=3)
-    assert s1.shape == (
-        1,
-        5,
-        *task.event_shape_theta,
-    )  # leading n_samples dim always kept
-    assert s3.shape == (3, 5, *task.event_shape_theta)
+    def shape(sample_shape):
+        return posterior.sample(
+            rollout.y_history, rollout.design_history, sample_shape=sample_shape
+        ).shape
+
+    assert shape(()) == (5, *task.event_shape_theta)
+    assert shape(1) == (1, 5, *task.event_shape_theta)  # an int always adds a dim
+    assert shape(3) == (3, 5, *task.event_shape_theta)
+    assert shape((2, 3)) == (2, 3, 5, *task.event_shape_theta)
 
 
 def test_mixture_with_one_component_matches_independent_normal():
@@ -1021,7 +1024,9 @@ def test_canonicalized_net_sorts_its_samples():
     designer = RandomDesigner(task, T=3)
     rollout = designer.rollout(task.sample_prior(6))
 
-    samples = posterior.sample(rollout.y_history, rollout.design_history, n_samples=4)
+    samples = posterior.sample(
+        rollout.y_history, rollout.design_history, sample_shape=4
+    )
     assert samples.shape == (4, 6, *task.event_shape_theta)
     assert torch.all(samples[..., :-1, 0] <= samples[..., 1:, 0])
 
@@ -1265,7 +1270,7 @@ def test_ces_posterior_samples_satisfy_the_constraints():
     net = _make_ces_posterior(task)
     y_history, design_history = _ces_history(task, b=8)
 
-    theta = net.sample(y_history, design_history, n_samples=3)
+    theta = net.sample(y_history, design_history, sample_shape=3)
 
     assert theta.shape == (3, 8, 5)
     assert ((theta[..., 0] > 0.01) & (theta[..., 0] < 1.0)).all()
@@ -1510,7 +1515,7 @@ def test_td_constrained_posterior_keeps_k_positive():
     net = _make_td_posterior(task)
     y_history, design_history = _td_history(task, b=8)
 
-    theta = net.sample(y_history, design_history, n_samples=64)
+    theta = net.sample(y_history, design_history, sample_shape=64)
 
     assert theta.shape == (64, 8, 2)
     assert (theta[..., 0] > 0).all()

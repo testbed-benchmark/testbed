@@ -149,9 +149,7 @@ class Trainer:
         """Evaluates posterior fit and the full-parameter sPCE lower bound."""
         was_training = self.model.training
         self.model.eval()
-        theta = self.task.sample_prior(self.cfg.n_outer_eval).reshape(
-            self.cfg.n_outer_eval, *self.task.event_shape_theta
-        )
+        theta = self.task.sample_prior(self.cfg.n_outer_eval)
         spce = SPCE(
             self.task,
             n_contrastive=self.cfg.n_inner_eval,

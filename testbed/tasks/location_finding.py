@@ -1,5 +1,7 @@
 """Location-finding task."""
 
+from collections.abc import Iterable
+
 import torch
 from torch import Tensor
 
@@ -37,7 +39,7 @@ class LocationFindingPrior(Distribution):
         theta_covmat=None,
     ) -> None:
         """Initializes source-location prior parameters."""
-        super().__init__()
+        super().__init__(event_shape=(n_sources, dim_theta))
 
         if theta_loc is None:
             theta_loc = torch.zeros((n_sources, dim_theta))
@@ -53,21 +55,18 @@ class LocationFindingPrior(Distribution):
         self.register_buffer("chol", chol)
         self.register_buffer("logdet", logdet)
 
-        self.dim = dim_theta
-
-    def sample(self, n_samples: int) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of parameters from the prior.
 
         Args:
-            n_samples (int):
-                How many samples to draw.
+            sample_shape (int or iterable):
+                Shape of the batch of draws (default: ()).
 
         Returns:
             Tensor:
-                Samples, shape ``[n_samples, n_sources, dim_theta]``
+                Samples, shape ``[*sample_shape, n_sources, dim_theta]``
         """
-        # [n_samples, n_sources, dim_theta]
-        eps = torch.randn(n_samples, *self.loc.shape, device=self.loc.device)
+        eps = torch.randn(self._extended_shape(sample_shape), device=self.loc.device)
         return self.loc + eps @ self.chol.T
 
     def log_prob(self, theta: Tensor) -> Tensor:
@@ -91,7 +90,9 @@ class LocationFindingPrior(Distribution):
         maha = (solve**2).sum(dim=-1)  # [..., n_sources]
 
         logp_per_source = -0.5 * (
-            maha + self.logdet + self.dim * torch.log(torch.tensor(2 * torch.pi))
+            maha
+            + self.logdet
+            + self.event_shape[-1] * torch.log(torch.tensor(2 * torch.pi))
         )
         return logp_per_source.sum(dim=-1)  # [...] — independent sources
 

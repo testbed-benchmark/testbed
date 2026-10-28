@@ -4,6 +4,8 @@ References:
     1. https://openreview.net/forum?id=uyNJLdCvFG
 """
 
+from collections.abc import Iterable
+
 import torch
 from torch import Tensor
 
@@ -42,7 +44,7 @@ class MichaelisMentenPrior(Distribution):
         vhalf_ub: float = 200,
     ):
         """Initializes Michaelis-Menten prior bounds."""
-        super().__init__()
+        super().__init__(event_shape=(2,))
 
         # lower/upper bounds
         self.register_buffer("lbs", torch.tensor([vmax_lb, vhalf_lb]))
@@ -51,18 +53,18 @@ class MichaelisMentenPrior(Distribution):
         # log normalizing constant
         self.register_buffer("log_z", -torch.log(self.ubs - self.lbs).sum())
 
-    def sample(self, n_samples: int = 1) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of parameters from the prior.
 
         Args:
-            n_samples (int):
-                How many samples to draw.
+            sample_shape (int or iterable):
+                Shape of the batch of draws (default: ()).
 
         Returns:
             Tensor:
-                Samples, shape ``[n_samples, 2]``.
+                Samples, shape ``[*sample_shape, 2]``.
         """
-        noise = torch.rand(n_samples, 2, device=self.lbs.device)
+        noise = torch.rand(self._extended_shape(sample_shape), device=self.lbs.device)
         samples = (self.ubs - self.lbs) * noise + self.lbs
         return samples
 

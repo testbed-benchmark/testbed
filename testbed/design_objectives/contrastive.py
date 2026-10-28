@@ -87,11 +87,7 @@ def contrastive_logsumexps(
     chunk_size = remaining if chunk_size is None else int(chunk_size)
     while remaining > 0:
         chunk = min(chunk_size, remaining)
-        # sample_current_prior drops the leading dim when asked for exactly one
-        # sample, so reshape rather than trusting the returned shape.
-        theta = task.sample_current_prior(b * chunk).reshape(
-            b, chunk, *task.event_shape_theta
-        )
+        theta = task.sample_current_prior((b, chunk))
         logp_chunk = task.history_logp(
             y_chunk, design_chunk, theta, fused=fused, **context
         )  # [b, chunk]

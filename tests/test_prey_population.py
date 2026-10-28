@@ -108,7 +108,7 @@ def test_sample_joint_and_broadcasted_log_prob_shapes():
     task = PreyPopulation()
     design = torch.tensor([[10.0], [25.0], [100.0], [300.0]])
 
-    y, theta = task.sample_joint(design, n_samples=3)
+    y, theta = task.sample_joint(design, sample_shape=3)
     logp = task.outcome_logp(y, theta, design)
 
     assert y.shape == (3, 4, 1)

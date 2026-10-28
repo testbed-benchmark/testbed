@@ -7,7 +7,7 @@ import torch
 from torch import nn
 
 from ..core.design_spaces import DefaultDesignSpace, DesignSpace
-from ..core.distributions import Distribution
+from ..core.distributions import Distribution, as_sample_shape
 from ..core.util import broadcast_and_flatten
 
 
@@ -32,7 +32,10 @@ class Task(ABC, nn.Module):
         event_shape_design (iterable):
             Shape of designs.
         prior (Distribution):
-            Prior over model parameters.
+            Prior over model parameters. Its ``event_shape`` must equal
+            ``event_shape_theta``, its ``batch_shape`` must be empty, and its
+            ``log_prob`` must reduce over all of theta's event dims;
+            ``__init__`` checks this on one prior sample.
         discrete_y (bool):
             Whether observations are discrete (default: False).
         discrete_theta (bool):
@@ -113,6 +116,7 @@ class Task(ABC, nn.Module):
         self.event_shape_theta = torch.Size(event_shape_theta)
         self.event_shape_design = torch.Size(event_shape_design)
 
+        self._validate_prior(prior)
         self.prior = prior
         self._current_prior = prior
 
@@ -165,6 +169,40 @@ class Task(ABC, nn.Module):
                 return next(self.parameters()).device
             except StopIteration:
                 return torch.device("cpu")
+
+    def _validate_prior(self, prior):
+        """Checks declared shapes and one draw without advancing the RNG."""
+        if prior.event_shape != self.event_shape_theta or prior.batch_shape:
+            raise ValueError(
+                f"{type(self).__name__}'s prior must have event_shape "
+                f"{tuple(self.event_shape_theta)} and an empty batch_shape; got "
+                f"event_shape {tuple(prior.event_shape)} and batch_shape "
+                f"{tuple(prior.batch_shape)}. A TorchDistribution folds its "
+                "batch dims into the event unless reinterpreted_batch_ndims "
+                "says otherwise."
+            )
+
+        name = type(self).__name__
+        device = prior.device
+        rng_devices = [device] if device.type == "cuda" else []
+        with torch.random.fork_rng(devices=rng_devices), torch.no_grad():
+            theta = prior.sample()
+            if theta.shape != self.event_shape_theta:
+                raise ValueError(
+                    f"{name}'s prior.sample() must return shape "
+                    f"{tuple(self.event_shape_theta)}; got {tuple(theta.shape)}."
+                )
+            try:
+                logp = prior.log_prob(theta)
+            except NotImplementedError:
+                # sample-only priors have nothing further to check
+                return
+        if logp.shape != torch.Size():
+            raise ValueError(
+                f"{name}'s prior.log_prob must reduce over all event dims, "
+                "mapping [*batch, *event_shape_theta] to [*batch]; for a single "
+                f"draw it returned shape {tuple(logp.shape)} instead of ()."
+            )
 
     @property
     def current_prior(self) -> Distribution:
@@ -556,8 +594,16 @@ class Task(ABC, nn.Module):
             )
         return logp.reshape(batch_shape)
 
+    @staticmethod
+    def _expand_samples(n, *tensors):
+        """Repeats each ``[b, *rest]`` tensor n times into ``[n * b, *rest]``.
+
+        Sample-major, so that reshaping to ``[n, b, ...]`` recovers the sample dim.
+        """
+        return tuple(x.expand(n, *x.shape).flatten(0, 1) for x in tensors)
+
     def sample_outcome(
-        self, theta, design, y_history=None, design_history=None, n_samples=1
+        self, theta, design, y_history=None, design_history=None, sample_shape=()
     ):
         """Samples outcomes from the likelihood.
 
@@ -572,18 +618,20 @@ class Task(ABC, nn.Module):
                 Parameters of shape ``[*batch_shape_theta, *event_shape_theta]``.
             design (Tensor):
                 Designs of shape ``[*batch_shape_design, *event_shape_design]``.
-            n_samples (int):
-                How many observation samples to draw for each (theta, design) pair (default: 1).
             y_history (Tensor, optional):
                 Past observations that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_y]``.
             design_history (Tensor, optional):
                 Past designs that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_design]``.
+            sample_shape (int or iterable):
+                Shape of the observation samples drawn for each (theta, design)
+                pair, as in ``torch.distributions``. An int ``n`` means ``(n,)``
+                (default: ()).
 
         Returns:
             Tensor:
-                Sampled observations. If ``n_samples==1``, shape ``[*broadcast_batch_shape, *event_shape_y]``.
-                Otherwise, shape ``[n_samples, *broadcast_batch_shape, *event_shape_y]``.
+                Sampled observations, shape ``[*sample_shape, *broadcast_batch_shape, *event_shape_y]``.
         """
+        sample_shape = as_sample_shape(sample_shape)
         self._check_design(design)
         y_history, design_history = self._context_history(y_history, design_history)
 
@@ -598,28 +646,15 @@ class Task(ABC, nn.Module):
                 (design_history, (T_design, *self.event_shape_design)),
             )
         )
-        b_flat = theta_flat.shape[0]
-        if n_samples > 1:
-            theta_flat = (
-                theta_flat.unsqueeze(0)
-                .expand(n_samples, b_flat, *self.event_shape_theta)
-                .reshape(n_samples * b_flat, *self.event_shape_theta)
+        theta_flat, design_flat, y_history_flat, design_history_flat = (
+            self._expand_samples(
+                sample_shape.numel(),
+                theta_flat,
+                design_flat,
+                y_history_flat,
+                design_history_flat,
             )
-            design_flat = (
-                design_flat.unsqueeze(0)
-                .expand(n_samples, b_flat, *self.event_shape_design)
-                .reshape(n_samples * b_flat, *self.event_shape_design)
-            )
-            y_history_flat = (
-                y_history_flat.unsqueeze(0)
-                .expand(n_samples, b_flat, T_y, *self.event_shape_y)
-                .reshape(n_samples * b_flat, T_y, *self.event_shape_y)
-            )
-            design_history_flat = (
-                design_history_flat.unsqueeze(0)
-                .expand(n_samples, b_flat, T_design, *self.event_shape_design)
-                .reshape(n_samples * b_flat, T_design, *self.event_shape_design)
-            )
+        )
         y_flat = self._gate_outcome_gradients(
             self._sample_outcome(
                 theta_flat,
@@ -629,11 +664,11 @@ class Task(ABC, nn.Module):
             ),
             design_flat,
         )
-        if n_samples == 1:
-            return y_flat.reshape(*batch_shape, *self.event_shape_y)
-        return y_flat.reshape(n_samples, *batch_shape, *self.event_shape_y)
+        return y_flat.reshape(*sample_shape, *batch_shape, *self.event_shape_y)
 
-    def sample_joint(self, design, y_history=None, design_history=None, n_samples=1):
+    def sample_joint(
+        self, design, y_history=None, design_history=None, sample_shape=()
+    ):
         r"""Samples from the joint over (y, theta) given designs.
 
         Uses the current (possibly updated) prior. Gates the outcome's
@@ -643,78 +678,44 @@ class Task(ABC, nn.Module):
         Args:
             design (Tensor):
                 Designs of shape ``[*batch_shape_designs, *event_shape_design]``.
-            n_samples (int):
-                Number of samples to draw for each design (default: 1).
             y_history (Tensor, optional):
                 Past observations that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_y]``.
             design_history (Tensor, optional):
                 Past designs that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_design]``.
+            sample_shape (int or iterable):
+                Shape of the samples drawn for each design. An int ``n``
+                means ``(n,)`` (default: ()).
 
         Returns:
             Tensor:
-                Sampled observations. If ``n_samples==1``, shape ``[*broadcast_batch_shape, *event_shape_y]``.
-                Otherwise, shape ``[n_samples, *broadcast_batch_shape, *event_shape_y]``.
+                Sampled observations, shape ``[*sample_shape, *broadcast_batch_shape, *event_shape_y]``.
             Tensor:
-                Sampled parameters. If ``n_samples==1``, shape ``[*broadcast_batch_shape, *event_shape_theta]``.
-                Otherwise, shape ``[n_samples, *broadcast_batch_shape, *event_shape_theta]``.
+                Sampled parameters, shape ``[*sample_shape, *broadcast_batch_shape, *event_shape_theta]``.
         """
+        sample_shape = as_sample_shape(sample_shape)
         self._check_design(design)
-        y_history, design_history = self._context_history(y_history, design_history)
+        y_context, design_context = self._context_history(y_history, design_history)
 
-        # T_y and T_design agree unless only one history was supplied.
-        T_y = y_history.shape[-(len(self.event_shape_y) + 1)]
-        T_design = design_history.shape[-(len(self.event_shape_design) + 1)]
-        (
-            (design_flat, y_history_flat, design_history_flat),
-            batch_shape,
-        ) = broadcast_and_flatten(
-            (design, self.event_shape_design),
-            (y_history, (T_y, *self.event_shape_y)),
-            (design_history, (T_design, *self.event_shape_design)),
+        batch_shape = torch.broadcast_shapes(
+            design.shape[: design.ndim - len(self.event_shape_design)],
+            y_context.shape[: y_context.ndim - len(self.event_shape_y) - 1],
+            design_context.shape[
+                : design_context.ndim - len(self.event_shape_design) - 1
+            ],
         )
-        b_flat = design_flat.shape[0]
-
-        total = n_samples * b_flat
-        # Not sample_current_prior(total): that wrapper squeezes away the
-        # leading dim when total == 1, but this code always needs a real
-        # [total, *event_theta] batch dim, even when total == 1.
-        theta_flat = self.current_prior.sample(n_samples=total)  # [total, *event_theta]
-        if n_samples > 1:
-            design_flat = (
-                design_flat.unsqueeze(0)
-                .expand(n_samples, b_flat, *self.event_shape_design)
-                .reshape(total, *self.event_shape_design)
-            )
-            y_history_flat = (
-                y_history_flat.unsqueeze(0)
-                .expand(n_samples, b_flat, T_y, *self.event_shape_y)
-                .reshape(total, T_y, *self.event_shape_y)
-            )
-            design_history_flat = (
-                design_history_flat.unsqueeze(0)
-                .expand(n_samples, b_flat, T_design, *self.event_shape_design)
-                .reshape(total, T_design, *self.event_shape_design)
-            )
-        y_flat = self._gate_outcome_gradients(
-            self._sample_outcome(
-                theta_flat,
-                design_flat,
-                y_history=y_history_flat,
-                design_history=design_history_flat,
-            ),
-            design_flat,
-        )  # [total, *event_y]
-        if n_samples == 1:
-            return (
-                y_flat.reshape(*batch_shape, *self.event_shape_y),
-                theta_flat.reshape(*batch_shape, *self.event_shape_theta),
-            )
-        return (
-            y_flat.reshape(n_samples, *batch_shape, *self.event_shape_y),
-            theta_flat.reshape(n_samples, *batch_shape, *self.event_shape_theta),
+        # Keep the prior draw flat to preserve seeded sampling across priors.
+        shape = sample_shape + batch_shape
+        theta = self.sample_current_prior(shape.numel()).reshape(
+            *shape, *self.event_shape_theta
         )
+        y = self.sample_outcome(
+            theta, design, y_history=y_history, design_history=design_history
+        )
+        return y, theta
 
-    def sample_marginal(self, design, y_history=None, design_history=None, n_samples=1):
+    def sample_marginal(
+        self, design, y_history=None, design_history=None, sample_shape=()
+    ):
         r"""Samples from the marginal over observations given designs.
 
         Uses the current (possibly updated) prior.
@@ -726,62 +727,56 @@ class Task(ABC, nn.Module):
                 Past observations that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_y]``.
             design_history (Tensor, optional):
                 Past designs that the likelihood possibly conditions on. Shape ``[**batch_shape_history, t, *event_shape_design]``.
-            n_samples (int):
-                Number of samples to draw for each design (default: 1).
+            sample_shape (int or iterable):
+                Shape of the samples drawn for each design. An int ``n``
+                means ``(n,)`` (default: ()).
 
         Returns:
             Tensor:
-                Sampled observations. If ``n_samples==1``, shape ``[*broadcast_batch_shape, *event_shape_y]``.
-                Otherwise, shape ``[n_samples, *broadcast_batch_shape, *event_shape_y]``.
+                Sampled observations, shape ``[*sample_shape, *broadcast_batch_shape, *event_shape_y]``.
         """
         outcome, _ = self.sample_joint(
-            design, y_history, design_history, n_samples=n_samples
+            design, y_history, design_history, sample_shape=sample_shape
         )
         return outcome
 
-    def sample_prior(self, n_samples=1):
+    def sample_prior(self, sample_shape=()):
         r"""Samples from original, non-updated prior.
 
         Args:
-            n_samples (int):
-                Number of samples to draw (default: 1).
+            sample_shape (int or iterable):
+                Shape of the batch of draws. An int ``n`` means ``(n,)``
+                (default: ()).
 
         Returns:
             Tensor:
-                Sampled parameters. If ``n_samples==1``, shape ``[*event_shape_theta]``.
-                Otherwise, shape ``[n_samples, *event_shape_theta]``.
+                Sampled parameters, shape ``[*sample_shape, *event_shape_theta]``.
         """
-        samples = self.prior.sample(
-            n_samples=n_samples
-        )  # [n_samples, *event_shape_theta]
-        if n_samples == 1:
-            return samples.squeeze(0)  # [*event_shape_theta]
-        return samples
+        return self.prior.sample(sample_shape)
 
-    def sample_current_prior(self, n_samples=1):
+    def sample_current_prior(self, sample_shape=()):
         r"""Samples from current, possibly updated prior.
 
         Args:
-            n_samples (int):
-                Number of samples to draw (default: 1).
+            sample_shape (int or iterable):
+                Shape of the batch of draws. An int ``n`` means ``(n,)``
+                (default: ()).
 
         Returns:
             Tensor:
-                Sampled parameters. If ``n_samples==1``, shape ``[*event_shape_theta]``.
-                Otherwise, shape ``[n_samples, *event_shape_theta]``.
+                Sampled parameters, shape ``[*sample_shape, *event_shape_theta]``.
         """
-        samples = self.current_prior.sample(
-            n_samples=n_samples
-        )  # [n_samples, *event_shape_theta]
-        if n_samples == 1:
-            return samples.squeeze(0)  # [*event_shape_theta]
-        return samples
+        return self.current_prior.sample(sample_shape)
 
     def update_prior(self, new_prior):
         r"""Updates the current prior.
 
         Args:
             new_prior (Distribution):
-                Prior to update to.
+                Prior to update to. Must have the same ``event_shape`` as the
+                original prior and an empty ``batch_shape``, and its
+                ``sample`` and ``log_prob`` must honour them; this is checked
+                on one draw, as in ``__init__``.
         """
+        self._validate_prior(new_prior)
         self._current_prior = new_prior

@@ -1,9 +1,11 @@
 """Design-sampling distributions to be used with RandomDesigner."""
 
+from collections.abc import Iterable
+
 import torch
 from torch import Tensor
 
-from testbed.core.distributions import Distribution
+from testbed.core.distributions import Distribution, as_sample_shape
 
 
 class RandomScaleGaussianDesignDistribution(Distribution):
@@ -42,9 +44,8 @@ class RandomScaleGaussianDesignDistribution(Distribution):
             scale_high: Upper bound for the per-trajectory scale.
             device: Device to sample on (default: cpu; moves with `.to()`).
         """
-        super().__init__()
+        super().__init__(event_shape=event_shape_design)
         self.T = int(T)
-        self.event_shape_design = torch.Size(event_shape_design)
         self.scale_low = float(scale_low)
         self.scale_high = float(scale_high)
         self._last_scale_flat = None
@@ -57,16 +58,20 @@ class RandomScaleGaussianDesignDistribution(Distribution):
         """Returns the device this distribution samples on."""
         return self._device_tracker.device
 
-    def sample(self, n_samples: int = 1) -> Tensor:
-        """Draws designs, `n_samples` trajectories' worth at once.
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
+        """Draws designs, whole trajectories' worth at once.
 
         Args:
-            n_samples: Total draws requested; must be a multiple of `T` (one
-                full trajectory, or a batch of them, per call).
+            sample_shape: Shape of the batch of draws. Its total size must be
+                a multiple of `T` (one full trajectory, or a batch of them,
+                per call), with consecutive groups of `T` draws, in row-major
+                order, sharing one scale.
 
         Returns:
-            Tensor: Designs, shape ``[n_samples, *event_shape_design]``.
+            Tensor: Designs, shape ``[*sample_shape, *event_shape_design]``.
         """
+        sample_shape = as_sample_shape(sample_shape)
+        n_samples = sample_shape.numel()
         if n_samples % self.T != 0:
             raise ValueError(
                 f"RandomScaleGaussianDesignDistribution requires n_samples "
@@ -84,9 +89,10 @@ class RandomScaleGaussianDesignDistribution(Distribution):
         )  # [n_samples(==b*T)], shared within each trajectory
         self._last_scale_flat = scale_flat
 
-        extra_dims = (1,) * len(self.event_shape_design)
-        noise = torch.randn(n_samples, *self.event_shape_design, device=self.device)
-        return noise * scale_flat.reshape(n_samples, *extra_dims)
+        extra_dims = (1,) * len(self.event_shape)
+        noise = torch.randn(n_samples, *self.event_shape, device=self.device)
+        designs = noise * scale_flat.reshape(n_samples, *extra_dims)
+        return designs.reshape(self._extended_shape(sample_shape))
 
     def log_prob(self, design: Tensor) -> Tensor:
         """Log density conditional on the scale drawn by the preceding `sample` call.
@@ -98,16 +104,16 @@ class RandomScaleGaussianDesignDistribution(Distribution):
         so this conditional surrogate is sufficient.
         Do not call out of order or on a different-sized tensor.
         """
-        if (
-            self._last_scale_flat is None
-            or design.shape[0] != self._last_scale_flat.shape[0]
-        ):
+        batch_shape = design.shape[: design.ndim - len(self.event_shape)]
+        n = batch_shape.numel()
+        if self._last_scale_flat is None or n != self._last_scale_flat.shape[0]:
             raise RuntimeError(
                 "log_prob must be called immediately after a sample() call "
                 "producing the same number of designs."
             )
-        scale_flat = self._last_scale_flat.reshape(design.shape[0], 1).expand(
-            design.shape[0], design[0].numel()
+        scale_flat = self._last_scale_flat.reshape(n, 1).expand(
+            n, self.event_shape.numel()
         )
-        flat = design.reshape(design.shape[0], -1)
-        return torch.distributions.Normal(0.0, scale_flat).log_prob(flat).sum(-1)
+        flat = design.reshape(n, -1)
+        logp = torch.distributions.Normal(0.0, scale_flat).log_prob(flat).sum(-1)
+        return logp.reshape(batch_shape)

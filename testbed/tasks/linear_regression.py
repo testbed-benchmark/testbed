@@ -1,6 +1,7 @@
 """Linear-Gaussian regression task."""
 
 import math
+from collections.abc import Iterable
 
 import torch
 from torch import Tensor
@@ -35,7 +36,7 @@ class LinearRegressionPrior(Distribution):
         theta_covmat: Tensor = None,
     ):
         """Initializes prior for weights in linear regression."""
-        super().__init__()
+        super().__init__(event_shape=(dim_theta,))
 
         self.dim_theta = dim_theta  # Dimensionality of theta, including bias; e.g., dim_theta=2 is theta0 + theta1 x
 
@@ -57,18 +58,18 @@ class LinearRegressionPrior(Distribution):
         self.register_buffer("chol", chol)
         self.register_buffer("logdet", logdet)
 
-    def sample(self, n_samples: int):
+    def sample(self, sample_shape: int | Iterable[int] = ()):
         """Draws samples of parameters from the prior.
 
         Args:
-            n_samples (int):
-                How many samples to draw.
+            sample_shape (int or iterable):
+                Shape of the batch of draws (default: ()).
 
         Returns:
             Tensor:
-                Samples, shape ``[n_samples, dim_theta]``
+                Samples, shape ``[*sample_shape, dim_theta]``
         """
-        eps = torch.randn(n_samples, *self.loc.shape, device=self.loc.device)
+        eps = torch.randn(self._extended_shape(sample_shape), device=self.loc.device)
         return self.loc + eps @ self.chol.T
 
     def log_prob(self, theta: Tensor):
@@ -76,20 +77,19 @@ class LinearRegressionPrior(Distribution):
 
         Args:
             theta (Tensor):
-                Points at which to evaluate the log-probability. Shape ``[b, dim_theta]``.
+                Points at which to evaluate the log-probability. Shape ``[..., dim_theta]``.
 
         Returns:
             Tensor:
-                Log probs, shape ``[b,]``
+                Log probs, shape ``[...]``
         """
-        # theta: [*batch_shape, dim_theta]
-
         diff = theta - self.loc
 
-        # solve L x = diff  (more stable than inverse)
+        # solve L x = diff  (more stable than inverse); diff as a column vector
+        # so that an unbatched theta works too
         solve = torch.linalg.solve_triangular(
-            self.chol, diff.transpose(-1, -2), upper=False
-        ).transpose(-1, -2)
+            self.chol, diff.unsqueeze(-1), upper=False
+        ).squeeze(-1)
 
         maha = (solve**2).sum(-1)
 

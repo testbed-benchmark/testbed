@@ -81,7 +81,7 @@ def test_posterior_accepts_leading_batch_dims():
 
     log_prob = net.log_prob(theta, y, designs, mask=mask)
     flat = net.log_prob(_flat(theta), _flat(y), _flat(designs), mask=_flat(mask))
-    samples = net.sample(y, designs, n_samples=7, mask=mask)
+    samples = net.sample(y, designs, sample_shape=7, mask=mask)
 
     assert log_prob.shape == BATCH_SHAPE
     torch.testing.assert_close(log_prob, flat.reshape(BATCH_SHAPE))

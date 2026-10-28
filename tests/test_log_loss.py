@@ -59,11 +59,11 @@ class _ConstantDesignDistr(Distribution):
     """Deterministic design distribution, so an override is unmistakable."""
 
     def __init__(self, event_shape, value=3.0):
-        super().__init__()
+        super().__init__(event_shape)
         self.register_buffer("value", torch.full(torch.Size(event_shape), value))
 
-    def sample(self, n_samples=1):
-        return self.value.expand(n_samples, *self.value.shape)
+    def sample(self, sample_shape=()):
+        return self.value.expand(self._extended_shape(sample_shape))
 
     def log_prob(self, theta):
         raise NotImplementedError

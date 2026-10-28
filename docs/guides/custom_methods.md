@@ -84,7 +84,7 @@ The training loop samples $\theta_0$ from the prior, rolls out the policy, and t
 optimizer = torch.optim.Adam(designer.parameters(), lr=1e-3)
 
 for step in range(1_000):
-    theta = task.sample_prior(n_samples=256)
+    theta = task.sample_prior(256)
     rollout = designer.rollout(theta)
     loss = -objective.estimate_gain(rollout)
 
@@ -103,7 +103,7 @@ To evaluate, we estimate the sPCE lower bound and the sNMC upper bound with a la
 ```{code-cell} ipython3
 @torch.no_grad()
 def evaluate(designer, n_outer=1024, n_contrastive=10_000):
-    rollout = designer.rollout(task.sample_prior(n_samples=n_outer))
+    rollout = designer.rollout(task.sample_prior(n_outer))
     lower = SPCE(task, n_contrastive, chunk_size=1_000).estimate_gain(rollout)
     upper = SNMC(task, n_contrastive, chunk_size=1_000).estimate_gain(rollout)
     return f"[{lower.item():.3f}, {upper.item():.3f}]"
@@ -151,13 +151,13 @@ from testbed.designers import Designer
 class PosteriorSampleDesigner(Designer):
     def _step_design(self, state):
         b = state.theta.shape[0]
-        theta = state.task.current_prior.sample(n_samples=b)  # [b, 1, 2]
+        theta = state.task.current_prior.sample(b)  # [b, 1, 2]
         return theta[:, 0], None, None
 
 
 designer = PosteriorSampleDesigner(task, T, hooks=[PosteriorUpdateHook(n_proposal=10_000)])
 
-theta = task.sample_prior().unsqueeze(0)  # [1, 1, 2]
+theta = task.sample_prior(1)  # [1, 1, 2]
 rollout = designer.rollout(theta)
 print(rollout.design_history.squeeze(0))
 print(theta.squeeze(0))

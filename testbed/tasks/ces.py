@@ -13,13 +13,14 @@ Using a smaller prior variance significantly simplifies the task. We thus follow
 """
 
 import math
+from collections.abc import Iterable
 
 import torch
 from torch import Tensor
 from torch.distributions import Beta, Dirichlet, LogNormal
 
 from ..core.design_spaces import BoxDesignSpace, DesignSpace
-from ..core.distributions import Distribution
+from ..core.distributions import Distribution, as_sample_shape
 from ..core.util import normal_log_prob
 from .base import Task
 
@@ -75,7 +76,7 @@ class CESPrior(Distribution):
         u_scale=3.0,
     ) -> None:
         """Initializes CES prior parameters."""
-        super().__init__()
+        super().__init__(event_shape=(5,))
 
         self.register_buffer("rho_c1", torch.tensor(rho_concentration[0]))
         self.register_buffer("rho_c0", torch.tensor(rho_concentration[1]))
@@ -98,25 +99,26 @@ class CESPrior(Distribution):
         """Distribution for the scale u."""
         return LogNormal(self.u_loc, self.u_scale)
 
-    def sample(self, n_samples: int = 1) -> Tensor:
+    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples from the prior distribution.
 
         Args:
-            n_samples (int):
-                The number of samples to draw from the prior.
+            sample_shape (int or iterable):
+                Shape of the batch of draws (default: ()).
 
         Returns:
             Tensor:
-                A tensor of shape ``[n_samples, 5]``.
+                A tensor of shape ``[*sample_shape, 5]``.
         """
-        rho = self.rho_beta.sample((n_samples, 1))
+        sample_shape = as_sample_shape(sample_shape)
+        rho = self.rho_beta.sample((*sample_shape, 1))
         # a hack from the VBOED paper to prevent rho being too small
         # c.f. https://github.com/ae-foster/pyro/blob/vboed-reproduce/examples/contrib/oed/ces.py#L38
         # following VBOED, this is not accounted for in the prior log_prob.
         rho = 0.01 + 0.99 * rho
 
-        alpha = self.alpha_dirichlet.sample((n_samples,))
-        u = self.u_lognormal.sample((n_samples, 1))
+        alpha = self.alpha_dirichlet.sample(sample_shape)
+        u = self.u_lognormal.sample((*sample_shape, 1))
         return torch.cat([rho, alpha, u], dim=-1)
 
     def log_prob(self, theta: Tensor) -> Tensor:

@@ -168,10 +168,10 @@ def test_chunking_is_exact_with_a_context(chunk_size):
     pool = torch.randn(b, L, 2)
     cursor = 0
 
-    def pinned(n_samples=1):
+    def pinned(sample_shape=()):
         nonlocal cursor
-        k = n_samples // b
-        out = pool[:, cursor : cursor + k].reshape(b * k, 2)
+        _, k = sample_shape
+        out = pool[:, cursor : cursor + k]
         cursor += k
         return out
 

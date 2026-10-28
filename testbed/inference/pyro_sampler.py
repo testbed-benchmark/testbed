@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from math import prod
 from typing import ClassVar, Literal
 
 import pyro
@@ -59,19 +58,12 @@ class TaskPriorDist(TorchDistributionMixin, td.Distribution):
         """Draws prior samples."""
         if sample_shape is None:
             sample_shape = torch.Size()
-        n = prod(sample_shape) if len(sample_shape) > 0 else 1
-        raw = self._task.prior.sample(n_samples=n)  # [n, *event_shape_theta]
-        return raw.reshape(*sample_shape, *self._task.event_shape_theta)
+        return self._task.prior.sample(sample_shape)
 
     def log_prob(self, theta: torch.Tensor) -> torch.Tensor:
         """Evaluates prior log probabilities."""
         # theta: [*B, *event_shape_theta] — B may be empty when called by Pyro
-        n_event = len(self._task.event_shape_theta)
-        added = theta.ndim == n_event
-        if added:
-            theta = theta.unsqueeze(0)
-        lp = self._task.prior.log_prob(theta)  # [*B] or [1]
-        return lp.squeeze(0) if added else lp
+        return self._task.prior.log_prob(theta)
 
 
 def _make_model(

@@ -11,17 +11,22 @@ def _make_task():
 
 
 def test_sample_joint_keeps_batch_dim_when_total_samples_is_one():
-    # Regression: sample_joint used to sample theta via the Task.sample_current_prior
-    # wrapper, which squeezes its leading dim whenever n_samples * batch_size == 1.
-    # That silently produced an unbatched theta paired against a batched design,
-    # crashing (or worse, silently misaligning) downstream.
+    # Regression: samplers used to squeeze their leading dim whenever the total
+    # sample count was one. That silently produced an unbatched theta paired
+    # against a batched design, crashing (or worse, silently misaligning)
+    # downstream.
     task = _make_task()
     design = task.design_space.sample(batch_shape=(1,))  # [1, *event_shape_design]
 
-    y, theta = task.sample_joint(design, n_samples=1)
+    y, theta = task.sample_joint(design)
 
     assert y.shape == (1, *task.event_shape_y)
     assert theta.shape == (1, *task.event_shape_theta)
+
+    y, theta = task.sample_joint(design, sample_shape=1)
+
+    assert y.shape == (1, 1, *task.event_shape_y)
+    assert theta.shape == (1, 1, *task.event_shape_theta)
 
 
 def test_pce_n_outer_one_does_not_crash_and_has_scalar_gain():

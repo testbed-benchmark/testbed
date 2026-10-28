@@ -303,7 +303,7 @@ def test_sample_outcome_mean_matches_bernoulli_probability():
     theta = torch.tensor([[0.05, 1.0]])
     design = torch.tensor([[20.0, 50.0]])  # indifference point, p(y=1) = 0.5
 
-    samples = task.sample_outcome(theta, design, n_samples=20_000)
+    samples = task.sample_outcome(theta, design, sample_shape=20_000)
     assert torch.allclose(samples.mean(), torch.tensor(0.5), atol=0.02)
 
 
