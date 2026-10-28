@@ -1,8 +1,12 @@
 """Shared setup for the Hydra training entry points."""
 
 import inspect
+import re
+import sys
 from math import prod
+from pathlib import Path
 
+import hydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import get_object, instantiate
 from omegaconf import OmegaConf
@@ -58,9 +62,11 @@ def instantiate_action_net(config, task, T):
 def setup(cfg):
     """Build the run manager and task common to every Hydra entry point.
 
-    Hydra owns the run directory, so its resolved ``runtime.output_dir`` is
-    handed straight to the Manager. The task is instantiated from ``cfg.task``
-    and moved onto ``cfg.device``.
+    Under the Hydra CLI, Hydra owns the run directory, so its resolved
+    ``runtime.output_dir`` is handed straight to the Manager. Called directly
+    (from a script or notebook), the Manager creates a timestamped run under
+    ``cfg.save_dir``. The task is instantiated from ``cfg.task`` and moved onto
+    ``cfg.device``.
 
     Args:
         cfg: The composed Hydra/OmegaConf config.
@@ -68,6 +74,45 @@ def setup(cfg):
     Returns:
         A ``(manager, task)`` tuple: the run manager and the device-placed task.
     """
-    manager = Manager(cfg, run_dir=HydraConfig.get().runtime.output_dir)
+    if HydraConfig.initialized():
+        manager = Manager(cfg, run_dir=HydraConfig.get().runtime.output_dir)
+    else:
+        manager = Manager(cfg, root=cfg.get("save_dir", "runs"))
     task = instantiate(cfg.task).to(cfg.device)
     return manager, task
+
+
+_RECIPES = Path(__file__).resolve().parent.parent / "recipes"
+
+
+def _check_hydra_cli():
+    """Fails early where the installed Hydra cannot run its command line."""
+    match = re.match(r"(\d+)\.(\d+)", hydra.__version__)
+    if (
+        sys.version_info >= (3, 14)
+        and match
+        and (int(match[1]), int(match[2])) < (1, 4)
+    ):
+        raise RuntimeError(
+            "hydra-core<1.4 cannot run its command line on Python 3.14 (argparse "
+            "rejects its help strings). Launch training with Python 3.13 or earlier."
+        )
+
+
+def make_main(run, config_name):
+    """Wraps a method's ``run(cfg)`` as a Hydra command-line entry point.
+
+    The recipes path is absolute: a relative one would resolve against
+    ``run``'s module as a ``pkg://`` path, and ``testbed/recipes`` is not a
+    package. The Python 3.14 check runs only when ``main`` is called, so the
+    method modules still import there.
+    """
+    hydra_main = hydra.main(
+        version_base="1.3", config_path=str(_RECIPES), config_name=config_name
+    )(run)
+
+    def main():
+        _check_hydra_cli()
+        hydra_main()
+
+    return main
