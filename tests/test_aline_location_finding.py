@@ -86,7 +86,7 @@ def test_model_masks_unavailable_candidates_and_scores_posterior():
         context_y,
         context_designs,
         candidates,
-        available,
+        available_mask=available,
     )
 
     policy = torch.distributions.Categorical(logits=output.acquisition_logits)
@@ -184,7 +184,10 @@ def test_shared_rollout_keeps_one_pool_and_masks_selected_candidates(random_poli
     designer = trainer.designer
     seen = []
     handle = model.register_forward_pre_hook(
-        lambda module, inputs: seen.append((inputs[2], inputs[3].clone()))
+        lambda module, inputs, kwargs: seen.append(
+            (inputs[2], kwargs["available_mask"].clone())
+        ),
+        with_kwargs=True,
     )
     theta = trainer.task.sample_prior(2).requires_grad_()
     rollout = designer.rollout(

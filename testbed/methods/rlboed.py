@@ -24,7 +24,6 @@ from testbed.core.setup import instantiate_design_net, make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import (
     CategoricalPolicyNet,
-    GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
     StochasticDesignNet,
@@ -407,29 +406,20 @@ def make_networks(
     if not isinstance(actor, StochasticDesignNet):
         raise TypeError("cfg.design_net must construct a StochasticDesignNet.")
 
+    # The critics normalize histories with the same design bounds as the actor.
     critic_type = RLBOEDQNetwork
     critic_kwargs = {
-        "dim_y": dim_y,
-        "dim_design": dim_design,
+        "event_shape_y": event_shape_y,
+        "event_shape_design": event_shape_design,
         "dim_h": cfg.design_net.dim_h,
+        "design_low": actor.design_low,
+        "design_high": actor.design_high,
         "outcome_low": cfg.reward.outcome_low,
         "outcome_high": cfg.reward.outcome_high,
     }
-    if isinstance(design_space, BoxDesignSpace):
-        design_low = design_space.low.to(device).clone()
-        design_high = design_space.high.to(device).clone()
-    elif isinstance(design_space, DefaultDesignSpace):
-        if not isinstance(actor, GaussianPolicyNet):
-            raise TypeError(
-                "Unconstrained RLBOED design spaces require a GaussianPolicyNet."
-            )
-        design_low, design_high = actor.design_low, actor.design_high
-    else:
-        values = design_space.values.reshape(design_space.n_designs, dim_design)
-        design_low, design_high = values.amin(dim=0), values.amax(dim=0)
+    if isinstance(actor, CategoricalPolicyNet):
         critic_type = RLBOEDDiscreteQNetwork
-        critic_kwargs["n_designs"] = design_space.n_designs
-    critic_kwargs.update(design_low=design_low, design_high=design_high)
+        critic_kwargs["n_designs"] = actor.n_designs
 
     def make_critic():
         # Each network owns fresh parameters, constructed from the same encoder settings.
@@ -487,6 +477,22 @@ class _EpisodeBatch:
     rewards: torch.Tensor
     dones: torch.Tensor
     episodic_return: torch.Tensor
+
+
+def _critic(
+    critic: RLBOEDQNetwork | RLBOEDDiscreteQNetwork,
+    obs: History,
+    *design: torch.Tensor,
+) -> torch.Tensor:
+    """Evaluates a critic on an env observation and optional candidate design."""
+    return critic(obs.outcomes, obs.designs, *design, mask=obs.mask)
+
+
+def _design_probabilities(
+    actor: CategoricalPolicyNet, obs: History
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Returns the actor's exact design probabilities for an env observation."""
+    return actor.design_probabilities(obs.outcomes, obs.designs, mask=obs.mask)
 
 
 def _propose_design(
@@ -594,11 +600,12 @@ def sac_update(
     is_categorical = isinstance(nets.actor, CategoricalPolicyNet)
     with torch.no_grad():
         if is_categorical:
-            next_probs, next_log_probs = (
-                nets.actor.design_probabilities_from_observation(data_next_obs)
+            next_probs, next_log_probs = _design_probabilities(
+                nets.actor, data_next_obs
             )
             min_qf_next_target = torch.min(
-                nets.qf1_target(data_next_obs), nets.qf2_target(data_next_obs)
+                _critic(nets.qf1_target, data_next_obs),
+                _critic(nets.qf2_target, data_next_obs),
             )
             next_value = (
                 next_probs * (min_qf_next_target - alpha * next_log_probs)
@@ -611,8 +618,8 @@ def sac_update(
                 reparameterize_policy=True,
             )
             next_log_pi = next_log_prob.unsqueeze(-1)
-            qf1_next_target = nets.qf1_target(data_next_obs, next_designs)
-            qf2_next_target = nets.qf2_target(data_next_obs, next_designs)
+            qf1_next_target = _critic(nets.qf1_target, data_next_obs, next_designs)
+            qf2_next_target = _critic(nets.qf2_target, data_next_obs, next_designs)
             next_value = (
                 torch.min(qf1_next_target, qf2_next_target) - alpha * next_log_pi
             ).view(-1)
@@ -622,11 +629,11 @@ def sac_update(
 
     if is_categorical:
         design_indices = nets.design_space.encode(data_designs).long().unsqueeze(-1)
-        qf1_a_values = nets.qf1(data_obs).gather(1, design_indices).squeeze(-1)
-        qf2_a_values = nets.qf2(data_obs).gather(1, design_indices).squeeze(-1)
+        qf1_a_values = _critic(nets.qf1, data_obs).gather(1, design_indices).squeeze(-1)
+        qf2_a_values = _critic(nets.qf2, data_obs).gather(1, design_indices).squeeze(-1)
     else:
-        qf1_a_values = nets.qf1(data_obs, data_designs).view(-1)
-        qf2_a_values = nets.qf2(data_obs, data_designs).view(-1)
+        qf1_a_values = _critic(nets.qf1, data_obs, data_designs).view(-1)
+        qf2_a_values = _critic(nets.qf2, data_obs, data_designs).view(-1)
     qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
     qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
     qf_loss = qf1_loss + qf2_loss
@@ -640,10 +647,10 @@ def sac_update(
 
     if optimization_step % cfg.sac.policy_frequency == 0:
         if is_categorical:
-            probs, log_probs = nets.actor.design_probabilities_from_observation(
-                data_obs
+            probs, log_probs = _design_probabilities(nets.actor, data_obs)
+            min_qf_pi = torch.min(
+                _critic(nets.qf1, data_obs), _critic(nets.qf2, data_obs)
             )
-            min_qf_pi = torch.min(nets.qf1(data_obs), nets.qf2(data_obs))
             actor_loss = (probs * (alpha * log_probs - min_qf_pi)).sum(dim=-1).mean()
         else:
             pi, policy_log_prob = _propose_design(
@@ -653,7 +660,9 @@ def sac_update(
                 reparameterize_policy=True,
             )
             log_pi = policy_log_prob.unsqueeze(-1)
-            min_qf_pi = torch.min(nets.qf1(data_obs, pi), nets.qf2(data_obs, pi))
+            min_qf_pi = torch.min(
+                _critic(nets.qf1, data_obs, pi), _critic(nets.qf2, data_obs, pi)
+            )
             actor_loss = (alpha * log_pi - min_qf_pi).mean()
 
         nets.actor_optimizer.zero_grad()
