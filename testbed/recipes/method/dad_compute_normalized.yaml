@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - dad
+  - _self_
+
+train_time_budget_seconds: 10_800  # three hours, starting at the training loop
+step_time_safety_factor: 1.1  # rolling maximum iteration duration * this factor
+n_train_iter: null  # no iteration cap; set an integer only for smoke tests
+eval_every: 0  # final evaluation runs separately, outside the training budget
