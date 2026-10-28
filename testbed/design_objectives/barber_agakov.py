@@ -84,16 +84,11 @@ class MyopicBarberAgakov(DesignObjective):
         self.posterior_net = posterior_net
         self.n_outer = int(n_outer)
 
-    def __call__(
-        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
-    ):
-        """Estimates gain for one design."""
-        return self.estimate_gain(
-            design, y_history=y_history, design_history=design_history
-        )
-
     def estimate_gain(
-        self, design: Tensor, y_history: Tensor = None, design_history: Tensor = None
+        self,
+        design: Tensor,
+        y_history: Tensor | None = None,
+        design_history: Tensor | None = None,
     ) -> Tensor:
         """Estimates gain for one fixed design.
 
@@ -159,10 +154,6 @@ class BarberAgakov(RolloutObjective):
                 f"{type(task).__name__}.prior.log_prob is not evaluable; BarberAgakov "
                 "requires a prior with a working log_prob."
             ) from e
-
-    def __call__(self, rollout: Rollout):
-        """Estimates gain for a simulated rollout."""
-        return self.estimate_gain(rollout)
 
     def per_sample_gain(self, rollout: Rollout) -> Tensor:
         """Estimates per-sample gains from a batched rollout.

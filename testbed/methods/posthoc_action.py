@@ -3,13 +3,12 @@
 import json
 from pathlib import Path
 
-import hydra
 import torch
 from hydra.utils import instantiate
 
 from testbed.core import ActionHook
 from testbed.core.load import designer_from_run, run_config
-from testbed.core.setup import instantiate_action_net, setup
+from testbed.core.setup import instantiate_action_net, make_main, setup
 from testbed.core.util import seed_all
 from testbed.designers import Designer
 from testbed.eval.eval_loss import evaluate_loss_checkpoint
@@ -332,10 +331,7 @@ def build_trainer(cfg, task, manager=None):
 # ============================================================================
 
 
-@hydra.main(
-    version_base="1.3", config_path="../recipes", config_name="method/posthoc_action"
-)
-def main(cfg):
+def run(cfg):
     """Entry point for training an action net on top of a frozen designer.
 
     Designs are drawn at random unless ``designer_run_dir`` points at a
@@ -361,6 +357,8 @@ def main(cfg):
         )
     build_trainer(cfg, task, manager).train()
 
+
+main = make_main(run, "method/posthoc_action")
 
 if __name__ == "__main__":
     main()

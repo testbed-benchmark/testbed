@@ -114,62 +114,37 @@ class HistoryEncoder(nn.Module, ABC):
         Returns:
             Tensor: Encodings shaped ``[*batch_shape, dim_emb]``.
         """
-        prepared = self._prepare_history(
+        history = prepare_history(
             y_history,
             design_history,
             event_shape_y=self.event_shape_y,
             event_shape_design=self.event_shape_design,
             mask=mask,
+            device=self.null_enc.device,
+            dtype=self.null_enc.dtype,
         )
-        return self._encode_prepared(prepared)
+        return self.encode(history)
 
-    def encode_flat(self, y_history, design_history, mask=None):
-        """Encodes histories already flattened to ``[batch, T, dim_event]``.
+    def encode(self, history: PreparedHistory):
+        """Encodes a history already validated by :func:`prepare_history`.
 
-        Policy actors use this method after shared policy preparation. External
-        callers should use :meth:`forward`, which accepts arbitrary event and
-        batch shapes.
+        Nets that rescale histories before encoding them call this instead of
+        :meth:`forward`, so the history is only validated once.
 
         Args:
-            y_history: Outcomes with shape ``[batch, T, dim_y]``.
-            design_history: Designs with shape ``[batch, T, dim_design]``.
-            mask: Optional validity mask with shape ``[batch, T]``.
+            history: Flattened history whose event widths match this encoder.
 
         Returns:
-            Tensor: Encodings with shape ``[batch, dim_emb]``.
+            Tensor: Encodings shaped ``[*history.batch_shape, dim_emb]``.
         """
-        prepared = self._prepare_history(
-            y_history,
-            design_history,
-            event_shape_y=(self.dim_y,),
-            event_shape_design=(self.dim_design,),
-            mask=mask,
-        )
-        return self._encode_prepared(prepared)
-
-    def _prepare_history(
-        self,
-        y_history,
-        design_history,
-        *,
-        event_shape_y,
-        event_shape_design,
-        mask,
-    ) -> PreparedHistory:
-        """Validates and flattens a history in this encoder's dtype and device."""
-        reference = self.null_enc
-        return prepare_history(
-            y_history,
-            design_history,
-            event_shape_y=event_shape_y,
-            event_shape_design=event_shape_design,
-            mask=mask,
-            device=reference.device,
-            dtype=reference.dtype,
-        )
-
-    def _encode_prepared(self, history: PreparedHistory):
-        """Encode validated, flattened histories and restore ``batch_shape``."""
+        if (history.y_flat.shape[-1], history.design_flat.shape[-1]) != (
+            self.dim_y,
+            self.dim_design,
+        ):
+            raise ValueError(
+                "history event widths must match the encoder's "
+                f"(dim_y, dim_design) = {(self.dim_y, self.dim_design)}."
+            )
         tokens = self.make_tokens(history.y_flat, history.design_flat)
         if tokens.shape != (*history.y_flat.shape[:2], self.dim_token):
             raise ValueError(

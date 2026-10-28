@@ -34,6 +34,14 @@ cd testbed
 pip install -e ".[full,dev,docs]"
 ```
 
+The core library (tasks, designers, design nets and objectives) needs only PyTorch. The training methods (`testbed.methods`), their Hydra entry points (`python testbed/methods/<method>.py`) and the checkpoint evaluators in `testbed.eval` additionally need [Hydra](https://hydra.cc/), which is opt-in through the `train` extra (also included in `full`):
+
+```
+pip install -e ".[train]"
+```
+
+Stable Hydra (1.3) cannot run its command line on Python 3.14, so use Python 3.13 or earlier to launch training runs.
+
 To do a basic check of your installation, run `pytest`.
 
 Check out the [Location Finding](https://torch-testbed.readthedocs.io/en/latest/examples/location_finding.html) example for a quick overview of the package.

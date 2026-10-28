@@ -16,11 +16,9 @@ from testbed.core.manager import Manager
 from testbed.design_nets import (
     AttentiveEncoder,
     CategoricalHead,
-    CategoricalPolicyActor,
     CategoricalPolicyNet,
     DeepSetEncoder,
     GaussianHead,
-    GaussianPolicyActor,
     GaussianPolicyNet,
     RLBOEDDiscreteQNetwork,
     RLBOEDQNetwork,
@@ -48,6 +46,11 @@ from testbed.tasks import LocationFinding, PreyPopulation
 SoftQNetwork = RLBOEDQNetwork
 
 
+def _history(observation):
+    """Unpacks an env History into the (y_history, design_history) convention."""
+    return observation.outcomes, observation.designs
+
+
 # =====================================================================
 
 # Network architecture
@@ -55,17 +58,16 @@ SoftQNetwork = RLBOEDQNetwork
 
 
 def test_actor_initializes_requested_standard_deviation():
-    actor = GaussianPolicyActor(
-        DeepSetEncoder((1,), (2,)), GaussianHead(64, 2, init_std=0.4)
-    )
+    encoder = DeepSetEncoder((1,), (2,))
+    head = GaussianHead(64, 2, init_std=0.4)
     y_history = torch.randn(3, 4, 1)
     design_history = torch.randn(3, 4, 2)
 
-    _, log_std = actor(y_history, design_history)
+    _, log_std = head(encoder(y_history, design_history))
 
     torch.testing.assert_close(log_std.exp(), torch.full_like(log_std, 0.4))
-    assert torch.count_nonzero(actor.head.log_std_head.weight) == 0
-    assert actor.head.log_std_head.weight.requires_grad
+    assert torch.count_nonzero(head.log_std_head.weight) == 0
+    assert head.log_std_head.weight.requires_grad
 
 
 @pytest.mark.parametrize("init_std", [0.0, -0.1, 1.0, 1e-10])
@@ -77,8 +79,8 @@ def test_actor_rejects_initial_std_outside_log_std_bounds(init_std):
 def test_soft_q_network_is_permutation_invariant():
     """Permuting valid history entries does not change the Q estimate."""
     critic = SoftQNetwork(
-        dim_y=1,
-        dim_design=2,
+        event_shape_y=(1,),
+        event_shape_design=(2,),
         design_low=-4.0,
         design_high=4.0,
         outcome_low=-3.0,
@@ -105,8 +107,10 @@ def test_soft_q_network_is_permutation_invariant():
         mask=mask[:, permutation],
     )
 
-    actual = critic(observation, design)
-    permuted = critic(permuted_observation, design)
+    actual = critic(*_history(observation), design, mask=observation.mask)
+    permuted = critic(
+        *_history(permuted_observation), design, mask=permuted_observation.mask
+    )
 
     torch.testing.assert_close(actual, permuted)
 
@@ -114,8 +118,8 @@ def test_soft_q_network_is_permutation_invariant():
 def test_soft_q_network_ignores_masked_history_entries():
     """Changing padded history entries does not change the Q estimate."""
     critic = SoftQNetwork(
-        dim_y=1,
-        dim_design=2,
+        event_shape_y=(1,),
+        event_shape_design=(2,),
         design_low=-4.0,
         design_high=4.0,
         outcome_low=-3.0,
@@ -136,8 +140,10 @@ def test_soft_q_network_ignores_masked_history_entries():
     )
     design = torch.randn(2, 2)
 
-    actual = critic(observation, design)
-    modified = critic(modified_observation, design)
+    actual = critic(*_history(observation), design, mask=observation.mask)
+    modified = critic(
+        *_history(modified_observation), design, mask=modified_observation.mask
+    )
 
     assert actual.shape == (2, 1)
     torch.testing.assert_close(actual, modified)
@@ -145,8 +151,8 @@ def test_soft_q_network_ignores_masked_history_entries():
 
 def test_soft_q_network_uses_reference_history_and_design_coordinates():
     critic = SoftQNetwork(
-        dim_y=1,
-        dim_design=2,
+        event_shape_y=(1,),
+        event_shape_design=(2,),
         design_low=torch.tensor([-2.0, 2.0]),
         design_high=torch.tensor([4.0, 6.0]),
         outcome_low=-3.0,
@@ -170,7 +176,7 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
         mask=torch.tensor([[True]]),
     )
 
-    critic(observation, physical_design)
+    critic(*_history(observation), physical_design, mask=observation.mask)
 
     torch.testing.assert_close(
         inputs["encoder"][..., -2:],
@@ -184,10 +190,11 @@ def test_soft_q_network_uses_reference_history_and_design_coordinates():
 
 def test_gaussian_policy_maps_physical_history_to_raw_proposal():
     design_space = BoxDesignSpace(-4.0, 4.0, event_shape=(2,))
-    actor = GaussianPolicyActor(DeepSetEncoder((1,), (2,)), GaussianHead(64, 2))
+    encoder, head = DeepSetEncoder((1,), (2,)), GaussianHead(64, 2)
     policy = GaussianPolicyNet(
         design_space,
-        actor=actor,
+        encoder,
+        head,
         normalize_design_history=True,
         design_history_bounds=(0.0, 1.0),
         outcome_bounds=(-3.0, 10.0),
@@ -195,10 +202,7 @@ def test_gaussian_policy_maps_physical_history_to_raw_proposal():
     raw_y = torch.tensor([[[3.5]]])
     raw_designs = torch.tensor([[[-4.0, 4.0]]])
 
-    mean, _ = actor(
-        torch.tensor([[[0.5]]]),
-        torch.tensor([[[0.0, 1.0]]]),
-    )
+    mean, _ = head(encoder(torch.tensor([[[0.5]]]), torch.tensor([[[0.0, 1.0]]])))
     expected = mean
     actual = policy(raw_y, raw_designs)
 
@@ -208,15 +212,16 @@ def test_gaussian_policy_maps_physical_history_to_raw_proposal():
 
 def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
     design_space = FiniteDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
-    actor = CategoricalPolicyActor(DeepSetEncoder((1,), (1,)), CategoricalHead(64, 3))
+    head = CategoricalHead(64, 3)
     policy = CategoricalPolicyNet(
         design_space,
-        actor=actor,
+        DeepSetEncoder((1,), (1,)),
+        head,
         normalize_design_history=True,
         outcome_bounds=(0.0, 10.0),
     )
     with torch.no_grad():
-        actor.head.logits_head.bias.copy_(torch.tensor([0.0, -1.0, 2.0]))
+        head.logits_head.bias.copy_(torch.tensor([0.0, -1.0, 2.0]))
     outcomes = torch.zeros(4, 0, 1)
     designs = torch.zeros(4, 0, 1)
 
@@ -228,7 +233,7 @@ def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
     torch.testing.assert_close(
         proposal.deterministic_raw_design, torch.full((4, 1), 10.0)
     )
-    selected_log_probs = torch.log_softmax(actor.head.logits_head.bias, dim=0)[
+    selected_log_probs = torch.log_softmax(head.logits_head.bias, dim=0)[
         proposal.info["design_index"]
     ]
     torch.testing.assert_close(proposal.log_prob, selected_log_probs)
@@ -236,8 +241,8 @@ def test_categorical_policy_returns_declared_designs_and_greedy_argmax():
 
 def test_discrete_q_network_is_masked_and_permutation_invariant():
     critic = RLBOEDDiscreteQNetwork(
-        dim_y=1,
-        dim_design=1,
+        event_shape_y=(1,),
+        event_shape_design=(1,),
         n_designs=3,
         design_low=1.0,
         design_high=10.0,
@@ -255,10 +260,10 @@ def test_discrete_q_network_is_masked_and_permutation_invariant():
         mask=mask[:, [1, 0, 2]],
     )
 
-    values = critic(observation)
+    values = critic(*_history(observation), mask=observation.mask)
 
     assert values.shape == (2, 3)
-    torch.testing.assert_close(values, critic(permuted))
+    torch.testing.assert_close(values, critic(*_history(permuted), mask=permuted.mask))
 
 
 # =====================================================================
@@ -592,7 +597,7 @@ def test_categorical_temperature_increases_when_entropy_is_below_target():
     with torch.no_grad():
         for parameter in nets.actor.parameters():
             parameter.zero_()
-        nets.actor.actor.head.logits_head.bias[0] = 10.0
+        nets.actor.head.logits_head.bias[0] = 10.0
     trainer = Trainer(
         task,
         PolicyDesigner(task, cfg.T, nets.actor),
@@ -1181,7 +1186,7 @@ def test_main_starts_timer_before_setup(monkeypatch, tmp_path):
 
     monkeypatch.setattr(module, "setup", setup)
     monkeypatch.setattr(module, "Trainer", RecordingTrainer)
-    module.main.__wrapped__(cfg)
+    module.run(cfg)
     manager.metric_logger.close()
 
 
@@ -1280,11 +1285,9 @@ def test_independent_architectures_train_and_reload(
     else:
         trainer = _build_trainer(cfg)
     nets = trainer.nets
-    actor_type = (
-        CategoricalPolicyActor if design_kind == "finite" else GaussianPolicyActor
-    )
-    assert type(nets.actor.actor) is actor_type
-    actor_encoder = nets.actor.actor.encoder
+    actor_type = CategoricalPolicyNet if design_kind == "finite" else GaussianPolicyNet
+    assert type(nets.actor) is actor_type
+    actor_encoder = nets.actor.encoder
     critic_encoders = [
         nets.qf1.encoder,
         nets.qf2.encoder,
@@ -1378,8 +1381,8 @@ def test_critics_accept_independent_encoder_and_head(encoder_type, discrete):
     head = nn.Linear(8 if discrete else 10, 3 if discrete else 1)
     original_weights = head.weight.detach().clone()
     kwargs = {
-        "dim_y": 1,
-        "dim_design": 2,
+        "event_shape_y": (1,),
+        "event_shape_design": (2,),
         "design_low": -1.0,
         "design_high": 1.0,
         "outcome_low": 0.0,
@@ -1397,7 +1400,11 @@ def test_critics_accept_independent_encoder_and_head(encoder_type, discrete):
     torch.testing.assert_close(head.weight, original_weights)
     observation = History.empty((2,), 3, (2,), (1,))
     observation.write(0, torch.zeros(2, 2), torch.ones(2, 1))
-    output = critic(observation) if discrete else critic(observation, torch.zeros(2, 2))
+    output = (
+        critic(*_history(observation), mask=observation.mask)
+        if discrete
+        else critic(*_history(observation), torch.zeros(2, 2), mask=observation.mask)
+    )
     assert output.shape == (2, 3 if discrete else 1)
     output.square().sum().backward()
     assert torch.isfinite(head.weight.grad).all()

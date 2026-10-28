@@ -57,19 +57,15 @@ def make_deepset_policy():
     )
 
 
-def make_gaussian_policy(actor=None):
+def make_gaussian_policy():
     space = BoxDesignSpace(-1.0, 1.0, event_shape=EVENT_SHAPE)
-    if actor is not None:
-        return GaussianPolicyNet(space, actor=actor)
     encoder = DeepSetEncoder(EVENT_SHAPE, EVENT_SHAPE, dim_emb=7, dim_h=8)
     return GaussianPolicyNet(space, encoder=encoder, head=GaussianHead(7, 4, dim_h=8))
 
 
-def make_categorical_policy(actor=None):
+def make_categorical_policy():
     values = torch.arange(20, dtype=torch.float32).reshape(5, *EVENT_SHAPE)
     space = FiniteDesignSpace(values)
-    if actor is not None:
-        return CategoricalPolicyNet(space, actor=actor)
     encoder = DeepSetEncoder(EVENT_SHAPE, EVENT_SHAPE, dim_emb=7, dim_h=8)
     return CategoricalPolicyNet(
         space, encoder=encoder, head=CategoricalHead(7, 5, dim_h=8)

@@ -8,12 +8,11 @@ targeting the EIG in all parameters.
 import time
 from math import isfinite
 
-import hydra
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from testbed.core.setup import instantiate_design_net, setup
+from testbed.core.setup import instantiate_design_net, make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import AlineModel
 from testbed.design_objectives import SPCE
@@ -431,8 +430,7 @@ def validate_config(task, cfg) -> None:
         raise ValueError("grad_clip must be positive when provided.")
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/aline")
-def main(cfg) -> None:
+def run(cfg) -> None:
     """Runs ALINE training from a Hydra recipe."""
     start_time = time.monotonic()
     seed_all(cfg.seed)
@@ -441,6 +439,8 @@ def main(cfg) -> None:
     trainer = Trainer(task, model, cfg, manager=manager, start_time=start_time)
     trainer.train()
 
+
+main = make_main(run, "method/aline")
 
 if __name__ == "__main__":
     main()
