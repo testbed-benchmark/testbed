@@ -1,13 +1,18 @@
 """Amortized variational posteriors q(theta | y_history, design_history)."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from math import atanh, log, prod
 
 import torch
 from torch import Tensor, nn
 from torch.distributions import Categorical, Independent, MixtureSameFamily, Normal
 
-from testbed.core.distributions import Distribution, TorchDistribution
+from testbed.core.distributions import (
+    Distribution,
+    TorchDistribution,
+    as_sample_shape,
+)
 from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
 from testbed.design_nets.modules import MLP, BlockTransform
@@ -90,7 +95,11 @@ class VariationalPosteriorNet(nn.Module, ABC):
         ...
 
     def sample(
-        self, y_history, design_history, n_samples: int = 1, mask=None
+        self,
+        y_history,
+        design_history,
+        sample_shape: int | Iterable[int] = (),
+        mask=None,
     ) -> Tensor:
         """Draws samples from the variational posterior.
 
@@ -101,12 +110,13 @@ class VariationalPosteriorNet(nn.Module, ABC):
                 ``[*batch_shape, T, *event_shape_y]``.
             design_history: Designs so far, shape
                 ``[*batch_shape, T, *event_shape_design]``.
-            n_samples: How many samples to draw per batch element.
+            sample_shape: Shape of the draws per batch element. An int ``n``
+                means ``(n,)`` (default: ()).
             mask: Optional boolean mask for padded histories, shape
                 ``[*batch_shape, T]``.
 
         Returns:
-            Tensor: Shape ``[n_samples, *batch_shape, *event_shape_theta]``.
+            Tensor: Shape ``[*sample_shape, *batch_shape, *event_shape_theta]``.
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement sampling.")
 
@@ -254,13 +264,18 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
         return mixture.log_prob(theta_flat)
 
     def sample(
-        self, y_history, design_history, n_samples: int = 1, mask=None
+        self,
+        y_history,
+        design_history,
+        sample_shape: int | Iterable[int] = (),
+        mask=None,
     ) -> Tensor:
-        """Draws samples; shape ``[n_samples, *batch_shape, *event_shape_theta]``."""
+        """Draws samples; shape ``[*sample_shape, *batch_shape, *event_shape_theta]``."""
+        sample_shape = as_sample_shape(sample_shape)
         mixture = self._mixture(y_history, design_history, mask=mask)
-        samples = mixture.sample((n_samples,))  # [n_samples, *batch, dim_theta]
+        samples = mixture.sample(sample_shape)  # [*sample_shape, *batch, dim_theta]
         samples = samples.reshape(
-            n_samples, *mixture.batch_shape, *self.event_shape_theta
+            *sample_shape, *mixture.batch_shape, *self.event_shape_theta
         )
         return self._maybe_canonicalize(samples)
 
@@ -406,17 +421,24 @@ class ConstrainedGaussianMixtureVariationalPosteriorNet(
         return log_q_raw - self.transform.log_abs_det_jacobian(raw, self.transform(raw))
 
     def sample(
-        self, y_history, design_history, n_samples: int = 1, mask=None
+        self,
+        y_history,
+        design_history,
+        sample_shape: int | Iterable[int] = (),
+        mask=None,
     ) -> Tensor:
-        """Draws theta samples; shape ``[n_samples, *batch_shape, *event_shape_theta]``.
+        """Draws theta samples; shape ``[*sample_shape, *batch_shape, *event_shape_theta]``.
 
         Every draw satisfies theta's constraints by construction, since it is the
         image of an unconstrained draw under ``transform``.
         """
+        sample_shape = as_sample_shape(sample_shape)
         mixture = self._mixture(y_history, design_history, mask=mask)
-        raw = mixture.sample((n_samples,))  # [n_samples, *batch_shape, dim_raw]
+        raw = mixture.sample(sample_shape)  # [*sample_shape, *batch_shape, dim_raw]
         theta = self.transform(raw)
-        return theta.reshape(n_samples, *mixture.batch_shape, *self.event_shape_theta)
+        return theta.reshape(
+            *sample_shape, *mixture.batch_shape, *self.event_shape_theta
+        )
 
 
 class AttentiveVariationalPosteriorNet(GaussianMixtureVariationalPosteriorNet):
