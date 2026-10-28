@@ -8,12 +8,11 @@ import time
 from functools import partial
 from math import inf
 
-import hydra
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from testbed.core.setup import setup
+from testbed.core.setup import make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_objectives import BarberAgakov, BarberAgakovReinforce, posterior_nll
 from testbed.designers import PolicyDesigner, RandomDesigner
@@ -576,8 +575,7 @@ def load_checkpoint(
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/var_post")
-def main(cfg):
+def run(cfg):
     """Entry point for BarberAgakov training.
 
     Args:
@@ -592,6 +590,8 @@ def main(cfg):
     trainer.elapsed_seconds = time.monotonic() - start_time
     trainer.train()
 
+
+main = make_main(run, "method/var_post")
 
 if __name__ == "__main__":
     main()

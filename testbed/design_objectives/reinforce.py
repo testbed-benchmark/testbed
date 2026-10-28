@@ -119,10 +119,6 @@ class Reinforce(RolloutObjective, ABC):
         self.stochastic_design_policy = stochastic_design_policy
         self.baseline = baseline
 
-    def __call__(self, rollout: Rollout):
-        """Estimates gain for a simulated rollout."""
-        return self.estimate_gain(rollout)
-
     @abstractmethod
     def calculate_value(self, rollout: Rollout) -> Tensor:
         """Computes the [b] per-sample value the REINFORCE surrogate is built from."""

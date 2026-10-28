@@ -3,12 +3,11 @@
 import time
 from math import inf
 
-import hydra
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from testbed.core.setup import setup
+from testbed.core.setup import make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_objectives import SNMC, SPCE, SPCEReinforce
 from testbed.designers import PolicyDesigner
@@ -319,8 +318,7 @@ def load_checkpoint(
 # ============================================================================
 
 
-@hydra.main(version_base="1.3", config_path="../recipes", config_name="method/dad")
-def main(cfg):
+def run(cfg):
     """Entry point for DAD training.
 
     Args:
@@ -335,6 +333,8 @@ def main(cfg):
     trainer.elapsed_seconds = time.monotonic() - start_time
     trainer.train()
 
+
+main = make_main(run, "method/dad")
 
 if __name__ == "__main__":
     main()
