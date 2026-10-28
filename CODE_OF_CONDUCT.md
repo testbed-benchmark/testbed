@@ -1,4 +1,4 @@
-# Contributor Covenant Code of Conduct
+# TestBED Code of Conduct
 
 ## Our Pledge
 
