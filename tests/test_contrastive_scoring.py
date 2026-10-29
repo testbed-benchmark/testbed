@@ -79,6 +79,7 @@ def test_fused_scoring_matches_the_per_step_loop(name):
     torch.manual_seed(1)
     rollout = _rollout(task, b, T)
 
+    task.max_folded_steps = 0  # a batch this small would otherwise skip the loop
     torch.manual_seed(0)
     _, looped = contrastive_logsumexps(task, rollout, L, chunk_size=L)
     torch.manual_seed(0)
@@ -116,6 +117,7 @@ def test_fused_scoring_matches_the_loop_on_gradients(name, float64):
         # TD's outcomes are discrete, so y carries no gradient there.
         return design.grad, y.grad
 
+    task.max_folded_steps = 0  # a batch this small would otherwise skip the loop
     looped, fused = grads(False), grads(True)
     for a, c in zip(looped, fused):
         assert (a is None) == (c is None)

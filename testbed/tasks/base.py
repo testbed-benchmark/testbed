@@ -82,6 +82,11 @@ class Task(ABC, nn.Module):
         - ``event_shape_y = [1]``
     """
 
+    # history_logp scores a memoryless task's steps in one call, rather than
+    # looping over T, when there are at most this many (batch size times T).
+    # Much faster for small batch sizes; at the cost of additional memory.
+    max_folded_steps = 2**17  # ~approx 131k
+
     @property
     @abstractmethod
     def reparameterizable_outcomes(self) -> bool:
@@ -540,10 +545,14 @@ class Task(ABC, nn.Module):
                 The designs alongside them, shape
                 ``[*batch_shape_context, S, *event_shape_design]`` (default: None).
             fused (bool):
-                Score the steps with compiled kernels instead of the eager loop.
+                Score the steps with compiled kernels instead of eagerly.
                 A memoryless task folds T into the batch via
                 :meth:`_memoryless_history_logp`, ignoring the context.
-                A history-dependent task compiles the T loop itself via :meth:`_sequential_history_logp` (default: False).
+                A history-dependent task compiles the T loop itself via
+                :meth:`_sequential_history_logp`. Eagerly, a memoryless task
+                also folds T into the batch when there are at most
+                :attr:`max_folded_steps` steps in total, and otherwise loops
+                over T (default: False).
 
         Returns:
             Tensor:
@@ -552,9 +561,15 @@ class Task(ABC, nn.Module):
         y_history, design_history = self._check_history(y_history, design_history)
 
         if not fused:
-            # both memoryless and non-memoryless tasks loop over T when not fused
-            # speedups for using _memoryless_history_logp are small but cost
-            # T times as much memory
+            # One call batched over timesteps beats looping over T
+            # unless b*T is large (due to materialisation costs).
+            # max_folded_steps is a heuristic threshold determining switching.
+            if (
+                self.memoryless
+                and self._n_steps(y_history, design_history, theta)
+                <= self.max_folded_steps
+            ):
+                return self._memoryless_history_logp(y_history, design_history, theta)
             return self._sequential_history_logp(
                 y_history, design_history, theta, y_context, design_context
             )
@@ -566,17 +581,8 @@ class Task(ABC, nn.Module):
             y_history, design_history, theta, y_context, design_context
         )
 
-    def _memoryless_history_logp(self, y_history, design_history, theta):
-        r"""Computes logprob for a rollout with T folded into the batch.
-
-        For efficient calculation on memoryless tasks: one ``_outcome_logp``
-        call over ``[*batch_shape * T, ...]`` replaces the per-step loop.
-
-        Reached through ``history_logp(..., fused=True)``, which compiles it.
-        Only worth calling compiled. Without compilation, materializes all
-        ``[b_flat * T, ...]`` entries at once, yielding negligible speedups
-        for large memory costs.
-        """
+    def _n_steps(self, y_history, design_history, theta):
+        """Counts the steps to score: the broadcast batch size times T."""
         T = y_history.shape[-(len(self.event_shape_y) + 1)]
         batch_shape = torch.broadcast_shapes(
             y_history.shape[: y_history.ndim - 1 - len(self.event_shape_y)],
@@ -585,22 +591,36 @@ class Task(ABC, nn.Module):
             ],
             theta.shape[: theta.ndim - len(self.event_shape_theta)],
         )
-        step_shape = (*batch_shape, T)
+        return batch_shape.numel() * T
 
-        def flat(x, event_shape):
-            """Broadcasts x, which already carries a T axis, over the steps."""
-            return x.expand(*step_shape, *event_shape).reshape(-1, *event_shape)
+    def _memoryless_history_logp(self, y_history, design_history, theta):
+        r"""Computes logprob for a rollout with T folded into the batch.
 
-        # theta is shared across steps; give a T axis to broadcast along
-        theta = theta.unsqueeze(theta.ndim - len(self.event_shape_theta))
+        For efficient calculation on memoryless tasks: one ``_outcome_logp``
+        call over ``[b_flat * T, ...]`` replaces the per-step loop.
+
+        Reached through ``history_logp``: compiled when ``fused``, and eagerly
+        for at most :attr:`max_folded_steps` steps, since it materializes all
+        ``[b_flat * T, ...]`` entries at once.
+        """
+        T = y_history.shape[-(len(self.event_shape_y) + 1)]
+        (y_flat, design_flat, theta_flat), batch_shape = broadcast_and_flatten(
+            (y_history, (T, *self.event_shape_y)),
+            (design_history, (T, *self.event_shape_design)),
+            (theta, tuple(self.event_shape_theta)),
+        )
+
+        # theta is shared across the steps, which are folded into the batch
+        b_flat = theta_flat.shape[0]
+        theta_flat = theta_flat.unsqueeze(1).expand(b_flat, T, *self.event_shape_theta)
         logp = self._outcome_logp(
-            flat(y_history, self.event_shape_y),
-            flat(theta, self.event_shape_theta),
-            flat(design_history, self.event_shape_design),
+            y_flat.reshape(b_flat * T, *self.event_shape_y),
+            theta_flat.reshape(b_flat * T, *self.event_shape_theta),
+            design_flat.reshape(b_flat * T, *self.event_shape_design),
             y_history=None,
             design_history=None,
         )
-        return logp.reshape(step_shape).sum(-1)
+        return logp.reshape(b_flat, T).sum(-1).reshape(batch_shape)
 
     def _sequential_history_logp(
         self, y_history, design_history, theta, y_context, design_context
