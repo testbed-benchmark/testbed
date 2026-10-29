@@ -52,22 +52,4 @@ The documentation is hosted at [torch-testbed.readthedocs.io](https://torch-test
 
 # Contributing
 
-Please follow the following guidelines if you would like to contribute to TestBED:
-
-1. Fork the repository and install the package in editable mode with dev
-   dependencies:
-```sh
-pip install -e ".[full,dev,docs]"
-```
-Also install the pre-commit hooks once:
-```sh
-pre-commit install
-```
-2. Create a new branch for your feature or bug fix. Add your code, tests, and
-   docs.
-4. Run the tests and fix any issues before committing:
-```sh
-pytest
-```
-5. Submit a pull request with a clear description of your changes and why they
-   are needed.
+Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to TestBED.
