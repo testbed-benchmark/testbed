@@ -6,7 +6,7 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
-from ..inference.is_sampler import run_importance_sampling
+from ..inference.importance_sampler import run_importance_sampling
 from .rollout import RolloutState
 from .util import squeeze_history
 

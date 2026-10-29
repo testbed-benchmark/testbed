@@ -9,7 +9,7 @@ import torch
 
 from testbed.design_objectives import NMC, PCE
 from testbed.designers import SequentialDesigner
-from testbed.inference.is_sampler import run_importance_sampling
+from testbed.inference.importance_sampler import run_importance_sampling
 from testbed.tasks import LocationFinding, MichaelisMenten, TemporalDiscounting
 
 

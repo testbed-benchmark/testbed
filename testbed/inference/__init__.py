@@ -1,6 +1,6 @@
 """Posterior inference: any function mapping a task and a history to a Distribution."""
 
-from .is_sampler import run_importance_sampling
+from .importance_sampler import run_importance_sampling
 from .log_posterior import LogPosterior
 
 
