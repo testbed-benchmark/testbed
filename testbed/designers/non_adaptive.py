@@ -19,7 +19,7 @@ class StaticDesigner(Designer):
     Note that this is a static/batch design, and designs are not selected adaptively.
 
     By default, this method parametrises a raw design which is reparametrised using the Task's
-    DesignSpace. The raw design is initialized as a random standard Gaussian. Other strategies
+    design_transform. The raw design is initialized as a random standard Gaussian. Other strategies
     (e.g., different intialisations) should subclass this, or otherwise implement their own Designer.
     """
 
@@ -34,7 +34,7 @@ class StaticDesigner(Designer):
         """Initializes learnable static designs.
 
         transform_designs: see Designer.__init__. Default True: self.raw_design
-        is mapped through task.design_space.to_design before use.
+        is mapped through task.design_transform before use.
         """
         Designer.__init__(
             self,
@@ -136,8 +136,8 @@ class RandomDesigner(Designer):
             The number of experiments to design.
         dist (Distribution, optional):
             The distribution from which to draw random design (default: None).
-            If no distribution is passed, we will attempt to use the task's DesignSpace
-            to draw a random sample by default.
+            If no distribution is passed, designs are drawn from the task's
+            design_prior.
         hooks: (Sequence[RolloutHook]):
             Optional additional hooks during the rollout.
     """
@@ -153,7 +153,7 @@ class RandomDesigner(Designer):
         """Initializes with a design distribution."""
         super().__init__(task, T, hooks=hooks)
 
-        if isinstance(dist, TorchDist):
+        if isinstance(dist, TorchDist) and not isinstance(dist, Distribution):
             dist = TorchDistribution(dist)
         self.dist = dist
 
@@ -176,12 +176,10 @@ class RandomDesigner(Designer):
             tuple[Tensor, Tensor | None]: Random designs with shape
             ``[n, *event_shape_design]`` and their log probabilities with
             shape ``[n]``. The log probabilities are ``None`` when sampling
-            from the design space, which exposes no density.
+            from the task's design prior.
         """
         if self.dist is None:
-            design = self.task.design_space.sample(
-                batch_shape=(n,), device=self.task.device
-            )
+            design = self.task.design_prior.sample((n,)).to(self.task.device)
             return design, None
         design = self.dist.sample(n)
         return design, self.dist.log_prob(design)
@@ -202,7 +200,7 @@ class RandomDesigner(Designer):
             tuple[Tensor, Tensor | None]: Random designs with shape
             ``[b, *event_shape_design]`` and their log probabilities with
             shape ``[b]``. The log probabilities are ``None`` when sampling
-            from the design space.
+            from the task's design prior.
         """
         return self._sample_designs(y_history.shape[0])
 
@@ -210,11 +208,11 @@ class RandomDesigner(Designer):
         """Returns the raw counterpart of ``design``, or None if there is none.
 
         Designs are drawn physically here, so the raw values a policy would have
-        proposed are recovered by inverting the design space. Anything
+        proposed are recovered by inverting the design transform. Anything
         conditioning on raw history (a policy net, an ``ActionHook``) then sees
         the same coordinates during random warmup as during the policy phase.
-        Spaces with no inverse (e.g. ``FiniteDesignSpace``) report None, and
-        callers fall back to physical designs as before.
+        Transforms with no inverse report None, and callers fall back to
+        physical designs as before.
         """
         try:
             return self._to_raw(design)

@@ -1,17 +1,15 @@
 """Location-finding task."""
 
-from collections.abc import Iterable
-
 import torch
 from torch import Tensor
+from torch.distributions import MultivariateNormal
 
-from ..core.design_spaces import DesignSpace
-from ..core.distributions import Distribution
+from ..core.distributions import Distribution, TorchDistribution
 from ..core.util import normal_log_prob
 from .base import Task
 
 
-class LocationFindingPrior(Distribution):
+class LocationFindingPrior(TorchDistribution):
     r"""Gaussian prior for source locations.
 
     This assumes that the source locations are i.i.d. a priori.
@@ -38,63 +36,13 @@ class LocationFindingPrior(Distribution):
         theta_loc=None,
         theta_covmat=None,
     ) -> None:
-        """Initializes source-location prior parameters."""
-        super().__init__(event_shape=(n_sources, dim_theta))
-
+        """Builds independent ``MultivariateNormal`` sources."""
         if theta_loc is None:
-            theta_loc = torch.zeros((n_sources, dim_theta))
+            theta_loc = torch.zeros(dim_theta)
         if theta_covmat is None:
             theta_covmat = torch.eye(dim_theta)
-
-        chol = torch.linalg.cholesky(theta_covmat)
-        logdet = 2 * torch.log(torch.diagonal(chol)).sum()
-
-        # All persistent tensors registered as buffers
-        self.register_buffer("loc", theta_loc)
-        self.register_buffer("cov", theta_covmat)
-        self.register_buffer("chol", chol)
-        self.register_buffer("logdet", logdet)
-
-    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
-        """Draws samples of parameters from the prior.
-
-        Args:
-            sample_shape (int or iterable):
-                Shape of the batch of draws (default: ()).
-
-        Returns:
-            Tensor:
-                Samples, shape ``[*sample_shape, n_sources, dim_theta]``
-        """
-        eps = torch.randn(self._extended_shape(sample_shape), device=self.loc.device)
-        return self.loc + eps @ self.chol.T
-
-    def log_prob(self, theta: Tensor) -> Tensor:
-        """Evaluates prior log probabilities.
-
-        Args:
-            theta (Tensor):
-                Points at which to evaluate the log-probability. Shape ``[..., n_sources, dim_theta]``.
-
-        Returns:
-            Tensor:
-                Log probs, shape ``[...,]``
-        """
-        diff = theta - self.loc
-
-        # solve L x = diff  (more stable than inverse)
-        solve = torch.linalg.solve_triangular(
-            self.chol, diff.transpose(-1, -2), upper=False
-        ).transpose(-1, -2)
-
-        maha = (solve**2).sum(dim=-1)  # [..., n_sources]
-
-        logp_per_source = -0.5 * (
-            maha
-            + self.logdet
-            + self.event_shape[-1] * torch.log(torch.tensor(2 * torch.pi))
-        )
-        return logp_per_source.sum(dim=-1)  # [...] — independent sources
+        theta_loc = torch.as_tensor(theta_loc).expand(n_sources, dim_theta)
+        super().__init__(MultivariateNormal(theta_loc, theta_covmat))
 
 
 class LocationFinding(Task):
@@ -127,9 +75,9 @@ class LocationFinding(Task):
             Exponent in the rate of decay of signal strength (:math:`s`) (default: 2.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default LocationFindingPrior is used.
-        design_space (DesignSpace, optional):
-            Design space for source-location queries. If None, the task retains
-            its unbounded default design space.
+        design_prior (Distribution, optional):
+            Distribution of source-location queries; its support is the design
+            space. If None, queries are unbounded with a standard normal prior.
     """
 
     @property
@@ -148,7 +96,7 @@ class LocationFinding(Task):
         noise_scale: float = 0.5,
         exponent: float = 2.0,
         prior=None,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the location-finding task."""
@@ -161,7 +109,7 @@ class LocationFinding(Task):
             event_shape_theta=[n_sources, dim_theta],
             event_shape_design=[dim_theta],
             prior=prior,
-            design_space=design_space,
+            design_prior=design_prior,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 

@@ -15,8 +15,7 @@ from torch.distributions.transforms import (
     StickBreakingTransform,
 )
 
-from testbed.core import RandomScaleGaussianDesignDistribution, Rollout
-from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core import Box, RandomScaleGaussianDesignDistribution, Rollout
 from testbed.core.distributions import as_sample_shape
 from testbed.core.hooks import RolloutHook
 from testbed.core.util import sort_by_first_coordinate
@@ -66,7 +65,7 @@ def _make_design_net(task):
 
 
 def _make_stochastic_net(task):
-    space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
+    space = Box(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
     return GaussianPolicyNet(space, event_shape_y=task.event_shape_y)
 
 
@@ -244,8 +243,8 @@ def test_mixture_with_one_component_matches_independent_normal():
     )
     rollout = _make_rollout(task, _make_design_net(task), b=4)
 
-    # .dist reaches the wrapped torch mixture, whose internals this test checks
-    dist = posterior.distribution(rollout.y_history, rollout.design_history).dist
+    # distribution() is the torch mixture itself, whose internals this test checks
+    dist = posterior.distribution(rollout.y_history, rollout.design_history)
     loc = dist.component_distribution.base_dist.loc[:, 0]
     scale = dist.component_distribution.base_dist.scale[:, 0]
     reference = Independent(Normal(loc, scale), 1)
@@ -262,7 +261,7 @@ def test_mixture_with_three_components_matches_manual_logsumexp():
     posterior = _make_posterior(task, n_components=3)
     rollout = _make_rollout(task, _make_design_net(task), b=4)
 
-    dist = posterior.distribution(rollout.y_history, rollout.design_history).dist
+    dist = posterior.distribution(rollout.y_history, rollout.design_history)
     theta_flat = rollout.theta.reshape(rollout.b, posterior.dim_theta)
 
     loc = dist.component_distribution.base_dist.loc  # [b, K, D]
@@ -282,8 +281,8 @@ def test_mixture_with_three_components_matches_manual_logsumexp():
 
 def _linear_regression_setup(x_val=0.7, noise_scale=0.5):
     task = LinearRegression(dim=1, noise_scale=noise_scale)
-    prior_loc = task.prior.loc
-    prior_cov = task.prior.cov
+    prior_loc = task.prior.dist.mean
+    prior_cov = task.prior.dist.covariance_matrix
     design_row = torch.tensor([1.0, x_val])  # [1, x]
 
     post_precision = (
@@ -1063,7 +1062,7 @@ def test_myopic_gain_reaches_both_the_design_and_the_posterior():
         dim_emb=16,
         trunk_dim_h=16,
     )
-    design = task.design_space.sample().requires_grad_(True)
+    design = task.design_prior.sample().requires_grad_(True)
 
     gain = MyopicBarberAgakov(task, posterior, n_outer=64).estimate_gain(design)
     assert gain.ndim == 0
@@ -1087,7 +1086,7 @@ def test_myopic_objective_rejects_a_batch_of_designs():
     )
     objective = MyopicBarberAgakov(task, posterior, n_outer=8)
     with pytest.raises(ValueError, match="single design"):
-        objective.estimate_gain(task.design_space.sample(batch_shape=(3,)))
+        objective.estimate_gain(task.design_prior.sample((3,)))
 
 
 def test_myopic_objective_drives_a_sequential_designer():

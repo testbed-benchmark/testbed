@@ -10,8 +10,7 @@ from collections.abc import Iterable
 import torch
 from torch import Tensor
 
-from ..core.design_spaces import BoxDesignSpace, DesignSpace
-from ..core.distributions import LogNormal
+from ..core.distributions import Box, Distribution, LogNormal
 from ..core.util import normal_log_prob
 from .base import Task
 
@@ -54,8 +53,9 @@ class DoubleLink(Task):
     Args:
         prior (Distribution, optional):
             Prior over parameters. If None, the default DoubleLinkPrior is used.
-        design_space (DesignSpace, optional):
-            Design space for the applied torques. If None, defaults to ``[-4, 4] x [-2, 2]``.
+        design_prior (Distribution, optional):
+            Distribution of the applied torques; its support is the design
+            space. If None, uniform on ``[-4, 4] x [-2, 2]``.
         dt (float):
             Step size in the Euler-Maruyama discretization (default: 0.05).
         noise_scale (float or sequence):
@@ -76,7 +76,7 @@ class DoubleLink(Task):
     def __init__(
         self,
         prior=None,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         reparameterize_outcomes: bool | None = None,
         dt: float = 0.05,
         noise_scale: float | Iterable[float] = 0.1,
@@ -86,17 +86,15 @@ class DoubleLink(Task):
         if prior is None:
             prior = DoubleLinkPrior()
 
-        if design_space is None:
-            design_space = BoxDesignSpace(
-                low=[-4.0, -2.0], high=[4.0, 2.0], event_shape=[2]
-            )
+        if design_prior is None:
+            design_prior = Box(low=[-4.0, -2.0], high=[4.0, 2.0], event_shape=[2])
 
         super().__init__(
             event_shape_y=[4],
             event_shape_theta=[4],
             event_shape_design=[2],
             prior=prior,
-            design_space=design_space,
+            design_prior=design_prior,
             reparameterize_outcomes=reparameterize_outcomes,
             memoryless=False,
         )

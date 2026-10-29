@@ -177,7 +177,7 @@ def test_default_null_history_broadcasts_against_any_batch(batch_shape):
     # size-0 batch especially -- fails to broadcast against a real batch.
     task = LocationFinding(n_sources=1, dim_theta=2)
     theta = task.sample_prior().expand(*batch_shape, *task.event_shape_theta)
-    design = task.design_space.sample(batch_shape)
+    design = task.design_prior.sample(batch_shape)
 
     y = task.sample_outcome(theta, design)
     logp = task.outcome_logp(y, theta, design)

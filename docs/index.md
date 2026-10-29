@@ -86,6 +86,7 @@ maxdepth: 1
 guides/configuration
 guides/custom_tasks
 guides/custom_methods
+guides/distributions
 guides/using_designers
 guides/using_tasks
 guides/wandb

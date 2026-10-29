@@ -4,18 +4,16 @@ References:
     1. https://openreview.net/forum?id=uyNJLdCvFG
 """
 
-from collections.abc import Iterable
-
 import torch
 from torch import Tensor
+from torch.distributions import Uniform
 
-from ..core.design_spaces import BoxDesignSpace, DesignSpace
-from ..core.distributions import Distribution
+from ..core.distributions import Box, Distribution, TorchDistribution
 from ..core.util import normal_log_prob
 from .base import Task
 
 
-class MichaelisMentenPrior(Distribution):
+class MichaelisMentenPrior(TorchDistribution):
     r"""Uniform prior over Michaelis-Menten parameters.
 
     The default prior is:
@@ -43,48 +41,11 @@ class MichaelisMentenPrior(Distribution):
         vhalf_lb: float = 20,
         vhalf_ub: float = 200,
     ):
-        """Initializes Michaelis-Menten prior bounds."""
-        super().__init__(event_shape=(2,))
-
-        # lower/upper bounds
-        self.register_buffer("lbs", torch.tensor([vmax_lb, vhalf_lb]))
-        self.register_buffer("ubs", torch.tensor([vmax_ub, vhalf_ub]))
-
-        # log normalizing constant
-        self.register_buffer("log_z", -torch.log(self.ubs - self.lbs).sum())
-
-    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
-        """Draws samples of parameters from the prior.
-
-        Args:
-            sample_shape (int or iterable):
-                Shape of the batch of draws (default: ()).
-
-        Returns:
-            Tensor:
-                Samples, shape ``[*sample_shape, 2]``.
-        """
-        noise = torch.rand(self._extended_shape(sample_shape), device=self.lbs.device)
-        samples = (self.ubs - self.lbs) * noise + self.lbs
-        return samples
-
-    def log_prob(self, theta: Tensor) -> Tensor:
-        """Evaluates prior log probabilities.
-
-        Args:
-            theta (Tensor):
-                Points at which to evaluate the log-probability. Shape ``[..., 2]``.
-
-        Returns:
-            Tensor:
-                Log probabilities, shape ``[...,]``.
-        """
-        in_support = ((theta >= self.lbs) & (theta <= self.ubs)).all(dim=-1)
-        logp = torch.where(
-            in_support, self.log_z, torch.tensor(-torch.inf, device=theta.device)
-        )
-
-        return logp
+        """Builds a ``Uniform`` on the box between the bounds."""
+        dtype = torch.get_default_dtype()
+        low = torch.tensor([vmax_lb, vhalf_lb], dtype=dtype)
+        high = torch.tensor([vmax_ub, vhalf_ub], dtype=dtype)
+        super().__init__(Uniform(low, high))
 
 
 class MichaelisMenten(Task):
@@ -109,9 +70,9 @@ class MichaelisMenten(Task):
             model, other values give the Hill model (default: 1.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default MichaelisMentenPrior is used.
-        design_space (DesignSpace, optional):
-            Controls the design parametrization. If None, a
-            :class:`~testbed.core.design_spaces.BoxDesignSpace` over
+        design_prior (Distribution, optional):
+            Distribution of random designs; its support is the design space.
+            If None, a :class:`~testbed.core.distributions.Box` over
             ``[0, 400]`` is used -- concentrations are non-negative, and the
             upper bound covers twice the largest :math:`V_{\mathrm{half}}` the
             default prior admits, where the response has saturated.
@@ -127,7 +88,7 @@ class MichaelisMenten(Task):
         noise_scale: float = 2.5,
         exponent: float = 1.0,
         prior=None,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the Michaelis-Menten task."""
@@ -135,15 +96,15 @@ class MichaelisMenten(Task):
         if prior is None:
             prior = MichaelisMentenPrior()
 
-        if design_space is None:
-            design_space = BoxDesignSpace(low=0.0, high=400.0, event_shape=[1])
+        if design_prior is None:
+            design_prior = Box(low=0.0, high=400.0, event_shape=[1])
 
         super().__init__(
             event_shape_y=[1],
             event_shape_theta=[2],
             event_shape_design=[1],
             prior=prior,
-            design_space=design_space,
+            design_prior=design_prior,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 

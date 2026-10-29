@@ -9,7 +9,7 @@ from torch.distributions import Bernoulli
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.designers import PolicyDesigner
 from testbed.tasks import TemporalDiscounting
-from testbed.tasks.temporal_discounting import TDDesignSpace, TDPrior
+from testbed.tasks.temporal_discounting import TDDesignPrior, TDDesignTransform, TDPrior
 
 
 def _make_task(**kwargs):
@@ -174,21 +174,22 @@ def test_outcome_logp_normalized():
 
 def test_task_computes_td_design_space_from_prior():
     task = _make_task()
-    assert isinstance(task.design_space, TDDesignSpace)
+    assert isinstance(task.design_prior, TDDesignPrior)
+    assert isinstance(task.design_transform, TDDesignTransform)
     expected = float(task.prior.k_loc + 0.5 * task.prior.k_scale**2)
-    assert task.design_space.log_k_mean == pytest.approx(expected)
+    assert task.design_prior.log_k_mean == pytest.approx(expected)
 
 
 def test_td_design_space_transform():
     # Raw (x_d, x_r) map to D_1 = exp(x_d - log_k_mean), R_0 = 100 * sigmoid(x_r).
     log_k_mean = -3.125
-    space = TDDesignSpace(log_k_mean=log_k_mean)
+    task = _make_task(design_prior=TDDesignPrior(log_k_mean=log_k_mean))
     raw = torch.tensor([[0.0, 0.0], [1.0, 2.0]])
 
-    design = space.to_design(raw)
+    design = task.design_transform(raw)
     assert torch.allclose(design[:, 0], torch.exp(raw[:, 0] - log_k_mean))
     assert torch.allclose(design[:, 1], 100 * torch.sigmoid(raw[:, 1]))
-    assert space.contains(design)
+    assert task.contains_design(design)
 
 
 def test_td_design_space_keeps_gradients():
@@ -199,7 +200,7 @@ def test_td_design_space_keeps_gradients():
 
     theta = task.sample_prior(32)
     raw = torch.zeros(32, 2, requires_grad=True)
-    design = task.design_space.to_design(raw)  # [32, 2] = (D_1, R_0)
+    design = task.design_transform(raw)  # [32, 2] = (D_1, R_0)
     y = torch.ones(32, 1)
 
     logp = task._outcome_logp(y, theta, design)
@@ -235,12 +236,12 @@ def test_history_logp_rejects_malformed_theta():
 
 
 # ============================================================================
-# design_space validation (Task._check_design)
+# design_prior validation (Task._check_design)
 # ============================================================================
 
 
 def _invalid_design(b=4):
-    # D_1 <= 0 violates TDDesignSpace's domain (D_1 > 0).
+    # D_1 < 0 violates TD's design space (D_1 >= 0).
     return torch.stack([torch.full((b,), -1.0), torch.full((b,), 50.0)], dim=-1)
 
 

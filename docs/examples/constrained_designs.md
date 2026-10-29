@@ -43,16 +43,20 @@ design = torch.tensor([-1., -1.])
 task.sample_outcome(theta, design)
 ```
 
-We see this error relies on {py:class}`~testbed.tasks.temporal_discounting.TDDesignSpace`, which is a subclass of {py:class}`~testbed.core.design_spaces.DesignSpace`. A `DesignSpace` provides methods for checking if designs are valid, as well as for transforming raw (or latent) designs to be valid designs. This is provided by the `to_design()` method, and its inverse is given by the `to_raw()` method. For the `TemporalDiscounting` task, raw designs are reparametrized under the maps $D_1 \mapsto \exp(D_1 - \log \mathbb{E}[k])$ and $R_0 \mapsto 100 * \mathrm{sigmoid}(R_0)$.
+Valid designs are defined by the support of the task's design prior, `task.design_prior.support`, which is a [torch constraint](https://pytorch.org/docs/stable/distributions.html#module-torch.distributions.constraints). 
+
+TestBED provides tools for parametrising constrained designs, which work by transforming a raw or latent design into the design space. Each task has a  `design_transform` function, which is a torch `Transform` that maps raw designs to valid designs. Its inverse is `design_transform.inv`. These transforms are aliases for the same functions defined by the design prior. Design priors can provide a `transform` function, corresponding to a design parametrisation. Otherwise, the transformation defaults to torch's `biject_to(task.design_prior.support)`, except that a box uses a tanh squash (see {py:func}`~testbed.core.constraints.default_design_transform`). 
+
+For example, the `TemporalDiscounting` task's design prior defines {py:class}`~testbed.tasks.temporal_discounting.TDDesignTransform`, which reparametrizes raw designs under the maps $D_1 \mapsto \exp(D_1 - \log \mathbb{E}[k])$ and $R_0 \mapsto 100 * \mathrm{sigmoid}(R_0)$.
 
 ```{code-cell} ipython3
-design_space = task.design_space # Each task has a default design_space attribute
+transform = task.design_transform  # each task has a design transform
 
 theta = task.sample_prior()
 
 raw_design = torch.tensor([-1., -1.])
-design = design_space.to_design(raw_design)
-inverse_raw_design = design_space.to_raw(design)
+design = transform(raw_design)
+inverse_raw_design = transform.inv(design)
 
 y = task.sample_outcome(theta, design)
 
@@ -60,9 +64,42 @@ print(f'design={design}, y={y}')
 print(f'raw_design==inverse_raw_design? {torch.allclose(raw_design, inverse_raw_design)}')
 ```
 
+### Changing the parametrisation
+
+To parametrise the same design space differently, write a design prior with its own `transform`. Here is a uniform prior on a box, as with {py:class}`~testbed.core.distributions.Box`, whose raw designs map through a sigmoid rather than the default tanh:
+
+```{code-cell} ipython3
+from torch.distributions.transforms import (
+    AffineTransform,
+    ComposeTransform,
+    IndependentTransform,
+    SigmoidTransform,
+)
+
+from testbed.core import Box
+
+
+class SigmoidBox(Box):
+    @property
+    def transform(self):
+        squash = ComposeTransform([SigmoidTransform(), AffineTransform(self.low, self.high - self.low)])
+        return IndependentTransform(squash, 1)
+
+
+low, high = [0.5, 1.0], [200.0, 99.0]
+tanh_task = TemporalDiscounting(design_prior=Box(low, high, event_shape=[2]))
+sigmoid_task = TemporalDiscounting(design_prior=SigmoidBox(low, high, event_shape=[2]))
+
+raw_design = torch.tensor([-1., -1.])
+print(f'tanh: {tanh_task.design_transform(raw_design)}')
+print(f'sigmoid: {sigmoid_task.design_transform(raw_design)}')
+```
+
+For stochastic policies the transform also needs `log_abs_det_jacobian`, which torch's transforms provide.
+
 ## Constraints and Designers
 
-Let's make a toy `SequentialDesigner` for this task and create a rollout. If we look at the resulting designs, we see that they are indeed valid. This works because, by default, any designer has `transform_designs=True`. In this case, the `SequentialDesigner` will automatically call `to_design()` to do the transformation during the design optimisation process. Whenever a designer computes a raw design, the rollout also carries it as `rollout.extra["raw_design_history"]`.
+Let's make a toy `SequentialDesigner` for this task and create a rollout. If we look at the resulting designs, we see that they are indeed valid. This works because, by default, any designer has `transform_designs=True`. In this case, the `SequentialDesigner` will automatically apply `task.design_transform` to do the transformation during the design optimisation process. Whenever a designer computes a raw design, the rollout also carries it as `rollout.extra["raw_design_history"]`.
 
 ```{code-cell} ipython3
 T = 5
@@ -78,11 +115,11 @@ print(f'designs: {rollout.design_history}')
 print(f'raw designs: {rollout.extra["raw_design_history"]}')
 ```
 
-There may be cases in which you want to skip this automatic transformation coming from the design space. You can do this by setting `transform_designs=False` in the construction of your designer.  For example, you might be using a {py:class}`~testbed.designers.amortized.PolicyDesigner` with a neural network design policy that is already constrained to output valid designs. 
+There may be cases in which you want to skip this automatic transformation. You can do this by setting `transform_designs=False` in the construction of your designer.  For example, you might be using a {py:class}`~testbed.designers.amortized.PolicyDesigner` with a neural network design policy that is already constrained to output valid designs. 
 
 ```{warning}
 `PolicyDesigner` always receives a `DesignProposal` from its `DesignNet`. Normally,
-the proposal's `raw_design` is transformed with `to_design()` and, for stochastic
+the proposal's `raw_design` is transformed with `task.design_transform` and, for stochastic
 policies, the corresponding change-of-variables correction is applied to its log
 probability. For numerical stability, a policy can condition on raw/latent designs
 rather than physical designs by setting `use_raw_history=True`. That setting is an
@@ -93,5 +130,5 @@ designs after the first rollout step. When `transform_designs=False`, the
 
 Some policies, such as `CategoricalPolicyNet`, select directly from a finite set of
 physical designs. Such a policy declares this in its network contract, so
-`PolicyDesigner` does not apply a design-space transform or density correction.
+`PolicyDesigner` does not apply the design transform or density correction.
 ```

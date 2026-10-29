@@ -17,7 +17,7 @@ from testbed.core.manager import Manager
 def instantiate_design_net(config, task):
     """Instantiates a design net with the task arguments its target declares.
 
-    Stochastic policy factories can opt into the task-owned design space,
+    Stochastic policy factories can opt into the task-owned design prior,
     while deterministic policies continue to receive only their shape inputs.
     """
     target = get_object(config._target_)
@@ -27,7 +27,7 @@ def instantiate_design_net(config, task):
         "event_shape_theta": task.event_shape_theta,
         "event_shape_design": task.event_shape_design,
         "event_shape_out": task.event_shape_design,
-        "design_space": task.design_space,
+        "design_prior": task.design_prior,
     }
     return instantiate(
         config,

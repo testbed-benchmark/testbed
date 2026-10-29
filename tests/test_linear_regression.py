@@ -3,7 +3,8 @@ import math
 import pytest
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core import Box
+from testbed.envs.bed_env import _project
 from testbed.tasks import LinearRegression
 from testbed.tasks.linear_regression import LinearRegressionPrior
 
@@ -37,7 +38,7 @@ def test_task_uses_default_prior_with_correct_dim():
 def test_prior_default_covariance_is_diag_1_and_quarter():
     prior = make_prior(4)
     expected_var = torch.tensor([1.0, 0.25, 0.25, 0.25])
-    assert torch.allclose(torch.diagonal(prior.cov), expected_var)
+    assert torch.allclose(torch.diagonal(prior.dist.covariance_matrix), expected_var)
 
 
 def test_prior_sample_shapes():
@@ -103,7 +104,7 @@ def test_outcome_logp_matches_analytic_gaussian_density():
 
 def test_sample_joint_shapes():
     task = make_task(3, dim_y=2)
-    design = task.design_space.sample((5,))
+    design = task.design_prior.sample((5,))
 
     y, theta = task.sample_joint(design, sample_shape=4)
     assert y.shape == (4, 5, 2)
@@ -112,7 +113,7 @@ def test_sample_joint_shapes():
 
 def test_sample_outcome_is_reparametrized():
     task = make_task(3)
-    design = task.design_space.sample((8,)).requires_grad_(True)
+    design = task.design_prior.sample((8,)).requires_grad_(True)
     theta = task.sample_prior(8)
 
     y = task.sample_outcome(theta, design)
@@ -139,24 +140,24 @@ def test_sample_outcome_mean_matches_conditional_mean():
 def test_default_design_space_is_the_unit_box():
     task = make_task(3)
 
-    assert isinstance(task.design_space, BoxDesignSpace)
-    assert task.design_space.event_shape == torch.Size([3])
-    assert torch.equal(task.design_space.low, -torch.ones(3))
-    assert torch.equal(task.design_space.high, torch.ones(3))
+    assert isinstance(task.design_prior, Box)
+    assert task.design_prior.event_shape == torch.Size([3])
+    assert torch.equal(task.design_prior.low, -torch.ones(3))
+    assert torch.equal(task.design_prior.high, torch.ones(3))
 
 
 def test_design_space_tracks_dim():
-    assert make_task(1).design_space.event_shape == torch.Size([1])
-    assert make_task(7).design_space.event_shape == torch.Size([7])
+    assert make_task(1).design_prior.event_shape == torch.Size([1])
+    assert make_task(7).design_prior.event_shape == torch.Size([7])
 
 
 def test_design_space_accepts_the_closed_box_and_rejects_outside():
-    space = make_task(2).design_space
+    task = make_task(2)
 
-    assert space.contains(torch.tensor([-1.0, 1.0]))
-    assert space.contains(torch.zeros(2))
-    assert not space.contains(torch.tensor([-1.01, 0.0]))
-    assert not space.contains(torch.tensor([0.0, 1.01]))
+    assert task.contains_design(torch.tensor([-1.0, 1.0]))
+    assert task.contains_design(torch.zeros(2))
+    assert not task.contains_design(torch.tensor([-1.01, 0.0]))
+    assert not task.contains_design(torch.tensor([0.0, 1.01]))
 
 
 def test_task_rejects_designs_outside_the_box():
@@ -170,11 +171,12 @@ def test_task_rejects_designs_outside_the_box():
 
 def test_design_space_reparametrisation_maps_into_the_box():
     torch.manual_seed(0)
-    space = make_task(3).design_space
+    task = make_task(3)
+    space = task.design_prior
 
-    assert space.contains(space.sample((64,)))
-    assert space.contains(space.project(torch.randn(64, 3) * 10))
-    assert space.contains(space.to_design(torch.randn(64, 3) * 10))
+    assert task.contains_design(space.sample((64,)))
+    assert task.contains_design(_project(space.support, torch.randn(64, 3) * 10))
+    assert task.contains_design(task.design_transform(torch.randn(64, 3) * 10))
 
 
 def test_box_attains_the_norm_the_quadratic_term_is_centred_on():
@@ -182,6 +184,6 @@ def test_box_attains_the_norm_the_quadratic_term_is_centred_on():
     task = make_task(2, quad=1.0)
     design = torch.tensor([[1.0, 0.0]])
 
-    assert task.design_space.contains(design)
+    assert task.contains_design(design)
     theta = torch.zeros(1, 3)
     assert torch.allclose(task.make_mean(theta, design), torch.zeros(1, 1))

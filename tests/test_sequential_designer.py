@@ -96,14 +96,14 @@ def test_raw_design_history_matches_forward_transform():
     raw_design_history = rollout.extra["raw_design_history"]
     assert raw_design_history.shape == rollout.design_history.shape
     torch.testing.assert_close(
-        task.design_space.to_design(raw_design_history), rollout.design_history
+        task.design_transform(raw_design_history), rollout.design_history
     )
 
 
 def test_transform_designs_false_opts_out():
     task = TemporalDiscounting()
     # With transform_designs=False, the raw optimized tensor (init ~N(0,1))
-    # is used directly as the design, which won't satisfy TDDesignSpace's
+    # is used directly as the design, which won't satisfy TD's design space's
     # real domain constraints (D1 > 0, 0 < R0 < 100) -- disable validation
     # since this test is only about the designer-level opt-out.
     task.validate_designs = False

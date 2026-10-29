@@ -1,5 +1,7 @@
 """Policy network exports."""
 
+from testbed.core.constraints import BlockTransform
+
 from .aline import AlineModel, AlineOutput
 from .base import DesignNet, DesignProposal
 from .deterministic import (
@@ -24,7 +26,7 @@ from .history import (
     prepare_history,
     rescale_designs,
 )
-from .modules import BlockTransform, affine_rescale
+from .modules import affine_rescale
 from .rlboed import RLBOEDDiscreteQNetwork, RLBOEDQNetwork
 from .stochastic import (
     CategoricalHead,

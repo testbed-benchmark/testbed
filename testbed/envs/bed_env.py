@@ -6,10 +6,43 @@ from typing import Any
 
 import torch
 from torch import Tensor
+from torch.distributions import constraints
 
+from ..core.constraints import blocks, finite_set, is_unconstrained
 from ..tasks.base import Task
 from .history import History
 from .rewards import RewardFunction, ZeroReward
+
+
+def _project(support: constraints.Constraint, design: Tensor) -> Tensor:
+    """Moves designs into ``support``, a lossy correction of nearly-valid designs.
+
+    Clamps to bounds, snaps to the nearest point of a finite set (by squared
+    distance), and leaves unconstrained designs as they are. A custom
+    constraint can supply its own ``project(design)`` method.
+    """
+    if hasattr(support, "project"):
+        return support.project(design)
+    if isinstance(support, finite_set):
+        values = support.values.to(device=design.device, dtype=design.dtype)
+        flat_design = design.reshape(-1, values[0].numel())
+        flat_values = values.reshape(values.shape[0], -1)
+        distances = ((flat_design.unsqueeze(1) - flat_values.unsqueeze(0)) ** 2).sum(-1)
+        return flat_values[distances.argmin(dim=-1)].reshape(design.shape)
+    if isinstance(support, blocks):
+        parts = design.split(support.sizes, dim=-1)
+        return torch.cat([_project(c, x) for c, x in zip(support.parts, parts)], dim=-1)
+    if is_unconstrained(support):
+        return design
+    while isinstance(support, constraints.independent):
+        support = support.base_constraint
+    if isinstance(support, constraints.interval):
+        low = torch.as_tensor(support.lower_bound).to(design)
+        high = torch.as_tensor(support.upper_bound).to(design)
+        return design.clamp(low, high)
+    if isinstance(support, constraints.greater_than_eq):
+        return design.clamp(min=support.lower_bound)
+    raise NotImplementedError(f"Cannot project designs onto {support}.")
 
 
 class BEDEnv:
@@ -186,8 +219,8 @@ class BEDEnv:
         """Converts, projects, validates, and shape-checks a design."""
         design = raw_design
         if self.project_designs:
-            design = self.task.design_space.project(design)
-        if self.validate_designs and not self.task.design_space.contains(design):
+            design = _project(self.task.design_prior.support, design)
+        if self.validate_designs and not self.task.contains_design(design):
             raise ValueError("Design is outside the design space.")
 
         expected = (*self.batch_shape, *self.task.event_shape_design)

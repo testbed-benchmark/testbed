@@ -7,8 +7,7 @@ References:
 import torch
 from torch import Tensor
 
-from ..core.design_spaces import BoxDesignSpace, DesignSpace
-from ..core.distributions import LogNormal
+from ..core.distributions import Box, Distribution, LogNormal
 from ..core.util import normal_log_prob
 from .base import Task
 
@@ -64,8 +63,9 @@ class Pharmacokinetic(Task):
             Dose constant :math:`D_v` (default: 400.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default PKPrior is used.
-        design_space (DesignSpace, optional):
-            Sampling times. If None, defaults to ``[0, 24]`` hours.
+        design_prior (Distribution, optional):
+            Distribution of sampling times; its support is the design space.
+            If None, uniform on ``[0, 24]`` hours.
     """
 
     @property
@@ -79,22 +79,22 @@ class Pharmacokinetic(Task):
         add_noise_scale: float = 0.1**0.5,
         decay_const: float = 400.0,
         prior=None,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the task."""
         if prior is None:
             prior = PKPrior()
 
-        if design_space is None:
-            design_space = BoxDesignSpace(low=0.0, high=24.0, event_shape=[1])
+        if design_prior is None:
+            design_prior = Box(low=0.0, high=24.0, event_shape=[1])
 
         super().__init__(
             event_shape_y=[1],
             event_shape_theta=[3],
             event_shape_design=[1],
             prior=prior,
-            design_space=design_space,
+            design_prior=design_prior,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 

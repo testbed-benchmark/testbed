@@ -47,7 +47,7 @@ def test_raw_design_history_matches_design_parameter():
     assert torch.allclose(raw_design_history[1], designer.raw_design)
     # The exposed raw design is what design_history is the forward transform of.
     assert torch.allclose(
-        task.design_space.to_design(raw_design_history), rollout.design_history
+        task.design_transform(raw_design_history), rollout.design_history
     )
 
 
@@ -78,9 +78,9 @@ def test_default_transform_designs_matches_task_design_space():
 
     raw_design_history = rollout.extra["raw_design_history"]
     assert torch.allclose(
-        task.design_space.to_design(raw_design_history), rollout.design_history
+        task.design_transform(raw_design_history), rollout.design_history
     )
-    # TDDesignSpace.to_design is a real (non-identity) transform, so raw and
+    # TDDesignTransform is a real (non-identity) transform, so raw and
     # design must actually differ here.
     assert not torch.allclose(raw_design_history, rollout.design_history)
 
@@ -88,7 +88,7 @@ def test_default_transform_designs_matches_task_design_space():
 def test_transform_designs_false_opts_out():
     task = TemporalDiscounting()
     # With transform_designs=False, the raw learnable parameter (~N(0,1)) is
-    # used directly as the design, which won't satisfy TDDesignSpace's real
+    # used directly as the design, which won't satisfy TD's design space's real
     # domain constraints (D1 > 0, 0 < R0 < 100) -- disable validation since
     # this test is only about the designer-level opt-out, not design validity.
     task.validate_designs = False
@@ -143,7 +143,7 @@ def test_to_moves_task_hooks_and_own_parameters():
     designer.to(torch.float64)
 
     assert designer.raw_design.dtype == torch.float64
-    assert task.prior.loc.dtype == torch.float64
+    assert task.prior.dist.mean.dtype == torch.float64
     assert action_net.linear.weight.dtype == torch.float64
 
 

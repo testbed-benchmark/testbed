@@ -20,14 +20,14 @@ class LogLoss(nn.Module):
     the task likelihood at the true ``target`` theta, and its log-probability
     is evaluated under the estimated ``input`` theta.
 
-    The design prior is ``task.design_space.sample`` by default, so a task
+    The design prior is ``task.design_prior`` by default, so a task
     carries its own ``p(x)``. Pass ``design_distr`` to override it with an
     explicit distribution.
 
     Args:
         task (Task):
             Task defining the likelihood ``p(y | x, theta)`` and, by default,
-            the design space designs are drawn from.
+            the design prior designs are drawn from.
         n_outer_samples (int):
             Number of Monte Carlo (design, outcome) samples per batch element.
         reduction (str):
@@ -35,7 +35,7 @@ class LogLoss(nn.Module):
         design_distr (Distribution, optional):
             Distribution over designs ``x`` used to estimate the outer
             expectation (default: None). If None, designs are drawn from
-            ``task.design_space``.
+            ``task.design_prior``.
     """
 
     def __init__(
@@ -66,9 +66,7 @@ class LogLoss(nn.Module):
         """
         task = self.task
         if self.design_distr is None:
-            return task.design_space.sample(
-                (b, self.n_outer_samples), device=task.device
-            )
+            return task.design_prior.sample((b, self.n_outer_samples)).to(task.device)
 
         return self.design_distr.sample((b, self.n_outer_samples))
 

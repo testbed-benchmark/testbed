@@ -10,8 +10,7 @@ from collections.abc import Iterable
 import torch
 from torch import Tensor
 
-from ..core.design_spaces import BoxDesignSpace, DesignSpace
-from ..core.distributions import LogNormal
+from ..core.distributions import Box, Distribution, LogNormal
 from ..core.util import normal_log_prob
 from .base import Task
 
@@ -52,8 +51,9 @@ class StochasticPendulum(Task):
     Args:
         prior (Distribution, optional):
             Prior over parameters. If None, the default StochasticPendulumPrior is used.
-        design_space (DesignSpace, optional):
-            Design space for the applied torque. If None, defaults to ``[-1, 1]``.
+        design_prior (Distribution, optional):
+            Distribution of the applied torque; its support is the design
+            space. If None, uniform on ``[-1, 1]``.
         dt (float):
             Step size in the Euler-Maruyama discretization (default: 0.05).
         damping (float):
@@ -76,7 +76,7 @@ class StochasticPendulum(Task):
     def __init__(
         self,
         prior=None,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         reparameterize_outcomes: bool | None = None,
         dt: float = 0.05,
         damping: float = 0.1,
@@ -87,15 +87,15 @@ class StochasticPendulum(Task):
         if prior is None:
             prior = StochasticPendulumPrior()
 
-        if design_space is None:
-            design_space = BoxDesignSpace(low=-1.0, high=1.0, event_shape=[1])
+        if design_prior is None:
+            design_prior = Box(low=-1.0, high=1.0, event_shape=[1])
 
         super().__init__(
             event_shape_y=[2],
             event_shape_theta=[2],
             event_shape_design=[1],
             prior=prior,
-            design_space=design_space,
+            design_prior=design_prior,
             reparameterize_outcomes=reparameterize_outcomes,
             memoryless=False,
         )

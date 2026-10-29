@@ -9,8 +9,8 @@ actor_architecture: attention
 
 # RL-BOED needs a bounded design space.
 task:
-  design_space:
-    _target_: testbed.core.design_spaces.BoxDesignSpace
+  design_prior:
+    _target_: testbed.core.Box
     low: [0.5, 1.0]
     high: [200.0, 99.0]
     event_shape: [2]

@@ -70,9 +70,9 @@ class SequentialDesigner(Designer):
         extra_hooks: additional hooks to run alongside the posterior update
             (after it, so they see the up-to-date posterior).
         transform_designs: see Designer.__init__. Default True: the raw design
-            optimized by Adam is mapped through task.design_space.to_design on
+            optimized by Adam is mapped through task.design_transform on
             every iteration, and initialize_design's "current_prior" branch
-            inverts through task.design_space.to_raw. Both directions are
+            inverts through task.design_transform.inv. Both directions are
             gated by this single flag, so they stay consistent with each
             other automatically.
         """
@@ -85,7 +85,7 @@ class SequentialDesigner(Designer):
                 "instead of SPCE(task, n_contrastive=...)."
             )
 
-        if task.design_space.is_discrete:
+        if task.design_prior.support.is_discrete:
             raise RuntimeError(
                 "SequentialDesigner is not compatible with tasks that have discrete design spaces."
             )
@@ -116,7 +116,9 @@ class SequentialDesigner(Designer):
         self.lr = lr
         self.n_step_opt = n_step_opt
 
-        if isinstance(init_design_dist, TorchDist):
+        if isinstance(init_design_dist, TorchDist) and not isinstance(
+            init_design_dist, Distribution
+        ):
             init_design_dist = TorchDistribution(init_design_dist)
         self.init_design_dist = init_design_dist
 

@@ -14,5 +14,5 @@ task:
   # L = 0.1 I: the SDE drives all four coordinates (ScoreBED's diffusion_mat).
   noise_scale: [0.1, 0.1, 0.1, 0.1]
   prior: null  # use the standard log-normal prior on (mp, mc, l)
-  design_space: null  # derive the standard force range, -5 to 5
+  design_prior: null  # derive the standard force range, -5 to 5
   reparameterize_outcomes: true  # Gaussian noise on a differentiable drift

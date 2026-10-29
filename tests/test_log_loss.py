@@ -193,7 +193,7 @@ def test_matches_manual_computation():
     loss = LogLoss(task, n_outer, reduction="none")(theta_hat, theta_true)
 
     torch.manual_seed(6)
-    design_samples = task.design_space.sample((b, n_outer), device=task.device)
+    design_samples = task.design_prior.sample((b, n_outer))
     target = theta_true.unsqueeze(1)
     y_samples = task.sample_outcome(target, design_samples)
     input_ = theta_hat.unsqueeze(1)
@@ -279,7 +279,7 @@ def test_designs_come_from_task_design_space_by_default():
     task = _make_location_finding_setup()
     b, n_outer = 3, 5
     design = torch.full(task.event_shape_design, 3.0)
-    task.design_space.sample = lambda batch_shape=(), *, device=None: design.expand(
+    task.design_prior.sample = lambda batch_shape=(), *, device=None: design.expand(
         *batch_shape, *design.shape
     )
 
@@ -306,7 +306,7 @@ def test_design_distr_overrides_the_design_space():
     def _unreachable(batch_shape=(), *, device=None):
         raise AssertionError("design space sampled despite an explicit design_distr")
 
-    task.design_space.sample = _unreachable
+    task.design_prior.sample = _unreachable
 
     distr = _ConstantDesignDistr(task.event_shape_design, value=-2.0)
     loss_fn = LogLoss(task, n_outer, reduction="none", design_distr=distr)

@@ -39,7 +39,7 @@ class PolicyDesigner(Designer):
             use_raw_history: Condition on raw rather than physical design
                 history. This is an advanced opt-in; physical designs are the
                 common public history convention.
-            transform_designs: Map raw proposals through the task design space
+            transform_designs: Map raw proposals through the task design transform
                 and correct proposal log probabilities.
         """
         super().__init__(
@@ -129,13 +129,14 @@ class PolicyDesigner(Designer):
         if not self.transform_designs or raw_designs_are_physical:
             return proposal.raw_design, proposal.raw_design, proposal.log_prob
 
+        transform = self.task.design_transform
+        design = transform(proposal.raw_design)
         if proposal.log_prob is None:
-            design = self.task.design_space.to_design(proposal.raw_design)
             return design, proposal.raw_design, None
 
-        design, log_prob = self.task.design_space.to_design(
-            proposal.raw_design,
-            proposal.log_prob,
+        # change of variables into the design's density
+        log_prob = proposal.log_prob - transform.log_abs_det_jacobian(
+            proposal.raw_design, design
         )
         return design, proposal.raw_design, log_prob
 

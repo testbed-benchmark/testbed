@@ -2,7 +2,7 @@
 
 import pytest
 import torch
-from torch.distributions import MultivariateNormal, Normal
+from torch.distributions import MultivariateNormal, Normal, biject_to
 
 from testbed.core.distributions import (
     Distribution,
@@ -56,6 +56,44 @@ def test_prior_honours_shape_contract(make_task, sample_shape):
 
 
 @pytest.mark.parametrize("make_task", TASKS)
+def test_prior_is_a_torch_distribution_whose_samples_lie_in_its_support(make_task):
+    task = make_task()
+    theta = task.sample_prior((256,))
+
+    assert isinstance(task.prior, torch.distributions.Distribution)
+    assert task.prior.support.check(theta).all()
+    assert not task.discrete_theta
+
+
+@pytest.mark.parametrize("make_task", TASKS)
+def test_support_bijection_round_trips_through_raw_coordinates(make_task):
+    torch.manual_seed(0)
+    task = make_task()
+    theta = task.sample_prior((256,))
+    transform = biject_to(task.prior.support)
+
+    raw = transform.inv(theta)
+    raw_shape = transform.inverse_shape(task.event_shape_theta)
+
+    assert raw.shape == (256, *raw_shape)
+    assert torch.isfinite(raw).all()
+    torch.testing.assert_close(transform(raw), theta, rtol=1e-4, atol=1e-4)
+    # Every raw point maps back into the support, so raw coordinates are free.
+    assert task.prior.support.check(transform(3 * torch.randn(256, *raw_shape))).all()
+
+
+def test_ces_support_bijection_maps_four_raw_coordinates_onto_the_simplex():
+    transform = biject_to(CES().prior.support)
+    raw = torch.randn(64, 4)
+
+    theta = transform(raw)
+
+    assert transform.inverse_shape((5,)) == (4,)
+    torch.testing.assert_close(theta[:, 1:4].sum(-1), torch.ones(64))
+    assert ((theta[:, 0] > 0.01) & (theta[:, 0] < 1.0)).all()
+
+
+@pytest.mark.parametrize("make_task", TASKS)
 def test_prior_log_prob_agrees_across_batch_shapes(make_task):
     # A log_prob that indexes a fixed batch dim (e.g. theta[:, 0]) returns the
     # wrong values once the batch has more than one dim.
@@ -73,7 +111,7 @@ def test_prior_log_prob_agrees_across_batch_shapes(make_task):
 def test_samplers_prepend_sample_shape_and_never_squeeze(make_task, sample_shape):
     task = make_task()
     shape = as_sample_shape(sample_shape)
-    design = task.design_space.sample((5,))
+    design = task.design_prior.sample((5,))
     theta = task.sample_prior(5)
 
     y = task.sample_outcome(theta, design, sample_shape=sample_shape)
@@ -99,14 +137,6 @@ def test_torch_distribution_folds_batch_dims_into_the_event():
     assert prior.batch_shape == ()
     assert theta.shape == (5, 3, 2)
     torch.testing.assert_close(prior.log_prob(theta), mvn.log_prob(theta).sum(-1))
-
-
-def test_torch_distribution_can_keep_a_genuine_batch():
-    dist = TorchDistribution(Normal(torch.zeros(4), 1.0), reinterpreted_batch_ndims=0)
-
-    assert dist.event_shape == ()
-    assert dist.batch_shape == (4,)
-    assert dist.sample(3).shape == (3, 4)
 
 
 def test_empirical_distribution_honours_sample_shape():
@@ -164,10 +194,8 @@ def test_task_rejects_a_prior_with_the_wrong_event_shape():
 
 
 def test_task_rejects_a_prior_with_a_batch_shape():
-    prior = TorchDistribution(
-        MultivariateNormal(torch.zeros(3, 2), torch.eye(2)),
-        reinterpreted_batch_ndims=0,
-    )
+    # a bare torch distribution can have one; testbed's own cannot
+    prior = MultivariateNormal(torch.zeros(3, 2), torch.eye(2))
 
     with pytest.raises(ValueError, match="batch_shape"):
         _PriorTask(prior)
@@ -192,12 +220,12 @@ def test_update_prior_checks_one_draw():
         task.update_prior(_UnreducedPrior())
 
 
-def test_lognormal_declares_the_batch_shape_it_samples():
-    dist = LogNormal(torch.zeros(4, 2), torch.eye(2))
+def test_lognormal_samples_its_event_shape():
+    dist = LogNormal(torch.zeros(2), torch.eye(2))
 
-    assert dist.batch_shape == (4,)
+    assert dist.batch_shape == ()
     assert dist.event_shape == (2,)
-    assert dist.sample((5,)).shape == dist._extended_shape((5,)) == (5, 4, 2)
+    assert dist.sample((5,)).shape == dist._extended_shape((5,)) == (5, 2)
 
 
 def test_constructing_a_task_leaves_the_rng_untouched():

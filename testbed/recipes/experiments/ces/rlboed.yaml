@@ -8,8 +8,8 @@ defaults:
 actor_architecture: attention
 
 task:
-  design_space:
-    _target_: testbed.core.design_spaces.BoxDesignSpace
+  design_prior:
+    _target_: testbed.core.Box
     low: 0.01
     high: 100.0
     event_shape: [6]

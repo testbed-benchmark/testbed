@@ -1,7 +1,8 @@
 import pytest
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core import Box
+from testbed.envs.bed_env import _project
 from testbed.tasks import CES
 
 
@@ -211,21 +212,20 @@ def test_sample_outcome_is_reparametrized():
 def test_default_design_space_is_the_basket_box():
     task = make_task()
 
-    assert isinstance(task.design_space, BoxDesignSpace)
-    assert task.design_space.event_shape == torch.Size([6])
-    assert torch.equal(task.design_space.low, torch.zeros(6))
-    assert torch.equal(task.design_space.high, torch.full((6,), 100.0))
+    assert isinstance(task.design_prior, Box)
+    assert task.design_prior.event_shape == torch.Size([6])
+    assert torch.equal(task.design_prior.low, torch.zeros(6))
+    assert torch.equal(task.design_prior.high, torch.full((6,), 100.0))
 
 
 def test_design_space_accepts_the_closed_box_and_rejects_outside():
     task = make_task()
-    space = task.design_space
 
     # The boundary baskets are legitimate designs.
-    assert space.contains(torch.zeros(6))
-    assert space.contains(torch.full((6,), 100.0))
-    assert not space.contains(torch.full((6,), -1.0))
-    assert not space.contains(torch.full((6,), 101.0))
+    assert task.contains_design(torch.zeros(6))
+    assert task.contains_design(torch.full((6,), 100.0))
+    assert not task.contains_design(torch.full((6,), -1.0))
+    assert not task.contains_design(torch.full((6,), 101.0))
 
 
 def test_task_rejects_designs_outside_the_box():
@@ -240,35 +240,33 @@ def test_task_rejects_designs_outside_the_box():
 def test_design_space_sample_and_project_stay_in_the_box():
     torch.manual_seed(0)
     task = make_task()
-    space = task.design_space
+    space = task.design_prior
 
-    assert space.contains(space.sample((64,)))
-    assert space.contains(space.project(torch.randn(64, 6) * 500))
+    assert task.contains_design(space.sample((64,)))
+    assert task.contains_design(_project(space.support, torch.randn(64, 6) * 500))
 
 
 def test_design_space_reparametrisation_maps_into_the_box():
     torch.manual_seed(0)
     task = make_task()
-    space = task.design_space
 
     # Deep in tanh saturation the inverse loses float32 precision: recovering
     # raw from a design near 0 or 100 subtracts the bias of 50 from it, so the
     # round-trip is only accurate while the squash is off its asymptotes.
     raw = (torch.randn(64, 6) * 3).clamp(-2.5, 2.5)
-    design = space.to_design(raw)
+    design = task.design_transform(raw)
 
-    assert space.contains(design)
-    assert torch.allclose(space.to_raw(design), raw, atol=1e-3)
+    assert task.contains_design(design)
+    assert torch.allclose(task.design_transform.inv(design), raw, atol=1e-3)
 
 
 def test_design_space_reparametrisation_stays_in_the_box_when_saturated():
     torch.manual_seed(0)
     task = make_task()
-    space = task.design_space
 
     # Whatever a policy emits, the design is valid -- that is the point of
     # squashing rather than clipping.
-    design = space.to_design(torch.randn(256, 6) * 50)
+    design = task.design_transform(torch.randn(256, 6) * 50)
 
-    assert space.contains(design)
-    assert torch.isfinite(space.to_raw(design)).all()
+    assert task.contains_design(design)
+    assert torch.isfinite(task.design_transform.inv(design)).all()

@@ -29,9 +29,9 @@ def test_event_shapes():
 def test_task_uses_default_prior_with_correct_shape():
     task = make_task(3, 2)
     assert isinstance(task.prior, LocationFindingPrior)
-    assert task.prior.loc.shape == (3, 2)
-    assert torch.allclose(task.prior.loc, torch.zeros(3, 2))
-    assert torch.allclose(task.prior.cov, torch.eye(2))
+    assert task.prior.dist.mean.shape == (3, 2)
+    assert torch.allclose(task.prior.dist.mean, torch.zeros(3, 2))
+    assert torch.allclose(task.prior.dist.base_dist.covariance_matrix, torch.eye(2))
 
 
 def test_prior_sample_shapes():

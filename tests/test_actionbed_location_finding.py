@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core import Box
 from testbed.core.manager import Manager
 from testbed.design_nets import DeepSetPolicyNet
 from testbed.design_objectives import MSELoss, SortedMSELoss

@@ -351,7 +351,7 @@ def build_loss_fn(cfg, task, **overrides):
     need the task itself, which the config can't express. Rather than special
     casing loss classes by name, we inspect the target's constructor and only
     supply what it actually declares. Losses needing a design prior take it
-    from ``task.design_space``, so nothing extra is threaded through here.
+    from ``task.design_prior``, so nothing extra is threaded through here.
 
     ``overrides`` are passed straight to the target, so a caller needing a
     particular reduction can ask for it without editing the recipe.
