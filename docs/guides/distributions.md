@@ -173,6 +173,6 @@ Besides `TorchDistribution`, TestBED provides:
 
 | Class | What it is |
 |---|---|
-| {py:class}`~testbed.core.distributions.Box` | Uniform on a box `low <= x <= high`. As a design prior, it makes the design space that box. |
+| {py:class}`~testbed.core.distributions.Box` | Uniform on a box `low <= x <= high`. |
 | {py:class}`~testbed.core.distributions.EmpiricalDistribution` | Weighted points: a posterior from importance sampling or MCMC, or a finite set of designs. It has no density, so `log_prob` raises. |
 | {py:class}`~testbed.core.distributions.LogNormal` | Multivariate log-normal (torch's `LogNormal` is univariate). |
