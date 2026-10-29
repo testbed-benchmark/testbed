@@ -1,5 +1,6 @@
 """Posterior inference with Pyro's MCMC."""
 
+from functools import partial
 from typing import Literal
 
 from pyro.infer import HMC, MCMC, NUTS
@@ -7,6 +8,11 @@ from torch import Tensor
 
 from ..core.distributions import EmpiricalDistribution
 from .log_posterior import LogPosterior
+
+
+def _potential_energy(log_post: LogPosterior, params: dict) -> Tensor:
+    """Pyro's potential energy, the negative log posterior."""
+    return -log_post(params["z"])
 
 
 def run_mcmc(
@@ -50,7 +56,7 @@ def run_mcmc(
     log_post = LogPosterior(task, y_history, design_history)
     z0 = log_post.to_raw(task.current_prior.sample())
     mcmc = MCMC(
-        kernel_cls(potential_fn=lambda params: -log_post(params["z"]), **kernel_kwargs),
+        kernel_cls(potential_fn=partial(_potential_energy, log_post), **kernel_kwargs),
         num_samples=n_samples,
         warmup_steps=n_warmup,
         initial_params={"z": z0},

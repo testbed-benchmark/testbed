@@ -114,3 +114,31 @@ To use it in a designer, pass `inference=gaussian_vi`. Hooking up another librar
 - it hands `-log_post` to Pyro as the potential energy;
 - it starts the chain at `log_post.to_raw(task.current_prior.sample())`;
 - it maps the samples back with `log_post.to_theta`, returning them as an `EmpiricalDistribution`.
+
+## Other Pyro methods
+
+The `run_mcmc` method is a short call to Pyro, and nothing in it is specific to NUTS; it is mostly provided as an illustration of how TestBED interacts with Pyro and its source can serve as a starting point for more sophisticated inference methods. 
+
+For Pyro methods that take a potential energy (eg., NUTS, HMC), the main interface in TestBED is `LogPosterior`, which gives the whole posterior as a density on unconstrained $\mathbb{R}^{\mathrm{dim}}$. This readily allows you to do things like run several chains in parallel.
+
+For Pyro methods that take in a model, such as SVI with an autoguide, you can use a model with a single unconstrained site:
+
+```python
+import pyro
+import pyro.distributions as dist
+
+
+def model():
+    z = pyro.sample("z", dist.ImproperUniform(dist.constraints.real, (), (log_post.dim,)))
+    pyro.factor("log_post", log_post(z))
+```
+
+An improper site can't be sampled, so give the autoguide a starting point, e.g. `init_loc_fn=init_to_value(values={"z": torch.zeros(log_post.dim)})`. With `AutoMultivariateNormal`, map the fitted posterior back to $\theta$ with `TransformedDistribution(guide.get_posterior(), [log_post.transform])`.
+
+## Limitations and Sharp Edges
+
+There are a few limitations regarding how inference is currently handled in TestBED.
+
+- **Explicit likelihoods only.** `LogPosterior` and both built-in methods evaluate `task.history_logp`. A task with an implicit likelihood needs simulation-based inference, which TestBED doesn't provide.
+- **Gradient-based engines need continuous $\theta$.** `LogPosterior` needs a bijection onto the support, which fails to exist for a discrete prior. Importance sampling works for discrete $\theta$, though.
+- **One posterior per rollout.** The task holds a single posterior, so posterior updates support batch size 1, as `SequentialDesigner` does.

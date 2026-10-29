@@ -1,5 +1,6 @@
 """Tests for the inference API: LogPosterior, the engines, and PosteriorUpdateHook."""
 
+import pickle
 import sys
 from functools import partial
 
@@ -205,3 +206,14 @@ def test_consecutive_rollouts_on_one_task_match_fresh_tasks():
     for a, b in zip(reused, fresh):
         torch.testing.assert_close(a.design_history, b.design_history)
         torch.testing.assert_close(a.y_history, b.y_history)
+
+
+def test_log_posterior_pickles_for_engines_that_use_other_processes():
+    # e.g. Pyro runs extra MCMC chains in spawned processes on macOS or CUDA
+    task = CES()
+    designs = task.design_prior.sample((3,))
+    y = task.sample_outcome(task.sample_prior(), designs)
+    log_post = LogPosterior(task, y, designs)
+    z = log_post.to_raw(task.sample_prior((4,)))
+
+    torch.testing.assert_close(pickle.loads(pickle.dumps(log_post))(z), log_post(z))

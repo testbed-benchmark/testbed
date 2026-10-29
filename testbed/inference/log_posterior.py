@@ -41,10 +41,6 @@ class LogPosterior:
         self.transform = ComposeTransform(
             [ReshapeTransform(torch.Size([self.dim]), raw_shape), bijection]
         )
-        # the prior in raw coordinates; torch adds the Jacobian term
-        self._raw_prior = TransformedDistribution(
-            task.prior, [self.transform.inv], validate_args=False
-        )
 
     def to_theta(self, z: Tensor) -> Tensor:
         """Maps raw ``[*b, dim]`` to parameters ``[*b, *event_shape_theta]``."""
@@ -58,4 +54,10 @@ class LogPosterior:
         """Evaluates the log posterior of raw ``[*b, dim]``, giving ``[*b]``."""
         theta = self.transform(z)
         log_lik = self.task.history_logp(self.y_history, self.design_history, theta)
-        return self._raw_prior.log_prob(z) + log_lik
+        # The prior in raw coordinates, with torch adding the Jacobian term. Built
+        # per call because torch can't pickle an inverse transform, and engines
+        # running chains in other processes pickle this object.
+        raw_prior = TransformedDistribution(
+            self.task.prior, [self.transform.inv], validate_args=False
+        )
+        return raw_prior.log_prob(z) + log_lik
