@@ -2,6 +2,8 @@
 composition reproduces the pre-refactor behavior (propose -> sample -> infer
 -> update_prior, inline, every step)."""
 
+from functools import partial
+
 import pytest
 import torch
 
@@ -72,17 +74,16 @@ def test_sequential_designer_matches_pre_refactor_reference():
         new_objective,
         lr,
         n_step_opt,
-        inference_fn=run_importance_sampling,
-        n_proposal=n_proposal,
+        inference=partial(run_importance_sampling, n_proposal=n_proposal),
     )
     rollout = designer.rollout(theta_batched_new)
 
     torch.testing.assert_close(rollout.y_history.squeeze(0), ref_y_history)
     torch.testing.assert_close(rollout.design_history.squeeze(0), ref_design_history)
-    assert rollout.extra["posterior"] is new_task.current_prior
-    # Posterior updates ran online, so the two tasks' priors both contracted
-    # away from the (identical) original prior.
-    assert new_task.current_prior is not new_task.prior
+    # Posterior updates ran online and the final posterior is returned, while
+    # the task's current prior is put back as it was before the rollout.
+    assert rollout.extra["posterior"] is not new_task.prior
+    assert new_task.current_prior is new_task.prior
 
 
 def test_raw_design_history_matches_forward_transform():
@@ -153,22 +154,22 @@ def test_store_posterior_history_tracks_one_per_step():
     history = rollout.extra["posterior_history"]
     assert len(history) == T
     # The last entry in the history is the same posterior surfaced as
-    # extra["posterior"] (the final task.current_prior).
+    # extra["posterior"] (the final posterior).
     assert history[-1] is rollout.extra["posterior"]
 
 
-def test_store_posterior_history_requires_update_posterior():
+def test_store_posterior_history_requires_an_inference():
     task = _make_task()
     objective = NMC(task, n_outer=4, n_inner=4)
 
-    with pytest.raises(ValueError, match="update_posterior"):
+    with pytest.raises(ValueError, match="requires an inference"):
         SequentialDesigner(
             task,
             T=2,
             objective=objective,
             lr=1e-2,
             n_step_opt=3,
-            update_posterior=False,
+            inference=None,
             store_posterior_history=True,
         )
 
@@ -188,7 +189,7 @@ def test_transform_designs_false_current_prior_init_is_identity():
         lr=1e-2,
         n_step_opt=1,
         init_design_dist="current_prior",
-        update_posterior=False,
+        inference=None,
         transform_designs=False,
     )
 
@@ -212,7 +213,7 @@ def test_scalar_init_design_dist_gives_a_design_of_the_event_shape():
         lr=1e-2,
         n_step_opt=1,
         init_design_dist=torch.distributions.Uniform(0.0, 1.0),
-        update_posterior=False,
+        inference=None,
     )
 
     assert designer.initialize_design().shape == task.event_shape_design

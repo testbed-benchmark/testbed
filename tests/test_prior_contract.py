@@ -193,12 +193,21 @@ def test_task_rejects_a_prior_with_the_wrong_event_shape():
         _PriorTask(prior)
 
 
-def test_task_rejects_a_prior_with_a_batch_shape():
-    # a bare torch distribution can have one; testbed's own cannot
-    prior = MultivariateNormal(torch.zeros(3, 2), torch.eye(2))
+def test_task_wraps_a_bare_torch_prior_folding_its_batch_dims():
+    # one MVN per row, batch [3]: wrapped, a single prior over [3, 2]
+    task = _PriorTask(MultivariateNormal(torch.zeros(3, 2), torch.eye(2)))
 
-    with pytest.raises(ValueError, match="batch_shape"):
-        _PriorTask(prior)
+    assert isinstance(task.prior, TorchDistribution)
+    assert task.prior.event_shape == (3, 2)
+
+
+def test_update_prior_wraps_a_bare_torch_distribution():
+    task = _PriorTask(TorchDistribution(Normal(torch.zeros(3, 2), 1.0)))
+
+    task.update_prior(Normal(torch.ones(3, 2), 0.1))
+
+    assert isinstance(task.current_prior, TorchDistribution)
+    assert task.sample_current_prior((4,)).shape == (4, 3, 2)
 
 
 def test_task_rejects_a_prior_whose_log_prob_keeps_event_dims():

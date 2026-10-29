@@ -141,11 +141,14 @@ objective = SPCEReinforce(
 
 `state.y_history` and `state.design_history` hold the steps before $t$, so they are empty at $t = 0$. The rest of the state, including the task and anything hooks have stored in `state.scratch`, is also available.
 
-As an example, here is a designer for location finding that measures at a sample from the current posterior over the source location. It relies on a {py:class}`~testbed.core.hooks.PosteriorUpdateHook` to update `task.current_prior` after each step:
+As an example, here is a designer for location finding that measures at a sample from the current posterior over the source location. It relies on a {py:class}`~testbed.core.hooks.PosteriorUpdateHook` to update `task.current_prior` after each step (see [Custom Inference](inference.md)):
 
 ```{code-cell} ipython3
+from functools import partial
+
 from testbed.core.hooks import PosteriorUpdateHook
 from testbed.designers import Designer
+from testbed.inference import run_importance_sampling
 
 
 class PosteriorSampleDesigner(Designer):
@@ -155,14 +158,13 @@ class PosteriorSampleDesigner(Designer):
         return theta[:, 0], None, None
 
 
-designer = PosteriorSampleDesigner(task, T, hooks=[PosteriorUpdateHook(n_proposal=10_000)])
+inference = partial(run_importance_sampling, n_proposal=10_000)
+designer = PosteriorSampleDesigner(task, T, hooks=[PosteriorUpdateHook(inference)])
 
 theta = task.sample_prior(1)  # [1, 1, 2]
 rollout = designer.rollout(theta)
 print(rollout.design_history.squeeze(0))
 print(theta.squeeze(0))
-
-task.update_prior(task.prior)  # reset the posterior left by the hook
 ```
 
 The designs move towards the source as the posterior concentrates. A designer that needs control over the whole rollout, e.g. to select designs from a pool without replacement, can override `rollout` itself, as {py:class}`~testbed.designers.aline.AlineDesigner` does.

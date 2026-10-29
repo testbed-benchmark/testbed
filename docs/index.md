@@ -72,6 +72,7 @@ maxdepth: 1
 
 examples/location_finding
 examples/constrained_designs
+examples/inference
 examples/using_hooks
 ```
 
@@ -87,6 +88,7 @@ guides/configuration
 guides/custom_tasks
 guides/custom_methods
 guides/distributions
+guides/inference
 guides/using_designers
 guides/using_tasks
 guides/wandb

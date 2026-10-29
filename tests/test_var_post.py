@@ -1107,7 +1107,7 @@ def test_myopic_objective_drives_a_sequential_designer():
         objective=MyopicBarberAgakov(task, posterior, n_outer=32),
         lr=1e-2,
         n_step_opt=2,
-        update_posterior=False,
+        inference=None,
     )
     rollout = designer.rollout(task.sample_prior(1))
 

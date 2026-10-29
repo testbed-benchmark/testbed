@@ -12,7 +12,7 @@ from ..core.constraints import default_design_transform, in_support
 from ..core.distributions import (
     Distribution,
     EmpiricalDistribution,
-    TorchDistribution,
+    as_distribution,
     as_sample_shape,
 )
 from ..core.util import broadcast_and_flatten, matches_event_shape
@@ -122,6 +122,7 @@ class Task(ABC, nn.Module):
         self.event_shape_theta = torch.Size(event_shape_theta)
         self.event_shape_design = torch.Size(event_shape_design)
 
+        prior = as_distribution(prior)
         self._validate_prior(prior)
         self.prior = prior
         self._current_prior = prior
@@ -134,7 +135,8 @@ class Task(ABC, nn.Module):
 
         if design_prior is None:
             zeros = torch.zeros(self.event_shape_design)
-            design_prior = TorchDistribution(Normal(zeros, 1.0))
+            design_prior = Normal(zeros, 1.0)
+        design_prior = as_distribution(design_prior)
         if design_prior.event_shape != self.event_shape_design:
             raise ValueError(
                 "design_prior.event_shape must match event_shape_design; "
@@ -183,13 +185,11 @@ class Task(ABC, nn.Module):
 
     def _validate_prior(self, prior):
         """Checks declared shapes and one draw without advancing the RNG."""
-        if prior.event_shape != self.event_shape_theta or prior.batch_shape:
+        if prior.event_shape != self.event_shape_theta:
             raise ValueError(
                 f"{type(self).__name__}'s prior must have event_shape "
-                f"{tuple(self.event_shape_theta)} and an empty batch_shape; got "
-                f"event_shape {tuple(prior.event_shape)} and batch_shape "
-                f"{tuple(prior.batch_shape)}. A TorchDistribution folds its "
-                "batch dims into the event."
+                f"{tuple(self.event_shape_theta)}; got {tuple(prior.event_shape)}. "
+                "A torch distribution's batch dims are folded into its event."
             )
 
         name = type(self).__name__
@@ -823,11 +823,13 @@ class Task(ABC, nn.Module):
         r"""Updates the current prior.
 
         Args:
-            new_prior (Distribution):
-                Prior to update to. Must have the same ``event_shape`` as the
-                original prior and an empty ``batch_shape``, and its
-                ``sample`` and ``log_prob`` must honour them; this is checked
-                on one draw, as in ``__init__``.
+            new_prior (Distribution or torch.distributions.Distribution):
+                Prior to update to; a torch distribution is wrapped in
+                :class:`~testbed.core.distributions.TorchDistribution`. Must
+                have the same ``event_shape`` as the original prior and an
+                empty ``batch_shape``, and its ``sample`` and ``log_prob`` must
+                honour them; this is checked on one draw, as in ``__init__``.
         """
+        new_prior = as_distribution(new_prior)
         self._validate_prior(new_prior)
         self._current_prior = new_prior

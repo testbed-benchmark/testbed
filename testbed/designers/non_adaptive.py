@@ -6,7 +6,7 @@ import torch
 from torch import Tensor, nn
 from torch.distributions import Distribution as TorchDist
 
-from testbed.core.distributions import Distribution, TorchDistribution
+from testbed.core.distributions import Distribution, as_distribution
 from testbed.core.hooks import RolloutHook
 from testbed.core.rollout import Rollout
 from testbed.designers.base import Designer
@@ -153,8 +153,8 @@ class RandomDesigner(Designer):
         """Initializes with a design distribution."""
         super().__init__(task, T, hooks=hooks)
 
-        if isinstance(dist, TorchDist) and not isinstance(dist, Distribution):
-            dist = TorchDistribution(dist)
+        if dist is not None:
+            dist = as_distribution(dist)
         self.dist = dist
 
     @property
