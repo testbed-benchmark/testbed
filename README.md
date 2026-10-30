@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/testbed-benchmark/testbed/main/docs/_static/testbed-logo.svg" alt="TestBED" width="360">
+  <img src="https://raw.githubusercontent.com/testbed-benchmark/testbed/readme/docs/_static/testbed-logo.svg" alt="TestBED" width="360">
 </p>
 
 <p align="center">
