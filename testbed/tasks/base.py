@@ -15,7 +15,11 @@ from ..core.distributions import (
     as_distribution,
     as_sample_shape,
 )
-from ..core.util import broadcast_and_flatten, matches_event_shape
+from ..core.util import (
+    broadcast_and_flatten,
+    broadcast_batch_shape,
+    matches_event_shape,
+)
 
 
 class Task(ABC, nn.Module):
@@ -584,12 +588,10 @@ class Task(ABC, nn.Module):
     def _n_steps(self, y_history, design_history, theta):
         """Counts the steps to score: the broadcast batch size times T."""
         T = y_history.shape[-(len(self.event_shape_y) + 1)]
-        batch_shape = torch.broadcast_shapes(
-            y_history.shape[: y_history.ndim - 1 - len(self.event_shape_y)],
-            design_history.shape[
-                : design_history.ndim - 1 - len(self.event_shape_design)
-            ],
-            theta.shape[: theta.ndim - len(self.event_shape_theta)],
+        batch_shape = broadcast_batch_shape(
+            (y_history, (T, *self.event_shape_y)),
+            (design_history, (T, *self.event_shape_design)),
+            (theta, tuple(self.event_shape_theta)),
         )
         return batch_shape.numel() * T
 

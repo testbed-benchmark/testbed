@@ -123,8 +123,8 @@ By default, {py:class}`~testbed.designers.sequential.SequentialDesigner` optimis
 
 Furthermore, `PCE` requires us to draw posterior samples at each design iteration. This is done using importance sampling by default (see `testbed.inference`). As solving Bayesian inference is not the goal of our library, choosing an appropriate inference method is largely up to you, the user: pass any method as `SequentialDesigner(..., inference=...)`. See [Posterior Inference](inference.md) for importance sampling and Pyro's NUTS at work, and [Custom Inference](../guides/inference.md) for writing your own.
 
-```{warning}
-Some designers (e.g., `SequentialDesigner`) change the state of `task` during the design process. It is highly recommended to regularly create a fresh instantiation of your `task` as needed.
+```{note}
+`SequentialDesigner` updates `task.current_prior` after every step while it designs. The rollout puts it back as it was once it ends, so the task can be reused. Only priors you set yourself with `task.update_prior` persist; see [Using Tasks](../guides/using_tasks.md).
 ```
 
 ```{code-cell} ipython3

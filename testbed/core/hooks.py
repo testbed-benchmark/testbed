@@ -8,7 +8,6 @@ from torch import Tensor, nn
 
 from ..inference.importance_sampler import run_importance_sampling
 from .rollout import RolloutState
-from .util import squeeze_history
 
 
 def check_hooks(hooks: Sequence["RolloutHook"]) -> list["RolloutHook"]:
@@ -99,8 +98,9 @@ class PosteriorUpdateHook(RolloutHook):
     which an engine may use, e.g. to warm-start. Configure an engine with
     `functools.partial`, e.g. `partial(run_importance_sampling, n_proposal=10_000)`.
 
-    The task's `current_prior` is put back as it was when the rollout ends, and
-    the final posterior is returned as `rollout.extra["posterior"]`.
+    The final posterior is returned as `rollout.extra["posterior"]`. Hooks after
+    this one see it as `task.current_prior` until the rollout ends, when
+    `Designer.rollout` puts the task's `current_prior` back as it was.
     """
 
     def __init__(
@@ -118,23 +118,22 @@ class PosteriorUpdateHook(RolloutHook):
     def after_step(self, state: RolloutState) -> None:
         """Infers the posterior from the history so far and updates the task."""
         task = state.task
-        state.scratch.setdefault("prior_before_rollout", task.current_prior)
-        posterior = self.inference(
-            task,
-            squeeze_history(state.y_history, task.event_shape_y),
-            squeeze_history(state.design_history, task.event_shape_design),
-        )
+        b = state.y_history.shape[0]
+        if b != 1:
+            raise ValueError(
+                "PosteriorUpdateHook supports batch size 1, since the task holds a "
+                f"single posterior; got batch {b}."
+            )
+        posterior = self.inference(task, state.y_history[0], state.design_history[0])
         task.update_prior(posterior)
         if self.store_history:
             state.scratch.setdefault("posterior_history", []).append(task.current_prior)
 
     def on_rollout_end(self, state: RolloutState) -> dict[str, Any] | None:
-        """Returns the final (and optionally per-step) posterior and restores the prior."""
+        """Returns the final (and optionally per-step) posterior."""
         extra = {"posterior": state.task.current_prior}
         if self.store_history:
             extra["posterior_history"] = state.scratch.get("posterior_history", [])
-        if "prior_before_rollout" in state.scratch:
-            state.task.update_prior(state.scratch["prior_before_rollout"])
         return extra
 
 

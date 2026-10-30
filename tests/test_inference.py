@@ -10,7 +10,7 @@ from torch.distributions import MultivariateNormal, biject_to
 
 import testbed.inference
 from testbed.core.distributions import TorchDistribution
-from testbed.core.hooks import PosteriorUpdateHook
+from testbed.core.hooks import PosteriorUpdateHook, RolloutHook
 from testbed.design_objectives import NMC
 from testbed.designers import RandomDesigner, SequentialDesigner
 from testbed.inference import LogPosterior, run_importance_sampling
@@ -81,6 +81,27 @@ def test_log_posterior_uses_flat_raw_coordinates(task, dim):
     torch.testing.assert_close(log_post.to_theta(z), theta, rtol=1e-4, atol=1e-4)
 
 
+def test_log_posterior_matches_a_hand_written_change_of_variables():
+    # Pharmacokinetic's parameters are positive, so the bijection is exp and
+    # the Jacobian term is sum(z): the whole density can be written by hand,
+    # independently of torch's transform machinery.
+    torch.manual_seed(0)
+    task = Pharmacokinetic()
+    designs = task.design_prior.sample((4,))
+    y = task.sample_outcome(task.sample_prior(), designs)
+    log_post = LogPosterior(task, y, designs)
+    z = torch.randn(6, 3)
+
+    expected = (
+        task.prior.log_prob(z.exp())
+        + z.sum(-1)
+        + task.history_logp(y, designs, z.exp())
+    )
+
+    torch.testing.assert_close(log_post(z), expected)
+    torch.testing.assert_close(log_post.to_theta(z), z.exp())
+
+
 def test_log_posterior_squeezes_a_batch_of_one():
     task, y, designs, _, _ = _linear_regression_history()
     z = torch.randn(4, 2)
@@ -123,6 +144,19 @@ def test_mcmc_samples_stay_in_a_constrained_support():
     posterior = testbed.inference.run_mcmc(task, y, designs, n_samples=50, n_warmup=50)
 
     assert task.prior.support.check(posterior.locs).all()
+
+
+def test_mcmc_pools_the_samples_of_several_chains():
+    pytest.importorskip("pyro")
+    task, y, designs, _, _ = _linear_regression_history()
+    torch.manual_seed(0)
+
+    posterior = testbed.inference.run_mcmc(
+        task, y, designs, n_samples=40, n_warmup=40, num_chains=2
+    )
+
+    assert posterior.locs.shape == (80, 2)
+    assert torch.isfinite(posterior.locs).all()
 
 
 def test_missing_pyro_raises_an_error_naming_the_extra(monkeypatch):
@@ -178,6 +212,50 @@ def test_hook_restores_the_prior_and_returns_the_posterior():
 
     assert task.current_prior is task.prior
     assert rollout.extra["posterior"] is not task.prior
+
+
+class _RecordPrior(RolloutHook):
+    """Records task.current_prior as seen at the end of the rollout."""
+
+    def on_rollout_end(self, state):
+        return {"prior_at_end": state.task.current_prior}
+
+
+class _FailAtStep(RolloutHook):
+    def __init__(self, t):
+        super().__init__()
+        self.t = t
+
+    def after_step(self, state):
+        if state.t == self.t:
+            raise RuntimeError("boom")
+
+
+def test_hooks_after_the_posterior_update_see_the_posterior_at_rollout_end():
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    inference = partial(run_importance_sampling, n_proposal=500)
+    designer = RandomDesigner(
+        task, T=2, hooks=[PosteriorUpdateHook(inference), _RecordPrior()]
+    )
+
+    rollout = designer.rollout(task.sample_prior(1))
+
+    assert rollout.extra["prior_at_end"] is rollout.extra["posterior"]
+    assert rollout.extra["prior_at_end"] is not task.prior
+    assert task.current_prior is task.prior
+
+
+def test_a_failing_rollout_still_restores_the_prior():
+    task = LocationFinding(n_sources=1, dim_theta=2)
+    inference = partial(run_importance_sampling, n_proposal=500)
+    designer = RandomDesigner(
+        task, T=3, hooks=[PosteriorUpdateHook(inference), _FailAtStep(1)]
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        designer.rollout(task.sample_prior(1))
+
+    assert task.current_prior is task.prior
 
 
 def _sequential_rollout(task, seed):

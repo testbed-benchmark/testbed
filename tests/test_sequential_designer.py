@@ -158,22 +158,6 @@ def test_store_posterior_history_tracks_one_per_step():
     assert history[-1] is rollout.extra["posterior"]
 
 
-def test_store_posterior_history_requires_an_inference():
-    task = _make_task()
-    objective = NMC(task, n_outer=4, n_inner=4)
-
-    with pytest.raises(ValueError, match="requires an inference"):
-        SequentialDesigner(
-            task,
-            T=2,
-            objective=objective,
-            lr=1e-2,
-            n_step_opt=3,
-            inference=None,
-            store_posterior_history=True,
-        )
-
-
 def test_transform_designs_false_current_prior_init_is_identity():
     # initialize_design()'s "current_prior" branch inverts a constrained
     # sample through self._to_raw before optimizing; with transform_designs

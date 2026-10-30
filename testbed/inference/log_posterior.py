@@ -2,7 +2,7 @@
 
 import torch
 from torch import Tensor
-from torch.distributions import TransformedDistribution, biject_to
+from torch.distributions import biject_to
 from torch.distributions.transforms import ComposeTransform, ReshapeTransform
 
 from ..core.util import squeeze_history
@@ -23,6 +23,9 @@ class LogPosterior:
     :math:`\mathbb{R}^{\mathrm{dim}}`, so an engine such as MCMC or VI can work
     with it directly, whatever constraints the prior has.
 
+    The task needs continuous parameters, for the bijection to exist, and an
+    explicit likelihood, for :meth:`~testbed.tasks.base.Task.history_logp`.
+
     Args:
         task: The task whose ``prior`` is conditioned on the history.
         y_history: Outcomes of one rollout, ``[t, *event_shape_y]``. Leading
@@ -32,6 +35,17 @@ class LogPosterior:
 
     def __init__(self, task, y_history: Tensor, design_history: Tensor):
         """Builds the raw-coordinate log posterior."""
+        name = type(task).__name__
+        if task.discrete_theta:
+            raise ValueError(
+                f"LogPosterior needs continuous theta, but {name}'s prior is "
+                "discrete; no bijection onto its support exists."
+            )
+        if task.implicit_likelihood:
+            raise ValueError(
+                f"LogPosterior needs an explicit likelihood, but {name} has an "
+                "implicit one; it needs simulation-based inference instead."
+            )
         self.task = task
         self.y_history = squeeze_history(y_history, task.event_shape_y)
         self.design_history = squeeze_history(design_history, task.event_shape_design)
@@ -53,11 +67,10 @@ class LogPosterior:
     def __call__(self, z: Tensor) -> Tensor:
         """Evaluates the log posterior of raw ``[*b, dim]``, giving ``[*b]``."""
         theta = self.transform(z)
+        batch_shape = z.shape[:-1]
+        # summed over any event dims the transform leaves, to one term per z
+        log_jacobian = self.transform.log_abs_det_jacobian(z, theta)
+        log_jacobian = log_jacobian.reshape(*batch_shape, -1).sum(-1)
+        log_prior = self.task.prior.log_prob(theta)
         log_lik = self.task.history_logp(self.y_history, self.design_history, theta)
-        # The prior in raw coordinates, with torch adding the Jacobian term. Built
-        # per call because torch can't pickle an inverse transform, and engines
-        # running chains in other processes pickle this object.
-        raw_prior = TransformedDistribution(
-            self.task.prior, [self.transform.inv], validate_args=False
-        )
-        return raw_prior.log_prob(z) + log_lik
+        return log_prior + log_jacobian + log_lik
