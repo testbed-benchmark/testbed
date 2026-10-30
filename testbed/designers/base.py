@@ -110,7 +110,10 @@ class Designer(ABC, nn.Module):
             theta (Tensor):
                 Parameter values in the likelihood used to produce the rollout. Shape ``[b, *event_shape_theta]``.
 
-        Runs ``self.hooks`` (fixed at construction) alongside the rollout.
+        Runs ``self.hooks`` (fixed at construction) alongside the rollout. A
+        hook may move the task's current prior (PosteriorUpdateHook does, after
+        every step); it goes back as it was once the rollout ends, whether or
+        not the rollout succeeded, so the task is reusable.
 
         Returns:
             Rollout:
@@ -119,6 +122,20 @@ class Designer(ABC, nn.Module):
                 design at every step, and ``policy_log_probs`` whenever its
                 proposal exposed a log-prob at every step; each key is simply
                 absent otherwise.
+        """
+        task = self.task
+        prior_before_rollout = task.current_prior
+        try:
+            return self._rollout(theta)
+        finally:
+            if task.current_prior is not prior_before_rollout:
+                task._current_prior = prior_before_rollout
+
+    def _rollout(self, theta: Tensor) -> Rollout:
+        """Runs the per-step template: hooks, propose, sample, hooks; then ``on_rollout_end``.
+
+        Hooks' ``on_rollout_end`` see the task's current prior where the steps
+        left it; :meth:`rollout` restores it afterwards.
         """
         hooks = self.hooks
         b = theta.shape[0]

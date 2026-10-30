@@ -193,6 +193,11 @@ class TorchDistribution(Distribution):
         return torch.where(self.dist.support.check(value), log_prob, -torch.inf)
 
 
+def as_distribution(dist: td.Distribution) -> Distribution:
+    """Returns ``dist`` as a testbed Distribution, wrapping a torch one."""
+    return dist if isinstance(dist, Distribution) else TorchDistribution(dist)
+
+
 class LogNormal(TorchDistribution):
     r"""Multivariate log-normal: the law of :math:`\exp(z)`, :math:`z \sim \mathcal{N}(\mu, \Sigma)`.
 

@@ -226,6 +226,46 @@ def test_history_logp_default_passes_strictly_prior_history_at_each_step():
         assert torch.equal(seen_design, design_history[:, :t])
 
 
+def _location_finding_history(b=3, T=4):
+    torch.manual_seed(0)
+    task = LocationFinding(n_sources=2, dim_theta=2)
+    theta = task.sample_prior(b)
+    design = task.design_prior.sample((b, T))
+    y_history = task.sample_outcome(theta.unsqueeze(1), design)
+    return task, y_history, design, theta
+
+
+def test_memoryless_history_logp_folds_small_batches_and_loops_large_ones(monkeypatch):
+    task, y_history, design, theta = _location_finding_history(b=3, T=4)
+    calls = []
+    for name in ("_memoryless_history_logp", "_sequential_history_logp"):
+        method = getattr(task, name)
+        monkeypatch.setattr(
+            task, name, lambda *args, m=method, n=name: calls.append(n) or m(*args)
+        )
+
+    task.max_folded_steps = 12  # exactly b * T
+    task.history_logp(y_history, design, theta)
+    task.max_folded_steps = 11
+    task.history_logp(y_history, design, theta)
+
+    assert calls == ["_memoryless_history_logp", "_sequential_history_logp"]
+
+
+def test_folded_and_looped_history_logp_agree_on_values_and_gradients():
+    task, y_history, design, theta = _location_finding_history()
+
+    def score(max_folded_steps):
+        task.max_folded_steps = max_folded_steps
+        leaves = theta.clone().requires_grad_(True), design.clone().requires_grad_(True)
+        logp = task.history_logp(y_history, leaves[1], leaves[0])
+        logp.sum().backward()
+        return logp, *(leaf.grad for leaf in leaves)
+
+    for folded, looped in zip(score(Task.max_folded_steps), score(0)):
+        torch.testing.assert_close(folded, looped)
+
+
 def test_history_logp_correct_for_history_dependent_likelihood():
     task = _AutoregressiveTask()
     b, T = 3, 4
