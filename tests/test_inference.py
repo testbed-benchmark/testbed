@@ -82,9 +82,6 @@ def test_log_posterior_uses_flat_raw_coordinates(task, dim):
 
 
 def test_log_posterior_matches_a_hand_written_change_of_variables():
-    # Pharmacokinetic's parameters are positive, so the bijection is exp and
-    # the Jacobian term is sum(z): the whole density can be written by hand,
-    # independently of torch's transform machinery.
     torch.manual_seed(0)
     task = Pharmacokinetic()
     designs = task.design_prior.sample((4,))
