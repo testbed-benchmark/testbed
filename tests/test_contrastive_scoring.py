@@ -37,7 +37,7 @@ ALL_TASKS = {**MEMORYLESS_TASKS, **DEPENDENT_TASKS}
 def _rollout(task, b, T):
     """A rollout of T random designs, scored under b prior draws."""
     theta = task.sample_prior(b)
-    design = task.design_space.sample(batch_shape=(b, T))
+    design = task.design_prior.sample((b, T))
     y = task.sample_outcome(theta.unsqueeze(1), design)
     return Rollout(theta=theta, y_history=y, design_history=design)
 

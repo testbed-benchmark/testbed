@@ -17,7 +17,7 @@ def matches_event_shape(tensor: Tensor, event_shape) -> bool:
 
     This is the predicate form of the check :func:`broadcast_and_flatten`
     raises on, for callers that want to branch rather than fail (e.g.
-    ``DesignSpace.contains``).
+    ``Task.contains_design``).
     """
     event_shape = torch.Size(event_shape)
     if tensor.ndim < len(event_shape):

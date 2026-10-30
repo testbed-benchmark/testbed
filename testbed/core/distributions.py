@@ -2,16 +2,21 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import Any
 
 import torch
+import torch.distributions as td
 from torch import Tensor, nn
 from torch.distributions import (
     Independent,
     MultivariateNormal,
     TransformedDistribution,
+    Uniform,
+    constraints,
 )
-from torch.distributions.transforms import ExpTransform
+from torch.distributions.transforms import ExpTransform, Transform
+
+from .constraints import _matches, finite_set
+from .util import matches_event_shape
 
 
 def as_sample_shape(sample_shape: int | Iterable[int]) -> torch.Size:
@@ -25,46 +30,47 @@ def as_sample_shape(sample_shape: int | Iterable[int]) -> torch.Size:
     return torch.Size(sample_shape)
 
 
-class Distribution(ABC, nn.Module):
-    """Abstract class for arbitrary distributions.
+class Distribution(ABC, nn.Module, td.Distribution):
+    """A ``torch.distributions.Distribution`` that is also an ``nn.Module``.
 
-    Shapes follow ``torch.distributions``:
+    The base for distributions written by hand, which implement ``sample`` and
+    ``log_prob`` and keep their tensors as buffers so they follow ``.to()``. For
+    anything torch provides, wrap it in :class:`TorchDistribution` instead.
 
-    - ``sample(sample_shape)`` returns ``[*sample_shape, *batch_shape, *event_shape]``.
-    - ``log_prob(value)`` maps ``[*b, *event_shape]`` to ``[*b]``, reducing over
-      exactly the event dims. ``b`` broadcasts against ``batch_shape`` and may
-      be empty.
+    Its ``batch_shape`` is always empty. Shapes follow ``torch.distributions``:
 
-    A prior over a task's parameters has ``event_shape == event_shape_theta``
-    and an empty ``batch_shape``.
+    - ``sample(sample_shape)`` returns ``[*sample_shape, *event_shape]``.
+    - ``log_prob(value)`` returns the joint log density of each draw, mapping
+      ``[*b, *event_shape]`` to ``[*b]``.
 
     Args:
         event_shape (iterable):
             Shape of a single draw.
-        batch_shape (iterable):
-            Shape of a batch of independently parameterized distributions
-            (default: ()).
     """
 
-    def __init__(
-        self, event_shape: Iterable[int], batch_shape: Iterable[int] = ()
-    ) -> None:
+    def __init__(self, event_shape: Iterable[int]) -> None:
         """Initializes the distribution."""
-        super().__init__()
-        self.event_shape = torch.Size(event_shape)
-        self.batch_shape = torch.Size(batch_shape)
+        nn.Module.__init__(self)
+        td.Distribution.__init__(
+            self, torch.Size(), torch.Size(event_shape), validate_args=False
+        )
+
+    @property
+    def support(self) -> constraints.Constraint:
+        """The constraint draws satisfy: all of real space unless overridden."""
+        return constraints.independent(constraints.real, len(self.event_shape))
 
     def _extended_shape(self, sample_shape: int | Iterable[int] = ()) -> torch.Size:
-        """Returns ``[*sample_shape, *batch_shape, *event_shape]``."""
-        return as_sample_shape(sample_shape) + self.batch_shape + self.event_shape
+        """Returns ``[*sample_shape, *event_shape]``."""
+        return as_sample_shape(sample_shape) + self.event_shape
 
     @abstractmethod
     def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
-        """Draws samples of shape ``[*sample_shape, *batch_shape, *event_shape]``."""
+        """Draws samples of shape ``[*sample_shape, *event_shape]``."""
         ...
 
     @abstractmethod
-    def log_prob(self, theta: Any) -> Tensor:
+    def log_prob(self, value: Tensor) -> Tensor:
         """Evaluates log probabilities, ``[*b, *event_shape] -> [*b]``."""
         ...
 
@@ -94,142 +100,132 @@ def _wrapped_device(dist) -> torch.device:
     return torch.device("cpu")
 
 
+def _apply_to_tensors(obj, fn, seen: set):
+    """Applies ``fn`` to every tensor a torch distribution holds, in place.
+
+    Recurses into the distributions, transforms and constraints it is built
+    from, and into lists and tuples of them. Modules are skipped, since they
+    move themselves.
+    """
+    if isinstance(obj, Tensor):
+        return fn(obj)
+    if isinstance(obj, (list, tuple)) and not isinstance(obj, torch.Size):
+        return type(obj)(_apply_to_tensors(item, fn, seen) for item in obj)
+    if (
+        isinstance(obj, (td.Distribution, Transform, constraints.Constraint))
+        and not isinstance(obj, nn.Module)
+        and id(obj) not in seen
+    ):
+        seen.add(id(obj))
+        for name, value in vars(obj).items():
+            vars(obj)[name] = _apply_to_tensors(value, fn, seen)
+    return obj
+
+
+def _skip_sample_checks(dist: td.Distribution) -> None:
+    """Stops a torch distribution, and those it is built from, raising on values outside the support."""
+    dist._validate_args = False
+    for value in vars(dist).values():
+        if isinstance(value, td.Distribution) and not isinstance(value, nn.Module):
+            _skip_sample_checks(value)
+
+
 class TorchDistribution(Distribution):
-    """Adapts torch.distributions.Distribution to our Distribution class.
+    """Adapts any ``torch.distributions.Distribution`` so that it follows ``.to()``.
 
-    A torch distribution keeps its parameters as plain attributes, which
-    ``nn.Module.to()`` cannot reach, so ``.to(device)`` leaves them where they
-    were. This wrapper tracks the requested device with a buffer instead and
-    moves what crosses its interface: samples come back on that device, and
-    values handed to ``log_prob`` are sent to the parameters' device to be
-    evaluated. Parameters of a design/prior distribution are small and the
-    transfers are per-call, so leaving them put costs little.
+    ``nn.Module.to()`` moves only parameters and buffers, but a torch
+    distribution keeps its tensors as plain attributes. This wrapper's
+    ``_apply``, which ``.to()``, ``.cuda()`` and ``.double()`` go through,
+    converts those as well, moving the wrapped distribution in place.
 
-    By default every batch dim of ``dist`` is folded into the event (via
-    ``Independent``), so that ``log_prob`` returns one value per draw. For
-    example, ``MultivariateNormal(torch.zeros(3, 2), torch.eye(2))`` has
-    ``batch_shape [3]`` and ``event_shape [2]``; wrapped, it is a single
-    distribution with ``event_shape [3, 2]`` whose ``log_prob`` sums the three
-    per-row densities.
+    Every batch dim of ``dist`` is folded into the event (via ``Independent``),
+    so that ``log_prob`` returns one value per draw. For example,
+    ``MultivariateNormal(torch.zeros(3, 2), torch.eye(2))`` has ``batch_shape
+    [3]`` and ``event_shape [2]``; wrapped, it is a single distribution with
+    ``event_shape [3, 2]`` whose ``log_prob`` sums the three per-row densities.
+
+    ``log_prob`` is ``-inf`` outside the support, so the wrapped distribution's
+    own check of ``log_prob``'s input, which would raise there, is turned off.
+    Validating its arguments, which torch does when it is built, is unaffected.
 
     Args:
         dist (torch.distributions.Distribution):
             The distribution to wrap.
-        reinterpreted_batch_ndims (int, optional):
-            How many trailing batch dims of ``dist`` to fold into the event.
-            None folds all of them; pass 0 to keep a genuinely batched
-            distribution, e.g. one posterior per history (default: None).
     """
 
-    def __init__(self, dist, reinterpreted_batch_ndims: int | None = None):
+    def __init__(self, dist: td.Distribution):
         """Wraps a torch distribution."""
-        if reinterpreted_batch_ndims is None:
-            reinterpreted_batch_ndims = len(dist.batch_shape)
-        if reinterpreted_batch_ndims > 0:
-            dist = Independent(dist, reinterpreted_batch_ndims)
-        super().__init__(dist.event_shape, dist.batch_shape)
+        if dist.batch_shape:
+            dist = Independent(dist, len(dist.batch_shape))
+        _skip_sample_checks(dist)
+        super().__init__(dist.event_shape)
         self.dist = dist
-        # Empty, non-persistent (so it stays out of state_dict) and carries no
-        # data: it exists only because .to() moves buffers, which is what gives
-        # this wrapper a device to track. Starts where the wrapped
-        # distribution's parameters are, so an untouched wrapper reports the
-        # device it was built on.
+        # Empty and non-persistent: a buffer that .to() moves, so that this
+        # module, and a task holding it, report the wrapped distribution's device.
         self.register_buffer(
             "_device_tracker",
             torch.empty(0, device=_wrapped_device(dist)),
             persistent=False,
         )
 
+    def _apply(self, fn, recurse=True):
+        """Converts the wrapped distribution's tensors along with the buffers."""
+        super()._apply(fn, recurse)
+        _apply_to_tensors(self.dist, fn, set())
+        return self
+
     @property
-    def device(self) -> torch.device:
-        """Returns the device this distribution produces samples on."""
-        return self._device_tracker.device
+    def support(self) -> constraints.Constraint:
+        """The wrapped distribution's support."""
+        return self.dist.support
 
     def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples from the wrapped distribution."""
-        return self.dist.sample(as_sample_shape(sample_shape)).to(self.device)
+        return self.dist.sample(as_sample_shape(sample_shape))
 
-    def log_prob(self, theta: Tensor) -> Tensor:
-        """Evaluates log probabilities under the wrapped distribution."""
-        log_prob = self.dist.log_prob(theta.to(_wrapped_device(self.dist)))
-        return log_prob.to(self.device)
+    def log_prob(self, value: Tensor) -> Tensor:
+        """Evaluates log probabilities; ``-inf`` outside the support.
+
+        Torch's own may be NaN there instead, e.g. log of a negative number.
+        """
+        value = value.to(self.device)
+        log_prob = self.dist.log_prob(value)
+        return torch.where(self.dist.support.check(value), log_prob, -torch.inf)
 
 
-class LogNormal(Distribution):
-    r"""Multivariate log-normal distribution.
-
-    The distribution of :math:`\exp(z)` for :math:`z \sim \mathcal{N}(\mu, \Sigma)`,
-    for parameters constrained to be positive. Torch has no native multivariate
-    log-normal, so this wraps a ``MultivariateNormal`` in an ``ExpTransform``.
+class LogNormal(TorchDistribution):
+    r"""Multivariate log-normal: the law of :math:`\exp(z)`, :math:`z \sim \mathcal{N}(\mu, \Sigma)`.
 
     Args:
         loc (Tensor):
-            Mean :math:`\mu` of the underlying normal. Shape ``[*batch, d]``.
+            Mean :math:`\mu` of the underlying normal. Shape ``[d]``.
         cov (Tensor):
-            Covariance :math:`\Sigma` of the underlying normal. Shape
-            ``[*batch, d, d]``. Leading dims of ``loc`` and ``cov`` broadcast
-            to the ``batch_shape``.
+            Covariance :math:`\Sigma` of the underlying normal. Shape ``[d, d]``.
     """
 
     def __init__(self, loc: Tensor, cov: Tensor) -> None:
-        """Initializes the underlying normal's parameters."""
-        loc = torch.as_tensor(loc)
-        cov = torch.as_tensor(cov)
-        super().__init__(
-            event_shape=loc.shape[-1:],
-            batch_shape=torch.broadcast_shapes(loc.shape[:-1], cov.shape[:-2]),
-        )
-
-        self.register_buffer("loc", loc)
-        self.register_buffer("cov", cov)
-
-    @property
-    def dim(self) -> int:
-        """Dimension of a single draw."""
-        return self.event_shape[0]
-
-    @property
-    def lognormal(self) -> torch.distributions.Distribution:
-        """The distribution as an exp-transformed ``MultivariateNormal``."""
-        mvn = MultivariateNormal(self.loc, covariance_matrix=self.cov)
-        return TransformedDistribution(mvn, [ExpTransform()])
-
-    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
-        """Draws samples.
-
-        Args:
-            sample_shape (int or iterable):
-                Shape of the batch of draws (default: ()).
-
-        Returns:
-            Tensor:
-                Samples, shape ``[*sample_shape, *batch_shape, d]``.
-        """
-        return self.lognormal.sample(as_sample_shape(sample_shape))
-
-    def log_prob(self, theta: Tensor) -> Tensor:
-        """Evaluates log probabilities.
-
-        Args:
-            theta (Tensor):
-                Points at which to evaluate the log-probability. Shape ``[..., d]``.
-
-        Returns:
-            Tensor:
-                Log probs, shape ``[...,]``.
-        """
-        return self.lognormal.log_prob(theta)
+        """Builds an exp-transformed ``MultivariateNormal``."""
+        normal = MultivariateNormal(torch.as_tensor(loc), torch.as_tensor(cov))
+        super().__init__(TransformedDistribution(normal, [ExpTransform()]))
 
 
 class EmpiricalDistribution(Distribution):
-    """Base class for empirical distributions (i.e., implicitly defined by samples)."""
+    """Weighted points, e.g. posterior samples or a finite set of designs.
+
+    Its support is the finite set of points, so as a design prior it makes the
+    design space discrete, with :meth:`encode` / :meth:`decode` converting
+    between a design and its index.
+
+    Args:
+        locs (Tensor):
+            The points, shape ``[n, *event_shape]``.
+        weights (Tensor, optional):
+            Non-negative weights, not necessarily normalized, shape ``[n]`` or
+            ``[n, 1]``. None means uniform (default: None).
+    """
 
     def __init__(self, locs: Tensor, weights: Tensor | None = None) -> None:
-        """Initializes weighted sample locations.
-
-        locs: [b, *shape].
-        weights: [b] or [b, 1], non-negative and not necessarily normalized.
-        """
+        """Initializes weighted sample locations."""
         super().__init__(event_shape=locs.shape[1:])
 
         if weights is None:
@@ -237,6 +233,17 @@ class EmpiricalDistribution(Distribution):
         assert torch.all(weights >= 0), "Weights must be non-negative."
         self.register_buffer("locs", locs)
         self.register_buffer("weights", weights.reshape(-1))
+
+    @property
+    def support(self) -> constraints.Constraint:
+        """The finite set of points."""
+        return finite_set(self.locs)
+
+    @property
+    def ess(self) -> Tensor:
+        """Effective sample size, ``1 / sum(w**2)`` for normalized weights."""
+        weights = self.weights / self.weights.sum()
+        return 1.0 / (weights**2).sum()
 
     def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Samples from the empirical distribution.
@@ -258,3 +265,104 @@ class EmpiricalDistribution(Distribution):
     def log_prob(self, z: Tensor) -> Tensor:
         """Raises because empirical log probabilities are unsupported."""
         raise NotImplementedError("EmpiricalPrior does not support log_prob.")
+
+    def encode(self, value: Tensor) -> Tensor:
+        """Maps points in the set to their indices.
+
+        Args:
+            value: Points with trailing shape ``event_shape``.
+
+        Returns:
+            Indices with the points' batch shape.
+
+        Raises:
+            ValueError: If a point is not in the set.
+        """
+        value = torch.as_tensor(value)
+        if not matches_event_shape(value, self.event_shape):
+            raise ValueError(
+                f"Value must have trailing shape {tuple(self.event_shape)}; "
+                f"got shape {tuple(value.shape)}."
+            )
+        matches = _matches(self.locs, value)
+        if not matches.any(dim=-1).all():
+            raise ValueError("Value is outside the finite set.")
+        return matches.to(torch.long).argmax(dim=-1)
+
+    def decode(self, index: Tensor) -> Tensor:
+        """Maps indices to points in the set.
+
+        Args:
+            index: Integer-valued indices.
+
+        Returns:
+            Points with shape ``[*index.shape, *event_shape]``.
+
+        Raises:
+            ValueError: If an index is not an integer in range.
+        """
+        index = torch.as_tensor(index)
+        if not torch.equal(index, index.round()):
+            raise ValueError("Index must be integer-valued.")
+        if torch.any((index < 0) | (index >= self.locs.shape[0])):
+            raise ValueError("Index is outside the finite set.")
+        return self.locs.to(device=index.device)[index.long()]
+
+
+class Box(TorchDistribution):
+    """Uniform distribution on the box ``low <= x <= high``.
+
+    As a design prior it makes the design space that box, which the default
+    design transform maps raw designs onto with tanh.
+
+    Args:
+        low (Tensor or float):
+            Lower bounds, broadcast against ``high`` and ``event_shape``.
+        high (Tensor or float):
+            Upper bounds, broadcast against ``low`` and ``event_shape``.
+        event_shape (iterable):
+            Shape of a single draw.
+    """
+
+    def __init__(self, low, high, event_shape) -> None:
+        """Builds an ``Independent(Uniform)`` between the bounds."""
+        event_shape = torch.Size(event_shape)
+        low = torch.as_tensor(low)
+        high = torch.as_tensor(high, device=low.device)
+
+        # Integer bounds are legitimate input for a continuous box, so promote
+        # to a float dtype rather than sampling/comparing in integer arithmetic.
+        dtype = torch.promote_types(low.dtype, high.dtype)
+        if not torch.is_floating_point(torch.empty((), dtype=dtype)):
+            dtype = torch.get_default_dtype()
+        low = low.to(dtype).broadcast_to(event_shape).clone()
+        high = high.to(dtype).broadcast_to(event_shape).clone()
+        if torch.any(low > high):
+            raise ValueError("Box requires low <= high.")
+
+        # torch's Uniform rejects low == high, but a zero-width box is allowed
+        uniform = Uniform(low, high, validate_args=False)
+        super().__init__(Independent(uniform, len(event_shape)))
+
+    def log_prob(self, value: Tensor) -> Tensor:
+        """Minus the log volume inside the closed box, ``-inf`` outside.
+
+        Torch's ``Uniform`` is half-open, so its density is ``-inf`` at
+        ``high``, where projecting designs onto the box puts them. A
+        zero-width dimension pins a coordinate rather than spreading mass over
+        it, so it contributes no volume.
+        """
+        value = value.to(self.device)
+        width = self.high - self.low
+        log_volume = torch.where(width > 0, torch.log(width), 0.0).sum()
+        return torch.where(self.support.check(value), -log_volume, -torch.inf)
+
+    @property
+    def low(self) -> Tensor:
+        """Lower bounds, shape ``event_shape``."""
+        return self.dist.base_dist.low
+
+    @property
+    def high(self) -> Tensor:
+        """Upper bounds, shape ``event_shape``."""
+        return self.dist.base_dist.high

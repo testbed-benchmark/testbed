@@ -10,5 +10,5 @@ task:
   # L = 0.1 I: the SDE drives both angles and both angular velocities.
   noise_scale: [0.1, 0.1, 0.1, 0.1]
   prior: null  # use the standard log-normal prior on (m1, m2, l1, l2)
-  design_space: null  # derive the standard torque ranges, -4 to 4 and -2 to 2
+  design_prior: null  # derive the standard torque ranges, -4 to 4 and -2 to 2
   reparameterize_outcomes: true  # Gaussian noise on a differentiable drift

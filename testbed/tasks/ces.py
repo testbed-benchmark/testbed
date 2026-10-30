@@ -17,10 +17,10 @@ from collections.abc import Iterable
 
 import torch
 from torch import Tensor
-from torch.distributions import Beta, Dirichlet, LogNormal
+from torch.distributions import Beta, Dirichlet, LogNormal, constraints
 
-from ..core.design_spaces import BoxDesignSpace, DesignSpace
-from ..core.distributions import Distribution, as_sample_shape
+from ..core.constraints import blocks
+from ..core.distributions import Box, Distribution, as_sample_shape
 from ..core.util import normal_log_prob
 from .base import Task
 
@@ -99,6 +99,18 @@ class CESPrior(Distribution):
         """Distribution for the scale u."""
         return LogNormal(self.u_loc, self.u_scale)
 
+    @property
+    def support(self) -> constraints.Constraint:
+        """``rho`` in ``(0.01, 1)``, ``alpha`` on the simplex and ``u > 0``."""
+        return blocks(
+            [
+                constraints.interval(0.01, 1.0),
+                constraints.simplex,
+                constraints.positive,
+            ],
+            [1, 3, 1],
+        )
+
     def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples from the prior distribution.
 
@@ -157,9 +169,9 @@ class CES(Task):
             Censoring bound on the sigmoid output (default: 2**-22).
         prior (Distribution, optional):
             Prior distribution of the parameters.
-        design_space (DesignSpace, optional):
-            Controls the design parametrization. If None, a
-            :class:`~testbed.core.design_spaces.BoxDesignSpace` over
+        design_prior (Distribution, optional):
+            Distribution of random designs; its support is the design space.
+            If None, a :class:`~testbed.core.distributions.Box` over
             ``[0, 100]^6`` is used.
     """
 
@@ -173,24 +185,22 @@ class CES(Task):
         tau: float = 0.005,
         epsilon: float = 2**-22,
         prior=None,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the CES task."""
         if prior is None:
             prior = CESPrior()
 
-        if design_space is None:
-            design_space = BoxDesignSpace(
-                low=BASKET_LOW, high=BASKET_HIGH, event_shape=[6]
-            )
+        if design_prior is None:
+            design_prior = Box(low=BASKET_LOW, high=BASKET_HIGH, event_shape=[6])
 
         super().__init__(
             event_shape_y=[1],
             event_shape_theta=[5],
             event_shape_design=[6],
             prior=prior,
-            design_space=design_space,
+            design_prior=design_prior,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 

@@ -26,11 +26,11 @@ designer = PolicyDesigner(task, T=5, design_net=policy)
 ```
 
 By default, `PolicyDesigner` treats proposals as raw coordinates, transforms them
-through `task.design_space`, and stores both coordinate systems: physical designs in
+through `task.design_transform`, and stores both coordinate systems: physical designs in
 `rollout.design_history` and raw designs in `rollout.extra["raw_design_history"]`.
 For stochastic raw proposals it also corrects the proposal log probability for that
 transform. Set `transform_designs=False` only when a policy already returns valid
-physical designs. A categorical policy over `FiniteDesignSpace` does this by design;
+physical designs. A categorical policy over a finite design set (an `EmpiricalDistribution`) does this by design;
 it declares its proposals as physical and is handled automatically.
 
 `GaussianPolicyNet` supports `reparameterize_policy=True`, which requests pathwise

@@ -2,8 +2,9 @@
 
 import pytest
 import torch
+from torch.distributions import Normal, constraints
+from torch.distributions.transforms import Transform
 
-from testbed.core.design_spaces import DefaultDesignSpace
 from testbed.core.distributions import TorchDistribution
 from testbed.core.hooks import RolloutHook
 from testbed.designers import RandomDesigner
@@ -35,7 +36,7 @@ def test_defaults_to_the_design_space_and_produces_valid_designs():
     rollout = designer.rollout(task.sample_prior(4))
 
     assert rollout.design_history.shape == (4, 3, *task.event_shape_design)
-    assert task.design_space.contains(rollout.design_history)
+    assert task.contains_design(rollout.design_history)
 
 
 def test_design_space_default_works_for_a_discrete_space():
@@ -47,7 +48,7 @@ def test_design_space_default_works_for_a_discrete_space():
 
     rollout = designer.rollout(task.sample_prior(4))
 
-    assert task.design_space.contains(rollout.design_history)
+    assert task.contains_design(rollout.design_history)
 
 
 def test_design_space_default_reports_no_policy_log_probs():
@@ -82,22 +83,26 @@ def test_random_designer_reports_raw_design_history():
 
         raw = rollout.extra["raw_design_history"]
         assert raw.shape == rollout.design_history.shape
-        torch.testing.assert_close(
-            task.design_space.to_design(raw), rollout.design_history
-        )
+        torch.testing.assert_close(task.design_transform(raw), rollout.design_history)
 
 
 def test_random_designer_reports_no_raw_design_history_without_an_inverse():
-    # Every built-in design space is invertible, so this is the contract for a
-    # custom one that is not: the key stays absent and callers fall back to
-    # physical designs, rather than the rollout failing.
-    class _NoInverseSpace(DefaultDesignSpace):
-        def _to_raw(self, design):
-            raise NotImplementedError
+    # Every built-in design transform is invertible, so this is the contract
+    # for a custom one that is not: the key stays absent and callers fall back
+    # to physical designs, rather than the rollout failing.
+    class _NoInverse(Transform):
+        domain = codomain = constraints.independent(constraints.real, 1)
+        bijective = True
+
+        def _call(self, x):
+            return x
+
+    # a design prior sets its parametrisation by defining a transform
+    design_prior = TorchDistribution(Normal(torch.zeros(2), 1.0))
+    design_prior.transform = _NoInverse()
 
     torch.manual_seed(0)
-    task = make_task()
-    task.design_space = _NoInverseSpace(task.event_shape_design)
+    task = LocationFinding(n_sources=1, dim_theta=2, design_prior=design_prior)
 
     rollout = RandomDesigner(task, T=3).rollout(task.sample_prior(4))
 

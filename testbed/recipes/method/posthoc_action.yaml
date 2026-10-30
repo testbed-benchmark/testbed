@@ -19,7 +19,7 @@ designer:
 designer_run_dir: null
 
 # false: the action net conditions on physical designs; true: on the raw
-# designs the designer emitted, before task.design_space.to_design; null:
+# designs the designer emitted, before task.design_transform; null:
 # follow the designer's own convention.
 use_raw_history: null
 

@@ -1,115 +1,76 @@
 import pytest
 import torch
+from torch.distributions import Normal, constraints
+from torch.distributions.transforms import ExpTransform, Transform
 
-from testbed.core.design_spaces import (
-    BoxDesignSpace,
-    DefaultDesignSpace,
-    DesignSpace,
-    FiniteDesignSpace,
-)
-from testbed.tasks.temporal_discounting import TDDesignSpace
-
-
-class PositiveSpace(DesignSpace):
-    """Minimal subclass: implements only the required _contains."""
-
-    def __init__(self, event_shape):
-        super().__init__(event_shape, is_discrete=False)
-
-    def _contains(self, design):
-        return bool(torch.all(design > 0).item())
+from testbed.core import Box, EmpiricalDistribution, TorchDistribution
+from testbed.core.constraints import default_design_transform, in_support
+from testbed.core.distributions import Distribution
+from testbed.envs.bed_env import _project
+from testbed.tasks import LinearRegression, LocationFinding, PreyPopulation
+from testbed.tasks.temporal_discounting import TDDesignPrior, TDDesignTransform
 
 
-class ExpSpace(DesignSpace):
-    """Positive space via an exp reparametrisation, with its log-det."""
+class PositivePrior(Distribution):
+    """Minimal design prior over positive designs; only declares its support."""
 
     def __init__(self, event_shape):
-        super().__init__(event_shape, is_discrete=False)
+        super().__init__(event_shape=event_shape)
 
-    def _contains(self, design):
-        return bool(torch.all(design > 0).item())
+    @property
+    def support(self):
+        return constraints.independent(constraints.positive, len(self.event_shape))
 
-    def _to_design(self, raw_design):
-        return torch.exp(raw_design)
+    def sample(self, sample_shape=()):
+        return torch.rand(self._extended_shape(sample_shape)) + 0.5
 
-    def _to_raw(self, design):
-        return torch.log(design)
+    def log_prob(self, x):
+        raise NotImplementedError
 
-    def _log_det_jacobian(self, raw_design):
-        return self._sum_event_dims(raw_design)
+
+def _standard_normal(event_shape):
+    return TorchDistribution(Normal(torch.zeros(event_shape), 1.0))
+
+
+def _autograd_log_det(transform, raw):
+    """Log |det J| of transform at a single raw point, via autograd."""
+    jacobian = torch.autograd.functional.jacobian(transform, raw)
+    return torch.linalg.slogdet(jacobian)[1]
 
 
 # ---------------------------------------------------------------------------
-# DesignSpace base contract
+# Membership
 # ---------------------------------------------------------------------------
 
 
-def test_subclass_only_needs_contains():
-    space = PositiveSpace(event_shape=(2,))
+def test_in_support_is_all_or_nothing_over_a_batch():
+    support = PositivePrior((2,)).support
 
-    assert space.contains(torch.tensor([1.0, 2.0]))
-    assert not space.contains(torch.tensor([1.0, -2.0]))
-
-
-def test_unimplemented_optional_methods_raise_rather_than_defaulting():
-    # A space that does not project or reparametrise must say so: an identity
-    # default would silently hand back an invalid design as if it were valid.
-    space = PositiveSpace(event_shape=(2,))
-    design = torch.tensor([1.0, -2.0])
-
-    with pytest.raises(NotImplementedError):
-        space.project(design)
-    with pytest.raises(NotImplementedError):
-        space.to_design(design)
-    with pytest.raises(NotImplementedError):
-        space.to_raw(design)
-
-
-def test_contains_checks_shape_without_subclass_help():
-    # PositiveSpace never looks at shape; the base class does it.
-    space = PositiveSpace(event_shape=(2,))
-
-    assert space.contains(torch.ones(5, 4, 2))  # leading dims are batch
-    assert not space.contains(torch.ones(3))
-    assert not space.contains(torch.ones(5, 1))
-    assert not space.contains(torch.tensor(1.0))
-
-
-def test_contains_is_all_or_nothing_over_a_batch():
-    space = PositiveSpace(event_shape=(2,))
-
-    assert space.contains(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+    assert in_support(support, torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
     # One bad element in the batch fails the whole batch.
-    assert not space.contains(torch.tensor([[1.0, 2.0], [3.0, -4.0]]))
+    assert not in_support(support, torch.tensor([[1.0, 2.0], [3.0, -4.0]]))
 
 
-def test_contains_accepts_non_tensor_input():
-    space = PositiveSpace(event_shape=(2,))
+def test_unconstrained_support_accepts_any_value():
+    support = _standard_normal((2,)).support
 
-    assert space.contains([1.0, 2.0])
-    assert not space.contains([1.0, -2.0])
-
-
-def test_subclass_must_implement_contains():
-    class NoContains(DesignSpace):
-        pass
-
-    with pytest.raises(TypeError):
-        NoContains(event_shape=(2,), is_discrete=False)
+    assert in_support(support, torch.tensor([-1e30, 1e30]))
+    assert in_support(support, torch.tensor([float("nan"), float("inf")]))
 
 
-def test_sample_raises_by_default():
-    space = PositiveSpace(event_shape=(2,))
+def test_contains_design_checks_shape():
+    task = LocationFinding(n_sources=1, dim_theta=2)
 
-    with pytest.raises(NotImplementedError, match="PositiveSpace"):
-        space.sample()
+    assert task.contains_design(torch.ones(5, 4, 2))  # leading dims are batch
+    assert task.contains_design([1.0, 2.0])  # non-tensor input
+    assert not task.contains_design(torch.ones(3))
+    assert not task.contains_design(torch.ones(5, 1))
+    assert not task.contains_design(torch.tensor(1.0))
 
 
-def test_event_shape_is_normalized_to_a_size():
-    space = PositiveSpace(event_shape=[2, 3])
-
-    assert space.event_shape == torch.Size([2, 3])
-    assert space.is_discrete is False
+def test_task_rejects_a_design_prior_of_the_wrong_shape():
+    with pytest.raises(ValueError, match="event_shape_design"):
+        LocationFinding(n_sources=1, dim_theta=2, design_prior=_standard_normal((3,)))
 
 
 # ---------------------------------------------------------------------------
@@ -117,333 +78,284 @@ def test_event_shape_is_normalized_to_a_size():
 # ---------------------------------------------------------------------------
 
 
-def _autograd_log_det(space, raw):
-    """Log |det J| of space.to_design at a single raw point, via autograd."""
-    jacobian = torch.autograd.functional.jacobian(space.to_design, raw)
-    return torch.linalg.slogdet(jacobian)[1]
+def test_default_transform_follows_biject_to():
+    transform = default_design_transform(PositivePrior((2,)).support)
+    raw = torch.tensor([0.3, -1.2])
+
+    assert torch.allclose(transform(raw), torch.exp(raw))
+    assert torch.allclose(
+        transform.log_abs_det_jacobian(raw, transform(raw)),
+        _autograd_log_det(transform, raw),
+    )
 
 
-def test_to_design_without_log_prob_returns_a_bare_tensor():
-    space = ExpSpace(event_shape=(2,))
+def test_transform_without_log_det_jacobian_raises_rather_than_silently_wrong():
+    class Forgetful(ExpTransform):
+        def log_abs_det_jacobian(self, x, y):
+            return Transform.log_abs_det_jacobian(self, x, y)
+
     raw = torch.randn(4, 2)
 
-    design = space.to_design(raw)
-
-    assert isinstance(design, torch.Tensor)
-    assert torch.allclose(design, torch.exp(raw))
-
-
-def test_to_design_applies_the_change_of_variables():
-    space = ExpSpace(event_shape=(2,))
-    raw = torch.randn(4, 2)
-    log_prob = torch.randn(4)
-
-    design, new_log_prob = space.to_design(raw, log_prob)
-
-    assert torch.allclose(design, torch.exp(raw))
-    assert new_log_prob.shape == (4,)
-    assert torch.allclose(new_log_prob, log_prob - raw.sum(-1))
+    assert torch.allclose(Forgetful()(raw), torch.exp(raw))  # still fine
+    with pytest.raises(NotImplementedError):
+        Forgetful().log_abs_det_jacobian(raw, torch.exp(raw))
 
 
-def test_to_raw_inverts_the_change_of_variables():
-    space = ExpSpace(event_shape=(2,))
-    raw = torch.randn(4, 2)
-    log_prob = torch.randn(4)
-
-    design, design_log_prob = space.to_design(raw, log_prob)
-    round_trip, round_trip_log_prob = space.to_raw(design, design_log_prob)
-
-    assert torch.allclose(round_trip, raw, atol=1e-6)
-    assert torch.allclose(round_trip_log_prob, log_prob, atol=1e-6)
-
-
-def test_identity_space_change_of_variables_is_a_no_op():
-    space = DefaultDesignSpace(event_shape=(3,))
-    raw = torch.randn(5, 3)
-    log_prob = torch.randn(5)
-
-    design, new_log_prob = space.to_design(raw, log_prob)
-
-    assert torch.equal(design, raw)
-    assert torch.equal(new_log_prob, log_prob)
-
-
-def test_identity_space_log_det_is_zeros_with_batch_shape():
-    space = DefaultDesignSpace(event_shape=(2, 3))
+def test_unconstrained_transform_is_the_identity_with_zero_log_det():
+    transform = default_design_transform(_standard_normal((2, 3)).support)
     raw = torch.randn(4, 5, 2, 3)
 
-    log_det = space._log_det_jacobian(raw)
+    log_det = transform.log_abs_det_jacobian(raw, transform(raw))
 
+    assert torch.equal(transform(raw), raw)
     assert log_det.shape == (4, 5)
     assert torch.all(log_det == 0)
 
 
-def test_transform_without_log_det_jacobian_raises_rather_than_silently_wrong():
-    # A subclass that reparametrises but forgets _log_det_jacobian would
-    # otherwise get a zero correction, i.e. silently wrong log-probs.
-    class Forgetful(DesignSpace):
-        def __init__(self):
-            super().__init__((2,), is_discrete=False)
-
-        def _contains(self, design):
-            return True
-
-        def _to_design(self, raw_design):
-            return torch.exp(raw_design)
-
-    space = Forgetful()
-    raw = torch.randn(4, 2)
-
-    assert torch.allclose(space.to_design(raw), torch.exp(raw))  # still fine
-    with pytest.raises(NotImplementedError):
-        space.to_design(raw, torch.zeros(4))
-
-
-def test_exp_space_log_det_matches_autograd():
-    space = ExpSpace(event_shape=(2,))
-    raw = torch.tensor([0.3, -1.2])
-
-    assert torch.allclose(space._log_det_jacobian(raw), _autograd_log_det(space, raw))
-
-
 def test_box_log_det_matches_autograd():
-    space = BoxDesignSpace(
-        torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,)
-    )
+    box = Box(torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,))
+    transform = default_design_transform(box.support)
     raw = torch.tensor([0.4, -0.9])
 
-    assert torch.allclose(space._log_det_jacobian(raw), _autograd_log_det(space, raw))
+    assert torch.allclose(
+        transform.log_abs_det_jacobian(raw, transform(raw)),
+        _autograd_log_det(transform, raw),
+    )
 
 
 def test_td_log_det_matches_autograd():
-    space = TDDesignSpace(log_k_mean=-3.0)
+    transform = TDDesignTransform(log_k_mean=-3.0)
     raw = torch.tensor([0.7, -0.4])
 
-    assert torch.allclose(space._log_det_jacobian(raw), _autograd_log_det(space, raw))
+    assert torch.allclose(
+        transform.log_abs_det_jacobian(raw, transform(raw)),
+        _autograd_log_det(transform, raw),
+    )
 
 
 # ---------------------------------------------------------------------------
-# DefaultDesignSpace
+# Standard normal (the default)
 # ---------------------------------------------------------------------------
 
 
-def test_default_design_space_constrains_shape_only():
-    space = DefaultDesignSpace(event_shape=(2,))
+def test_standard_normal_samples_requested_shape():
+    prior = _standard_normal((2,))
 
-    assert space.contains(torch.tensor([-1e30, 1e30]))
-    assert not space.contains(torch.ones(3))
+    assert prior.sample().shape == (2,)
+    assert prior.sample((4,)).shape == (4, 2)
+    assert prior.sample((4, 3)).shape == (4, 3, 2)
 
 
-def test_default_design_space_samples_requested_batch_shape():
-    space = DefaultDesignSpace(event_shape=(2,))
+def test_standard_normal_is_the_default_design_prior():
+    task = LocationFinding(n_sources=1, dim_theta=2)
 
-    assert space.sample().shape == (2,)
-    assert space.sample((4,)).shape == (4, 2)
-    assert space.sample((4, 3)).shape == (4, 3, 2)
+    assert isinstance(task.design_prior.dist.base_dist, Normal)
+    assert task.design_prior.event_shape == torch.Size([2])
 
 
 # ---------------------------------------------------------------------------
-# BoxDesignSpace
+# Box
 # ---------------------------------------------------------------------------
 
 
-def test_box_design_space_samples_with_integer_bounds():
-    space = BoxDesignSpace(-1, 1, event_shape=(2,))
+def test_box_samples_with_integer_bounds():
+    box = Box(-1, 1, event_shape=(2,))
 
-    sample = space.sample((4,))
+    sample = box.sample((4,))
 
     assert torch.is_floating_point(sample)
     assert sample.shape == (4, 2)
-    assert space.contains(sample)
+    assert in_support(box.support, sample)
 
 
-def test_box_design_space_rejects_invalid_bounds_and_shapes():
+def test_box_rejects_invalid_bounds():
     with pytest.raises(ValueError):
-        BoxDesignSpace(
-            torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), event_shape=(2,)
-        )
+        Box(torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), event_shape=(2,))
 
-    space = BoxDesignSpace(
-        torch.tensor([-1.0, 0.0]), torch.tensor([1.0, 2.0]), event_shape=(2,)
-    )
 
-    assert space.event_shape == torch.Size([2])
-    assert space.contains(torch.tensor([[0.0, 1.0], [1.0, 2.0]]))
-    assert not space.contains(torch.tensor([0.0, 1.0, 2.0]))
-    assert not space.contains(torch.tensor([0.0, 3.0]))
+def test_box_support_and_projection():
+    box = Box(torch.tensor([-1.0, 0.0]), torch.tensor([1.0, 2.0]), event_shape=(2,))
+
+    assert box.event_shape == torch.Size([2])
+    assert in_support(box.support, torch.tensor([[0.0, 1.0], [1.0, 2.0]]))
+    assert not in_support(box.support, torch.tensor([0.0, 3.0]))
     assert torch.equal(
-        space.project(torch.tensor([-2.0, 3.0])),
-        torch.tensor([-1.0, 2.0]),
+        _project(box.support, torch.tensor([-2.0, 3.0])), torch.tensor([-1.0, 2.0])
     )
 
 
+def test_box_to_design_lands_in_the_box_and_round_trips():
+    box = Box(torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,))
+    transform = default_design_transform(box.support)
+    raw = torch.randn(64, 2)
+
+    design = transform(raw)
+
+    bias, scale = torch.tensor([1.0, 5.0]), torch.tensor([3.0, 2.0])
+    assert torch.allclose(design, bias + scale * torch.tanh(raw))
+    assert in_support(box.support, design)
+    assert torch.allclose(transform.inv(design), raw, atol=1e-4)
+
+
+def test_box_inverse_is_finite_on_the_boundary():
+    box = Box(0.0, 24.0, event_shape=(1,))
+    transform = default_design_transform(box.support)
+
+    raw = transform.inv(torch.tensor([[0.0], [24.0]]))
+
+    assert torch.isfinite(raw).all()
+
+
+def test_box_reparametrisation_requires_finite_positive_width():
+    degenerate = Box(1.0, 1.0, event_shape=(2,))
+
+    # A zero-width box is still a legitimate space for membership.
+    assert in_support(degenerate.support, torch.ones(2))
+    with pytest.raises(ValueError, match="finite bounds"):
+        default_design_transform(degenerate.support)
+
+
 # ---------------------------------------------------------------------------
-# FiniteDesignSpace
+# Finite design sets
 # ---------------------------------------------------------------------------
 
 
-def _finite_space():
-    return FiniteDesignSpace(torch.tensor([[0.0, 0.0], [1.0, 2.0], [3.0, 4.0]]))
+def _finite_set():
+    return EmpiricalDistribution(torch.tensor([[0.0, 0.0], [1.0, 2.0], [3.0, 4.0]]))
 
 
-def test_finite_design_space_encodes_and_decodes_physical_designs():
-    space = FiniteDesignSpace(torch.tensor([[1.0], [5.0], [10.0]]))
+def test_finite_set_encodes_and_decodes_physical_designs():
+    designs_set = EmpiricalDistribution(torch.tensor([[1.0], [5.0], [10.0]]))
 
     designs = torch.tensor([[10.0], [1.0], [5.0]])
-    indices = space.encode(designs)
+    indices = designs_set.encode(designs)
 
-    assert space.n_designs == 3
-    assert space.contains(designs)
+    assert in_support(designs_set.support, designs)
     assert torch.equal(indices, torch.tensor([2, 0, 1]))
-    assert torch.equal(space.decode(indices), designs)
-    assert not space.contains(torch.tensor([[2.0]]))
-    with pytest.raises(ValueError, match="integer-valued"):
-        space.decode(torch.tensor([0.5]))
+    assert torch.equal(designs_set.decode(indices), designs)
+    assert not in_support(designs_set.support, torch.tensor([[2.0]]))
 
 
-@pytest.mark.parametrize("values", [torch.tensor([]), torch.tensor([[1.0], [1.0]])])
-def test_finite_design_space_rejects_empty_or_duplicate_actions(values):
-    with pytest.raises(ValueError):
-        FiniteDesignSpace(values)
+def test_finite_set_derives_shape_and_discreteness():
+    designs_set = _finite_set()
+
+    assert designs_set.event_shape == torch.Size([2])
+    assert designs_set.locs.shape[0] == 3
+    assert designs_set.support.is_discrete
 
 
-def test_finite_design_space_derives_shape_and_discreteness():
-    space = _finite_space()
+def test_finite_set_membership():
+    support = _finite_set().support
 
-    assert space.event_shape == torch.Size([2])
-    assert space.n_designs == 3
-    assert space.is_discrete is True
-
-
-def test_finite_design_space_rejects_empty_and_duplicate_values():
-    with pytest.raises(ValueError, match="at least one design"):
-        FiniteDesignSpace(torch.zeros(0, 2))
-    with pytest.raises(ValueError, match="unique"):
-        FiniteDesignSpace(torch.tensor([[1.0, 2.0], [1.0, 2.0]]))
+    assert in_support(support, torch.tensor([1.0, 2.0]))
+    assert in_support(support, torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+    assert not in_support(support, torch.tensor([1.0, 5.0]))
 
 
-def test_finite_design_space_contains_uses_the_base_shape_check():
-    space = _finite_space()
+def test_finite_set_encode_decode_handle_unbatched_designs():
+    designs_set = _finite_set()
 
-    assert space.contains(torch.tensor([1.0, 2.0]))
-    assert space.contains(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
-    assert not space.contains(torch.tensor([1.0, 5.0]))  # not in the set
-    assert not space.contains(torch.tensor([1.0, 2.0, 3.0]))  # wrong event shape
-
-
-def test_finite_design_space_encode_decode_round_trip():
-    space = _finite_space()
-    designs = torch.tensor([[3.0, 4.0], [0.0, 0.0]])
-
-    index = space.encode(designs)
-
-    assert torch.equal(index, torch.tensor([2, 0]))
-    assert torch.equal(space.decode(index), designs)
-
-
-def test_finite_design_space_encode_decode_handle_unbatched_designs():
-    space = _finite_space()
-
-    index = space.encode(torch.tensor([1.0, 2.0]))
+    index = designs_set.encode(torch.tensor([1.0, 2.0]))
 
     assert index.shape == ()
-    assert space.decode(index).shape == (2,)
+    assert designs_set.decode(index).shape == (2,)
 
 
-def test_finite_design_space_encode_rejects_invalid_designs():
-    space = _finite_space()
+def test_finite_set_encode_rejects_invalid_designs():
+    designs_set = _finite_set()
 
     with pytest.raises(ValueError, match="trailing shape"):
-        space.encode(torch.tensor([1.0, 2.0, 3.0]))
-    with pytest.raises(ValueError, match="outside the finite design space"):
-        space.encode(torch.tensor([9.0, 9.0]))
+        designs_set.encode(torch.tensor([1.0, 2.0, 3.0]))
+    with pytest.raises(ValueError, match="outside the finite set"):
+        designs_set.encode(torch.tensor([9.0, 9.0]))
 
 
-def test_finite_design_space_decode_rejects_invalid_indices():
-    space = _finite_space()
+def test_finite_set_decode_rejects_invalid_indices():
+    designs_set = _finite_set()
 
     with pytest.raises(ValueError, match="integer-valued"):
-        space.decode(torch.tensor([0.5]))
-    with pytest.raises(ValueError, match="outside the finite design space"):
-        space.decode(torch.tensor([3]))
+        designs_set.decode(torch.tensor([0.5]))
+    with pytest.raises(ValueError, match="outside the finite set"):
+        designs_set.decode(torch.tensor([3]))
 
 
-def test_finite_design_space_projects_to_the_nearest_design():
-    space = _finite_space()
+def test_finite_set_projects_to_the_nearest_design():
+    support = _finite_set().support
 
-    projected = space.project(torch.tensor([[0.9, 1.9], [2.6, 3.6]]))
+    projected = _project(support, torch.tensor([[0.9, 1.9], [2.6, 3.6]]))
 
     assert torch.equal(projected, torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
-    assert space.contains(projected)
+    assert in_support(support, projected)
 
 
-def test_finite_design_space_samples_land_in_the_set():
+def test_finite_set_samples_land_in_the_set():
     torch.manual_seed(0)
-    space = _finite_space()
+    designs_set = _finite_set()
 
-    assert space.sample().shape == (2,)
-    assert space.contains(space.sample())
-    assert space.contains(space.sample((32,)))
-    assert space.sample((4, 3)).shape == (4, 3, 2)
+    assert designs_set.sample().shape == (2,)
+    assert in_support(designs_set.support, designs_set.sample())
+    assert in_support(designs_set.support, designs_set.sample((32,)))
+    assert designs_set.sample((4, 3)).shape == (4, 3, 2)
 
 
-def test_finite_design_space_reparametrisation_is_the_identity():
-    # A finite set admits no smooth reparametrisation, so to_design/to_raw must
+def test_finite_set_reparametrisation_is_the_identity():
+    # A finite set admits no smooth reparametrisation, so the transform must
     # pass physical designs straight through -- a designer with the default
-    # transform_designs=True runs everything it proposes through them.
-    space = _finite_space()
+    # transform_designs=True runs everything it proposes through it.
+    transform = default_design_transform(_finite_set().support)
     design = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
-    log_prob = torch.randn(2)
 
-    assert torch.equal(space.to_design(design), design)
-    assert torch.equal(space.to_raw(design), design)
-
-    transformed, new_log_prob = space.to_design(design, log_prob)
-    assert torch.equal(transformed, design)
-    assert torch.equal(new_log_prob, log_prob)
+    assert torch.equal(transform(design), design)
+    assert torch.equal(transform.inv(design), design)
+    assert torch.equal(transform.log_abs_det_jacobian(design, design), torch.zeros(2))
 
 
-def test_finite_design_space_supports_scalar_designs():
-    space = FiniteDesignSpace(torch.tensor([1.0, 2.0, 3.0]))
+def test_finite_set_supports_scalar_designs():
+    designs_set = EmpiricalDistribution(torch.tensor([1.0, 2.0, 3.0]))
 
-    assert space.event_shape == torch.Size([])
-    assert space.contains(torch.tensor([1.0, 3.0]))
-    assert torch.equal(space.encode(torch.tensor([3.0, 1.0])), torch.tensor([2, 0]))
-    assert torch.equal(space.project(torch.tensor([2.9])), torch.tensor([3.0]))
+    assert designs_set.event_shape == torch.Size([])
+    assert in_support(designs_set.support, torch.tensor([1.0, 3.0]))
+    assert torch.equal(
+        designs_set.encode(torch.tensor([3.0, 1.0])), torch.tensor([2, 0])
+    )
+    assert torch.equal(
+        _project(designs_set.support, torch.tensor([2.9])), torch.tensor([3.0])
+    )
+
+
+def test_prey_population_uses_a_finite_design_set():
+    task = PreyPopulation()
+
+    assert isinstance(task.design_prior, EmpiricalDistribution)
+    assert task.design_prior.support.is_discrete
+    assert task.contains_design(torch.tensor([[1.0], [300.0]]))
+    assert not task.contains_design(torch.tensor([[0.5]]))
 
 
 # ---------------------------------------------------------------------------
-# TDDesignSpace
+# Temporal discounting
 # ---------------------------------------------------------------------------
-
-
-def test_td_design_space_inherits_the_base_shape_check():
-    space = TDDesignSpace()
-
-    assert space.event_shape == torch.Size([2])
-    assert space.contains(torch.tensor([[1.0, 50.0], [2.0, 25.0]]))
-    assert not space.contains(torch.tensor([1.0, 50.0, 25.0]))
 
 
 def test_td_design_space_domain_is_closed():
     # Closed, matching Step-DAD: exp and sigmoid saturate onto the boundary in
     # float32, and the likelihood is well defined there.
-    space = TDDesignSpace()
+    support = TDDesignPrior().support
 
-    assert space.contains(torch.tensor([0.0, 50.0]))  # D_1 = 0 is allowed
-    assert space.contains(torch.tensor([1.0, 0.0]))  # R_0 = 0 is allowed
-    assert space.contains(torch.tensor([1.0, 100.0]))  # R_0 = 100 is allowed
+    assert in_support(support, torch.tensor([0.0, 50.0]))  # D_1 = 0 is allowed
+    assert in_support(support, torch.tensor([1.0, 0.0]))  # R_0 = 0 is allowed
+    assert in_support(support, torch.tensor([1.0, 100.0]))  # R_0 = 100 is allowed
 
-    assert not space.contains(torch.tensor([-1e-6, 50.0]))  # D_1 < 0
-    assert not space.contains(torch.tensor([1.0, -1e-6]))  # R_0 < 0
-    assert not space.contains(torch.tensor([1.0, 100.001]))  # R_0 > 100
+    assert not in_support(support, torch.tensor([-1e-6, 50.0]))  # D_1 < 0
+    assert not in_support(support, torch.tensor([1.0, -1e-6]))  # R_0 < 0
+    assert not in_support(support, torch.tensor([1.0, 100.001]))  # R_0 > 100
 
 
 def test_td_sample_lands_in_the_space():
     torch.manual_seed(0)
-    space = TDDesignSpace(log_k_mean=-3.0)
+    prior = TDDesignPrior(log_k_mean=-3.0)
 
-    assert space.contains(space.sample((256,)))
+    assert in_support(prior.support, prior.sample((256,)))
 
 
 def test_td_to_design_survives_float_saturation():
@@ -451,14 +363,14 @@ def test_td_to_design_survives_float_saturation():
     # float32 (from raw around -104 and +17), which a DAD policy net reaches
     # routinely. Those designs must stay valid and finite -- they used to crash
     # training against a strict domain.
-    space = TDDesignSpace(log_k_mean=-3.125)
+    transform = TDDesignTransform(log_k_mean=-3.125)
     extreme = torch.tensor(
         [[-200.0, -200.0], [-120.0, -120.0], [20.0, 20.0], [200.0, 200.0]]
     )
 
-    design = space.to_design(extreme)
+    design = transform(extreme)
 
-    assert space.contains(design)
+    assert in_support(TDDesignPrior().support, design)
     assert torch.isfinite(design).all()
     # Saturation genuinely reaches the bounds; that is allowed, not clamped away.
     assert (design[:, 0] == 0.0).any()
@@ -469,70 +381,102 @@ def test_td_to_design_gradients_stay_finite_when_saturated():
     # Regression: bounding D_1 by clamping exp's *output* makes the backward
     # pass compute 0 * inf = nan, which silently poisoned the policy net a few
     # thousand steps into DAD training. The bound goes on the exponent instead.
-    space = TDDesignSpace(log_k_mean=-3.125)
+    transform = TDDesignTransform(log_k_mean=-3.125)
     raw = torch.tensor(
         [[-200.0, -200.0], [0.0, 0.0], [200.0, 200.0]], requires_grad=True
     )
 
-    space.to_design(raw).sum().backward()
+    transform(raw).sum().backward()
 
     assert torch.isfinite(raw.grad).all()
 
 
 def test_td_project_output_is_contained():
     # Regression: project() clamped R_0 to the closed [0, 100] while contains()
-    # requires the open (0, 100), so a projected design failed validation --
+    # required the open (0, 100), so a projected design failed validation --
     # BEDEnv projects and then validates, so this raised on every step whose
     # design fell outside the domain.
-    space = TDDesignSpace()
+    support = TDDesignPrior().support
     outside = torch.tensor([[5.0, -20.0], [1.0, 500.0], [-3.0, 100.0]])
 
-    projected = space.project(outside)
+    projected = _project(support, outside)
 
-    assert space.contains(projected)
+    assert torch.equal(
+        projected, torch.tensor([[5.0, 0.0], [1.0, 100.0], [0.0, 100.0]])
+    )
+    assert in_support(support, projected)
 
 
 def test_td_to_design_round_trips():
-    space = TDDesignSpace(log_k_mean=-3.0)
+    transform = TDDesignTransform(log_k_mean=-3.0)
     raw = torch.randn(16, 2)
 
-    assert torch.allclose(space.to_raw(space.to_design(raw)), raw, atol=1e-4)
+    assert torch.allclose(transform.inv(transform(raw)), raw, atol=1e-4)
 
 
-# ---------------------------------------------------------------------------
-# BoxDesignSpace tanh squash
-# ---------------------------------------------------------------------------
+def test_projection_raises_for_a_support_it_cannot_project_onto():
+    with pytest.raises(NotImplementedError):
+        _project(constraints.simplex, torch.tensor([0.2, 0.9]))
 
 
-def test_box_to_design_corrects_log_prob_for_tanh_affine_jacobian():
-    space = BoxDesignSpace(
-        torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,)
+@pytest.mark.parametrize(
+    "values", [torch.zeros(0, 2), torch.tensor([[1.0, 2.0], [1.0, 2.0]])]
+)
+def test_task_rejects_an_empty_or_duplicated_finite_design_set(values):
+    with pytest.raises(ValueError, match="each listed once"):
+        LocationFinding(
+            n_sources=1, dim_theta=2, design_prior=EmpiricalDistribution(values)
+        )
+
+
+def test_interval_bounds_are_tensors_for_scalar_bounded_supports():
+    from torch.distributions import Beta
+
+    from testbed.core.constraints import interval_bounds
+
+    low, high = interval_bounds(
+        TorchDistribution(Beta(torch.ones(2), torch.ones(2))).support
     )
-    raw = torch.randn(8, 2)
-    raw_log_prob = torch.randn(8)
 
-    design, log_prob = space.to_design(raw, raw_log_prob)
-
-    assert torch.allclose(design, space.to_design(raw))
-    assert torch.allclose(log_prob, raw_log_prob - space._log_det_jacobian(raw))
+    assert isinstance(low, torch.Tensor) and isinstance(high, torch.Tensor)
+    assert torch.isfinite(high - low).all()
 
 
-def test_box_to_design_lands_in_the_box_and_round_trips():
-    space = BoxDesignSpace(
-        torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,)
+def test_design_transform_is_cached_until_the_task_moves():
+    task = LinearRegression(dim=2, design_prior=Box(-1.0, 1.0, event_shape=(2,)))
+
+    transform = task.design_transform
+    assert task.design_transform is transform
+
+    task.double()
+    assert task.design_transform is not transform
+    assert (
+        task.design_transform(torch.zeros(2, dtype=torch.float64)).dtype
+        == torch.float64
     )
-    raw = torch.randn(64, 2)
 
-    design = space.to_design(raw)
+    task.design_prior = Box(-2.0, 2.0, event_shape=(2,))
+    torch.testing.assert_close(
+        task.design_transform(torch.full((2,), 1e6)), torch.full((2,), 2.0)
+    )
 
-    assert space.contains(design)
-    assert torch.allclose(space.to_raw(design), raw, atol=1e-4)
+
+def _accelerator() -> str | None:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return None
 
 
-def test_box_reparametrisation_requires_finite_positive_width():
-    degenerate = BoxDesignSpace(1.0, 1.0, event_shape=(2,))
+@pytest.mark.skipif(_accelerator() is None, reason="needs an accelerator")
+def test_contains_design_accepts_designs_on_another_device():
+    device = _accelerator()
+    on_device = LinearRegression(
+        dim=2, design_prior=Box(-1.0, 1.0, event_shape=(2,))
+    ).to(device)
+    on_cpu = LinearRegression(dim=2, design_prior=Box(-1.0, 1.0, event_shape=(2,)))
 
-    # A zero-width box is still a legitimate space for contains/project.
-    assert degenerate.contains(torch.ones(2))
-    with pytest.raises(ValueError, match="finite bounds"):
-        degenerate.to_design(torch.zeros(2))
+    assert on_device.contains_design(torch.zeros(2))
+    assert not on_device.contains_design(torch.full((2,), 2.0))
+    assert on_cpu.contains_design(torch.zeros(2, device=device))

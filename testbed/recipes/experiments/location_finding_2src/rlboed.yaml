@@ -14,8 +14,8 @@ reward:
 
 # RL-BOED needs a bounded design space.
 task:
-  design_space:
-    _target_: testbed.core.design_spaces.BoxDesignSpace
+  design_prior:
+    _target_: testbed.core.Box
     low: -4.0
     high: 4.0
     event_shape:

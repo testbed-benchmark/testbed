@@ -9,5 +9,5 @@ task:
   add_noise_scale: 0.31622776601683794   # eta ~ N(0, 0.1), so sd sqrt(0.1)
   decay_const: 400.0  # D_V
   prior: null  # use the standard log-normal prior on (ka, ke, V)
-  design_space: null  # derive the standard sampling times, 0 to 24 hours
+  design_prior: null  # derive the standard sampling times, 0 to 24 hours
   reparameterize_outcomes: true  # Gaussian noise on a differentiable mean

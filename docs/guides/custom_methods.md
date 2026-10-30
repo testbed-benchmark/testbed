@@ -136,7 +136,7 @@ objective = SPCEReinforce(
 {py:meth}`Designer.rollout <testbed.designers.base.Designer.rollout>` implements the loop shared by every designer. At each step $t$ it runs the hooks, asks the designer for the next design, samples $y_t$ from the task, and appends both to the history. A new designer only implements {py:meth}`~testbed.designers.base.Designer._step_design`, which receives the current {py:class}`~testbed.core.rollout.RolloutState` and returns a tuple `(design, raw_design, log_prob)`:
 
 - `design` is the physical design, with shape `[b, *event_shape_design]`.
-- `raw_design` is the pre-transform value the design was mapped from by `task.design_space.to_design`, or `None`.
+- `raw_design` is the pre-transform value the design was mapped from by `task.design_transform`, or `None`.
 - `log_prob` is the log probability of a stochastic design, with shape `[b]`, or `None`. Rollouts collect these in `rollout.extra["policy_log_probs"]` for score-function objectives.
 
 `state.y_history` and `state.design_history` hold the steps before $t$, so they are empty at $t = 0$. The rest of the state, including the task and anything hooks have stored in `state.scratch`, is also available.

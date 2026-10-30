@@ -9,10 +9,20 @@ from collections.abc import Iterable
 
 import torch
 from torch import Tensor
-from torch.distributions import Bernoulli, HalfNormal, LogNormal, RelaxedBernoulli
+from torch.distributions import (
+    Bernoulli,
+    HalfNormal,
+    Independent,
+    LogNormal,
+    Normal,
+    RelaxedBernoulli,
+    TransformedDistribution,
+    constraints,
+)
+from torch.distributions.transforms import Transform
 
-from ..core.design_spaces import DesignSpace
-from ..core.distributions import Distribution, as_sample_shape
+from ..core.constraints import blocks
+from ..core.distributions import Distribution, TorchDistribution, as_sample_shape
 from ..core.util import normal_cdf
 from .base import Task
 
@@ -22,13 +32,16 @@ from .base import Task
 DELAYED_REWARD = 100.0
 # Floor for D_1 before taking a log
 _D1_FLOOR = 1e-30
+# Valid designs: D_1 >= 0 and 0 <= R_0 <= 100
+TD_DESIGNS = blocks(
+    [constraints.nonnegative, constraints.interval(0.0, DELAYED_REWARD)], [1, 1]
+)
 
 
-class TDDesignSpace(DesignSpace):
-    r"""Design space for TD: :math:`D_1 \ge 0` and :math:`0 \le R_0 \le 100`.
+class TDDesignTransform(Transform):
+    r"""Maps raw designs onto TD's designs, :math:`D_1 \ge 0` and :math:`0 \le R_0 \le 100`.
 
-    Supports the raw<->design reparametrization
-    :math:`D_1 = \exp(x_d - \texttt{log_k_mean})`,
+    The reparametrization is :math:`D_1 = \exp(x_d - \texttt{log_k_mean})`,
     :math:`R_0 = 100\,\sigma(x_r)`, which maps an unconstrained
     :math:`(x_d, x_r)` onto that domain smoothly.
 
@@ -40,34 +53,20 @@ class TDDesignSpace(DesignSpace):
             :math:`\log \mathbb{E}[k]` (default: 0.0).
     """
 
+    domain = constraints.independent(constraints.real, 1)
+    codomain = TD_DESIGNS
+    bijective = True
+
     def __init__(self, log_k_mean: float = 0.0):
         """Initializes with the D_1 shift."""
-        super().__init__(event_shape=(2,), is_discrete=False)
+        super().__init__()
         self.log_k_mean = float(log_k_mean)
 
     def __repr__(self) -> str:
         """Returns a compact representation."""
-        return f"TDDesignSpace(log_k_mean={self.log_k_mean})"
+        return f"TDDesignTransform(log_k_mean={self.log_k_mean})"
 
-    def sample(self, batch_shape=(), *, device=None) -> Tensor:
-        """Samples a standard normal raw value and maps it forward."""
-        batch_shape = torch.Size(batch_shape)
-        raw = torch.randn(*batch_shape, *self.event_shape, device=device)
-        return self.to_design(raw)
-
-    def _contains(self, design: Tensor) -> bool:
-        """Checks D_1 >= 0 and 0 <= R_0 <= 100."""
-        D1, R0 = design[..., 0], design[..., 1]
-        in_domain = (D1 >= 0) & (R0 >= 0) & (R0 <= DELAYED_REWARD)
-        return bool(torch.all(in_domain).item())
-
-    def project(self, design: Tensor) -> Tensor:
-        """Lossy fallback: clamps an arbitrary tensor into the domain."""
-        D1 = design[..., 0:1].clamp(min=0.0)
-        R0 = design[..., 1:2].clamp(min=0.0, max=DELAYED_REWARD)
-        return torch.cat((D1, R0), dim=-1)
-
-    def _to_design(self, raw_design: Tensor) -> Tensor:
+    def _call(self, raw_design: Tensor) -> Tensor:
         """Maps raw (x_d, x_r) to valid (D_1, R_0).
 
         The exponent is capped so exp cannot overflow to inf. Capping exp's
@@ -82,22 +81,22 @@ class TDDesignSpace(DesignSpace):
         R0 = DELAYED_REWARD * torch.sigmoid(R_raw)
         return torch.cat((D1, R0), dim=-1)
 
-    def _to_raw(self, design: Tensor) -> Tensor:
-        """Recovers raw designs from designs; the inverse of to_design."""
+    def _inverse(self, design: Tensor) -> Tensor:
+        """Recovers raw designs from designs; the inverse of _call."""
         D1 = design[..., 0:1]
         R0 = design[..., 1:2]
         D_raw = torch.log(D1.clamp(min=_D1_FLOOR)) + self.log_k_mean
         R_raw = torch.logit(R0 / DELAYED_REWARD, eps=1e-6)
         return torch.cat((D_raw, R_raw), dim=-1)
 
-    def _log_det_jacobian(self, raw_design: Tensor) -> Tensor:
+    def log_abs_det_jacobian(self, raw_design: Tensor, design: Tensor) -> Tensor:
         """Log-det of the exp / scaled-sigmoid reparametrisation.
 
         The map is diagonal, so this is the sum of the two per-coordinate
         terms: ``d D_1/d x_d = exp(x_d - log_k_mean)`` and
         ``d R_0/d x_r = 100 * sigmoid(x_r) * sigmoid(-x_r)``.
 
-        This describes the mathematical transform; :meth:`_to_design` caps the
+        This describes the mathematical transform; :meth:`_call` caps the
         exponent against overflow, and beyond that cap the realised derivative
         is 0 rather than what this reports.
         """
@@ -110,6 +109,27 @@ class TDDesignSpace(DesignSpace):
             + torch.nn.functional.logsigmoid(-R_raw)
         )
         return log_det_D1 + log_det_R0
+
+
+class TDDesignPrior(TorchDistribution):
+    """Standard normal raw designs pushed through :class:`TDDesignTransform`.
+
+    Args:
+        log_k_mean (float, optional):
+            The transform's :math:`D_1` shift (default: 0.0).
+    """
+
+    def __init__(self, log_k_mean: float = 0.0):
+        """Builds the pushforward."""
+        raw = Independent(Normal(torch.zeros(2), 1.0), 1)
+        transform = TDDesignTransform(log_k_mean)
+        super().__init__(TransformedDistribution(raw, [transform]))
+        self.log_k_mean = transform.log_k_mean
+
+    @property
+    def transform(self) -> TDDesignTransform:
+        """The map from raw designs."""
+        return self.dist.transforms[0]
 
 
 class TDPrior(Distribution):
@@ -157,6 +177,11 @@ class TDPrior(Distribution):
     def alpha_halfnormal(self) -> torch.distributions.Distribution:
         """Distribution for the choice-noise scale alpha."""
         return HalfNormal(self.alpha_scale)
+
+    @property
+    def support(self) -> constraints.Constraint:
+        """``k > 0`` and ``alpha >= 0``."""
+        return blocks([constraints.positive, constraints.nonnegative], [1, 1])
 
     def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of parameters from the prior.
@@ -236,8 +261,9 @@ class TemporalDiscounting(Task):
             discrete model (default: 0.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default TDPrior is used.
-        design_space (DesignSpace, optional):
-            Controls the design parametrization. If None, the default TDDesignSpace is used.
+        design_prior (Distribution, optional):
+            Distribution of random designs; its support is the design space.
+            If None, the default :class:`TDDesignPrior` is used.
     """
 
     @property
@@ -252,16 +278,16 @@ class TemporalDiscounting(Task):
         outer_exponent: float = 1.0,
         temperature: float = 0.0,
         prior=None,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the TD task."""
         if prior is None:
             prior = TDPrior()
 
-        if design_space is None:
+        if design_prior is None:
             log_k_mean = float(prior.k_loc + 0.5 * prior.k_scale**2)
-            design_space = TDDesignSpace(log_k_mean=log_k_mean)
+            design_prior = TDDesignPrior(log_k_mean=log_k_mean)
 
         # If temperature=0, we do not have reparametrised sampling
         # Otherwise, uses a relaxed categorical at sampling time.
@@ -274,7 +300,7 @@ class TemporalDiscounting(Task):
             event_shape_design=[2],
             prior=prior,
             discrete_y=True,
-            design_space=design_space,
+            design_prior=design_prior,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 

@@ -1,7 +1,8 @@
 import pytest
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
+from testbed.core import Box, EmpiricalDistribution
+from testbed.core.constraints import default_design_transform, in_support
 from testbed.design_nets import (
     CategoricalHead,
     CategoricalPolicyNet,
@@ -15,7 +16,7 @@ from testbed.tasks import LocationFinding
 
 
 def make_space():
-    return BoxDesignSpace(-1.0, 1.0, event_shape=(2,))
+    return Box(-1.0, 1.0, event_shape=(2,))
 
 
 def make_policy():
@@ -94,9 +95,7 @@ def test_tanh_gaussian_policy_raw_designs_are_approximately_normal():
 
 def test_tanh_gaussian_policy_transformed_designs_follow_box_scale_and_shift():
     torch.manual_seed(0)
-    space = BoxDesignSpace(
-        torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,)
-    )
+    space = Box(torch.tensor([-2.0, 3.0]), torch.tensor([4.0, 7.0]), event_shape=(2,))
     policy = GaussianPolicyNet(space, event_shape_y=(1,))
     mean = torch.tensor([0.25, -0.5])
     log_std = torch.tensor([-0.7, -0.1])
@@ -104,14 +103,16 @@ def test_tanh_gaussian_policy_transformed_designs_follow_box_scale_and_shift():
 
     n = 2_000
     proposal = policy.propose(torch.empty(n, 0, 1), torch.empty(n, 0, 2))
-    design, _ = space.to_design(proposal.raw_design, proposal.log_prob)
-    deterministic_design = space.to_design(proposal.deterministic_raw_design)
+    design = default_design_transform(space.support)(proposal.raw_design)
+    deterministic_design = default_design_transform(space.support)(
+        proposal.deterministic_raw_design
+    )
     expected_deterministic_design = torch.tanh(mean) * torch.tensor(
         [3.0, 2.0]
     ) + torch.tensor([1.0, 5.0])
 
-    assert space.contains(design)
-    assert space.contains(deterministic_design)
+    assert in_support(space.support, design)
+    assert in_support(space.support, deterministic_design)
     assert torch.all(design > space.low)
     assert torch.all(design < space.high)
     assert torch.allclose(
@@ -129,7 +130,7 @@ def test_tanh_gaussian_policy_normalizes_physical_histories_for_encoder():
         )
     )
     policy = GaussianPolicyNet(
-        BoxDesignSpace(-4.0, 4.0, event_shape=(2,)),
+        Box(-4.0, 4.0, event_shape=(2,)),
         encoder,
         GaussianHead(64, 2),
         normalize_design_history=True,
@@ -172,14 +173,14 @@ def test_tanh_gaussian_proposal_has_raw_density_and_deterministic_value():
         torch.tensor([0.25, -0.5]).expand(4, -1),
     )
 
-    expected_design, expected_log_prob = space.to_design(
-        proposal.raw_design, proposal.log_prob
-    )
+    transform = default_design_transform(space.support)
+    expected_design = transform(proposal.raw_design)
 
-    assert space.contains(expected_design)
+    assert in_support(space.support, expected_design)
+    scale = (space.high - space.low) / 2.0
     torch.testing.assert_close(
-        expected_log_prob,
-        proposal.log_prob - space._log_det_jacobian(proposal.raw_design),
+        transform.log_abs_det_jacobian(proposal.raw_design, expected_design),
+        (scale.log() + torch.log1p(-(torch.tanh(proposal.raw_design) ** 2))).sum(-1),
     )
 
 
@@ -189,7 +190,7 @@ def test_tanh_gaussian_policy_accepts_history_tensors_from_observation():
         n_sources=1,
         dim_theta=2,
         noise_scale=0.2,
-        design_space=space,
+        design_prior=space,
     )
     env = BEDEnv(
         task,
@@ -203,15 +204,15 @@ def test_tanh_gaussian_policy_accepts_history_tensors_from_observation():
     proposal0 = policy.propose(obs.outcomes, obs.designs, mask=obs.mask)
     obs, *_ = env.step(torch.zeros(4, 2))
     proposal1 = policy.propose(obs.outcomes, obs.designs, mask=obs.mask)
-    design0 = space.to_design(proposal0.raw_design)
-    design1 = space.to_design(proposal1.raw_design)
+    design0 = default_design_transform(space.support)(proposal0.raw_design)
+    design1 = default_design_transform(space.support)(proposal1.raw_design)
 
     assert proposal0.raw_design.shape == (4, 2)
     assert proposal0.log_prob.shape == (4,)
     assert proposal1.raw_design.shape == (4, 2)
     assert proposal1.log_prob.shape == (4,)
-    assert space.contains(design0)
-    assert space.contains(design1)
+    assert in_support(space.support, design0)
+    assert in_support(space.support, design1)
 
 
 def test_tanh_gaussian_policy_supports_scalar_and_multidim_batch_shapes():
@@ -236,7 +237,11 @@ def test_tanh_gaussian_policy_allows_gradient_flow():
     design_history = torch.randn(6, 2, 2)
 
     proposal = policy.propose(y_history, design_history, reparameterize_policy=True)
-    design, log_prob = space.to_design(proposal.raw_design, proposal.log_prob)
+    transform = default_design_transform(space.support)
+    design = transform(proposal.raw_design)
+    log_prob = proposal.log_prob - transform.log_abs_det_jacobian(
+        proposal.raw_design, design
+    )
     loss = design.sum() + log_prob.sum()
     loss.backward()
 
@@ -256,20 +261,22 @@ def test_tanh_gaussian_policy_uses_deepset_encoder_by_default():
 
 
 @pytest.mark.parametrize(
-    ("policy_cls", "design_space"),
+    ("policy_cls", "design_prior"),
     [
-        (GaussianPolicyNet, BoxDesignSpace(-1.0, 1.0, event_shape=(2, 2))),
+        (GaussianPolicyNet, Box(-1.0, 1.0, event_shape=(2, 2))),
         (
             CategoricalPolicyNet,
-            FiniteDesignSpace(torch.arange(12, dtype=torch.float32).reshape(3, 2, 2)),
+            EmpiricalDistribution(
+                torch.arange(12, dtype=torch.float32).reshape(3, 2, 2)
+            ),
         ),
     ],
 )
 def test_default_stochastic_actors_support_multidimensional_outcome_events(
-    policy_cls, design_space
+    policy_cls, design_prior
 ):
     event_shape_y = (2, 3)
-    policy = policy_cls(design_space, event_shape_y=event_shape_y)
+    policy = policy_cls(design_prior, event_shape_y=event_shape_y)
     outcomes = torch.randn(4, 5, *event_shape_y)
     designs = torch.randn(4, 5, 2, 2)
 
@@ -295,6 +302,6 @@ def test_tanh_gaussian_policy_rejects_head_with_wrong_design_width():
 
 
 def test_categorical_policy_rejects_head_with_wrong_design_count():
-    space = FiniteDesignSpace(torch.arange(3.0).reshape(3, 1))
+    space = EmpiricalDistribution(torch.arange(3.0).reshape(3, 1))
     with pytest.raises(ValueError, match="head.n_designs"):
         CategoricalPolicyNet(space, DeepSetEncoder((1,), (1,)), CategoricalHead(64, 2))

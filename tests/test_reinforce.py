@@ -5,8 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from testbed.core import Rollout
-from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core import Box, Rollout
 from testbed.design_nets import DeepSetPolicyNet, GaussianPolicyNet
 from testbed.design_objectives import SPCE, Reinforce, SPCEReinforce
 from testbed.design_objectives.reinforce import leave_one_out_baseline
@@ -31,7 +30,7 @@ def _make_task():
 
 
 def _make_design_net(task):
-    # task.design_space (a TDDesignSpace) maps raw (near-zero at init)
+    # task.design_prior (a TDDesignPrior) maps raw (near-zero at init)
     # outputs to non-saturating (D_1, R_0); no wrapper needed.
     return DeepSetPolicyNet(
         event_shape_y=task.event_shape_y,
@@ -42,7 +41,7 @@ def _make_design_net(task):
 
 def _make_stochastic_net(task):
     # Box over valid (D_1, R_0); centered near k * D_1 ~ 1 so it is non-saturating.
-    space = BoxDesignSpace(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
+    space = Box(low=[5.0, 20.0], high=[40.0, 80.0], event_shape=(2,))
     return GaussianPolicyNet(space, event_shape_y=task.event_shape_y)
 
 

@@ -81,7 +81,7 @@ def plot(rollout):
 
 ## RandomDesigner
 
-A {py:class}`~testbed.designers.RandomDesigner` produces designs by randomly sampling from a fixed distribution. With no distribution given, it samples from the task's own {py:class}`~testbed.core.design_spaces.DesignSpace`, which for `LocationFinding` is a standard Gaussian over $\mathbb{R}^2$.
+A {py:class}`~testbed.designers.RandomDesigner` produces designs by randomly sampling from a fixed distribution. With no distribution given, it samples from the task's own `design_prior`, which for `LocationFinding` is a standard Gaussian over $\mathbb{R}^2$.
 
 ```{code-cell} ipython3
 :tags: [remove-output]

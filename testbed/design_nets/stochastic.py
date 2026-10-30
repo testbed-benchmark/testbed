@@ -7,12 +7,8 @@ import torch
 from torch import Tensor, nn
 from torch.distributions import Categorical, Normal
 
-from testbed.core.design_spaces import (
-    BoxDesignSpace,
-    DefaultDesignSpace,
-    DesignSpace,
-    FiniteDesignSpace,
-)
+from testbed.core.constraints import interval_bounds, is_unconstrained
+from testbed.core.distributions import Distribution, EmpiricalDistribution
 from testbed.design_nets.base import DesignNet, DesignProposal
 from testbed.design_nets.encoder import (
     DeepSetEncoder,
@@ -36,7 +32,7 @@ class StochasticDesignNet(DesignNet):
 
     def __init__(
         self,
-        design_space: DesignSpace,
+        design_prior: Distribution,
         *,
         normalize_design_history: bool,
         design_history_bounds: tuple[float, float],
@@ -44,7 +40,7 @@ class StochasticDesignNet(DesignNet):
         """Stores the design shape and history-normalization settings.
 
         Args:
-            design_space: Design space whose event shape defines one design.
+            design_prior: Design prior whose event shape defines one design.
             normalize_design_history: Whether to rescale design histories.
             design_history_bounds: Range that design histories are rescaled to.
 
@@ -53,7 +49,7 @@ class StochasticDesignNet(DesignNet):
                 pair with ``low < high``.
         """
         super().__init__()
-        self.event_shape_design = torch.Size(design_space.event_shape)
+        self.event_shape_design = torch.Size(design_prior.event_shape)
         self.dim_design = self.event_shape_design.numel()
         self.normalize_design_history = bool(normalize_design_history)
         self.design_history_bounds = tuple(float(x) for x in design_history_bounds)
@@ -273,14 +269,14 @@ class GaussianPolicyNet(StochasticDesignNet):
     """Gaussian policy for continuous design spaces.
 
     The network proposes values in unconstrained Gaussian coordinates. The
-    caller's design space owns the constraint transform and density correction.
+    caller's design transform owns the constraint and density correction.
     """
 
     supports_reparameterized_proposals = True
 
     def __init__(
         self,
-        design_space: BoxDesignSpace | DefaultDesignSpace,
+        design_prior: Distribution,
         encoder: HistoryEncoder | None = None,
         head: GaussianHead | None = None,
         *,
@@ -292,9 +288,10 @@ class GaussianPolicyNet(StochasticDesignNet):
         """Initializes the policy network.
 
         Args:
-            design_space: Continuous design space whose shape defines the
-                proposal. Box bounds support history normalization; an
-                unconstrained space uses [-1, 1] as a reference scale only.
+            design_prior: Design prior over a box or all of real space, whose
+                shape defines the proposal. Box bounds support history
+                normalization; an unconstrained space uses [-1, 1] as a
+                reference scale only.
             encoder: Optional history encoder. Defaults to a ``DeepSetEncoder``.
             head: Optional Gaussian policy head paired with ``encoder``. If
                 omitted, a default head is created for the encoder.
@@ -310,7 +307,7 @@ class GaussianPolicyNet(StochasticDesignNet):
             ValueError: If ``head`` does not output ``dim_design`` parameters.
         """
         super().__init__(
-            design_space,
+            design_prior,
             normalize_design_history=normalize_design_history,
             design_history_bounds=design_history_bounds,
         )
@@ -323,17 +320,21 @@ class GaussianPolicyNet(StochasticDesignNet):
         if self.head.dim_design != self.dim_design:
             raise ValueError("head.dim_design must match the design space.")
 
-        if isinstance(design_space, BoxDesignSpace):
-            low = design_space.low.reshape(self.dim_design)
-            high = design_space.high.reshape(self.dim_design)
-        elif isinstance(design_space, DefaultDesignSpace):
-            # Reference scale for network inputs only; DefaultDesignSpace keeps
-            # policy proposals unconstrained.
+        support = design_prior.support
+        bounds = interval_bounds(support)
+        if bounds is not None:
+            event_shape = design_prior.event_shape
+            low = bounds[0].broadcast_to(event_shape).reshape(self.dim_design)
+            high = bounds[1].broadcast_to(event_shape).reshape(self.dim_design)
+        elif is_unconstrained(support):
+            # Reference scale for network inputs only; an unconstrained space
+            # keeps policy proposals unconstrained.
             low = torch.full((self.dim_design,), -1.0)
             high = torch.full((self.dim_design,), 1.0)
         else:
             raise TypeError(
-                "GaussianPolicyNet requires a BoxDesignSpace or DefaultDesignSpace."
+                "GaussianPolicyNet requires a design prior over a box or all of "
+                "real space."
             )
         if torch.any(low >= high):
             raise ValueError(
@@ -440,7 +441,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
 
     def __init__(
         self,
-        design_space: FiniteDesignSpace,
+        design_prior: EmpiricalDistribution,
         encoder: HistoryEncoder | None = None,
         head: CategoricalHead | None = None,
         *,
@@ -452,7 +453,8 @@ class CategoricalPolicyNet(StochasticDesignNet):
         """Initializes the categorical policy.
 
         Args:
-            design_space: Finite physical designs returned by policy proposals.
+            design_prior: Finite set of physical designs returned by policy
+                proposals.
             encoder: Optional history encoder. Defaults to a ``DeepSetEncoder``.
             head: Optional categorical policy head paired with ``encoder``.
                 If omitted, a default head is created for the encoder.
@@ -467,11 +469,11 @@ class CategoricalPolicyNet(StochasticDesignNet):
                 does not output one logit per design.
         """
         super().__init__(
-            design_space,
+            design_prior,
             normalize_design_history=normalize_design_history,
             design_history_bounds=design_history_bounds,
         )
-        self.n_designs = design_space.n_designs
+        self.n_designs = design_prior.locs.shape[0]
         self._set_encoder_and_head(
             encoder,
             head,
@@ -481,7 +483,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
         if self.head.n_designs != self.n_designs:
             raise ValueError("head.n_designs must match the design space.")
 
-        self.register_buffer("design_values", design_space.values.clone())
+        self.register_buffer("design_values", design_prior.locs.clone())
         values = self.design_values.reshape(self.n_designs, self.dim_design)
         if not torch.is_floating_point(values):
             values = values.to(torch.get_default_dtype())
@@ -589,7 +591,7 @@ class CategoricalPolicyNet(StochasticDesignNet):
 
 def make_stochastic_policy(
     *,
-    design_space: DesignSpace,
+    design_prior: Distribution,
     event_shape_y,
     event_shape_design,
     dim_h,
@@ -603,7 +605,7 @@ def make_stochastic_policy(
     architecture="deepset",
     attention=None,
 ) -> StochasticDesignNet:
-    """Composes a history encoder with the head required by the design space."""
+    """Composes a history encoder with the head required by the design prior."""
     encoder = make_history_encoder(
         event_shape_y=event_shape_y,
         event_shape_design=event_shape_design,
@@ -618,19 +620,21 @@ def make_stochastic_policy(
         "design_history_bounds": tuple(design_history_bounds),
         "outcome_bounds": tuple(outcome_bounds),
     }
-    if isinstance(design_space, (BoxDesignSpace, DefaultDesignSpace)):
+    support = design_prior.support
+    if interval_bounds(support) is not None or is_unconstrained(support):
         head = GaussianHead(
             encoder.dim_emb,
-            design_space.event_shape.numel(),
+            design_prior.event_shape.numel(),
             dim_h=dim_h,
             log_std_min=log_std_min,
             log_std_max=log_std_max,
             init_std=init_std,
         )
-        return GaussianPolicyNet(design_space, head=head, **kwargs)
-    if isinstance(design_space, FiniteDesignSpace):
-        head = CategoricalHead(encoder.dim_emb, design_space.n_designs, dim_h=dim_h)
-        return CategoricalPolicyNet(design_space, head=head, **kwargs)
+        return GaussianPolicyNet(design_prior, head=head, **kwargs)
+    if isinstance(design_prior, EmpiricalDistribution):
+        head = CategoricalHead(encoder.dim_emb, design_prior.locs.shape[0], dim_h=dim_h)
+        return CategoricalPolicyNet(design_prior, head=head, **kwargs)
     raise TypeError(
-        "Stochastic policies require a BoxDesignSpace, DefaultDesignSpace, or FiniteDesignSpace."
+        "Stochastic policies require a design prior over a box, all of real "
+        "space, or a finite set (an EmpiricalDistribution)."
     )

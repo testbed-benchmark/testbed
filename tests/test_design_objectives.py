@@ -16,7 +16,7 @@ def test_sample_joint_keeps_batch_dim_when_total_samples_is_one():
     # against a batched design, crashing (or worse, silently misaligning)
     # downstream.
     task = _make_task()
-    design = task.design_space.sample(batch_shape=(1,))  # [1, *event_shape_design]
+    design = task.design_prior.sample((1,))  # [1, *event_shape_design]
 
     y, theta = task.sample_joint(design)
 
@@ -36,7 +36,7 @@ def test_pce_n_outer_one_does_not_crash_and_has_scalar_gain():
     # triggers it.
     torch.manual_seed(0)
     task = _make_task()
-    design = task.design_space.sample()
+    design = task.design_prior.sample()
 
     for n_inner in (1, 4):
         objective = PCE(task, n_outer=1, n_inner=n_inner)

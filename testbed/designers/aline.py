@@ -4,7 +4,7 @@ import torch
 from torch import Tensor
 from torch.distributions import Categorical
 
-from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core.constraints import interval_bounds
 from testbed.core.hooks import ActionHook, apply_rollout_end
 from testbed.core.rollout import Rollout, RolloutState
 from testbed.core.util import sort_by_first_coordinate
@@ -31,17 +31,17 @@ class AlineDesigner(Designer):
             raise ValueError("T must be positive.")
         if pool_size < T:
             raise ValueError("pool_size must be at least T.")
-        space = task.design_space
-        if not isinstance(space, BoxDesignSpace):
+        bounds = interval_bounds(task.design_prior.support)
+        if bounds is None:
             raise ValueError(
-                "ALINE requires a finite BoxDesignSpace on task.design_space."
+                "ALINE requires a finite box design space, e.g. a Box on "
+                "task.design_prior."
             )
-        if space.event_shape != task.event_shape_design:
-            raise ValueError("The design-space event shape must match the task.")
+        low, high = bounds
         if (
-            not torch.all(torch.isfinite(space.low))
-            or not torch.all(torch.isfinite(space.high))
-            or torch.any(space.low >= space.high)
+            not torch.all(torch.isfinite(low))
+            or not torch.all(torch.isfinite(high))
+            or torch.any(low >= high)
         ):
             raise ValueError("ALINE requires finite design bounds with low < high.")
         self.model = model
@@ -139,8 +139,8 @@ class AlineDesigner(Designer):
             raise ValueError("pool_size must be at least T.")
         deterministic = self.deterministic if deterministic is None else deterministic
         batch_size = theta.shape[0]
-        candidates = self.task.design_space.sample(
-            (batch_size, pool_size), device=self.device
+        candidates = self.task.design_prior.sample((batch_size, pool_size)).to(
+            self.device
         )
         available_mask = torch.ones(
             batch_size, pool_size, device=self.device, dtype=torch.bool

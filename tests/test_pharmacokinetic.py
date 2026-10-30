@@ -16,8 +16,8 @@ def test_event_shapes_and_flags():
     assert task.event_shape_theta == torch.Size([3])
     assert task.event_shape_design == torch.Size([1])
     assert task.memoryless
-    assert task.design_space.contains(torch.tensor([[0.0], [24.0]]))
-    assert not task.design_space.contains(torch.tensor([[24.5]]))
+    assert task.contains_design(torch.tensor([[0.0], [24.0]]))
+    assert not task.contains_design(torch.tensor([[24.5]]))
 
 
 def test_default_noise_scales_match_reference():
@@ -110,7 +110,7 @@ def test_outcome_logp_matches_analytic_gaussian_density():
 def test_sample_outcome_is_reparametrized():
     task = Pharmacokinetic()
     theta = task.sample_prior(8)
-    design = task.design_space.sample((8,)).requires_grad_(True)
+    design = task.design_prior.sample((8,)).requires_grad_(True)
 
     y = task.sample_outcome(theta, design)
     y.sum().backward()

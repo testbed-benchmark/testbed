@@ -4,7 +4,8 @@ import pytest
 import torch
 from torch.distributions import Binomial, LogNormal
 
-from testbed.core.design_spaces import FiniteDesignSpace
+from testbed.core import EmpiricalDistribution
+from testbed.envs.bed_env import _project
 from testbed.tasks import PreyPopulation
 from testbed.tasks.prey_population import PreyPopulationPrior
 
@@ -16,30 +17,31 @@ def test_event_shapes_flags_and_design_space():
     assert task.event_shape_design == torch.Size([1])
     assert task.event_shape_y == torch.Size([1])
     assert task.discrete_y
-    assert isinstance(task.design_space, FiniteDesignSpace)
-    assert task.design_space.contains(torch.tensor([[1.0], [300.0]]))
-    assert not task.design_space.contains(torch.tensor([[0.0], [1.5]]))
+    assert isinstance(task.design_prior, EmpiricalDistribution)
+    assert task.contains_design(torch.tensor([[1.0], [300.0]]))
+    assert not task.contains_design(torch.tensor([[0.0], [1.5]]))
     assert torch.equal(
-        task.design_space.decode(torch.tensor([0, 299])),
+        task.design_prior.decode(torch.tensor([0, 299])),
         torch.tensor([[1.0], [300.0]]),
     )
 
 
 def test_design_space_encodes_projects_and_samples_populations():
-    space = PreyPopulation().design_space
+    task = PreyPopulation()
+    space = task.design_prior
 
-    assert space.n_designs == 300
-    assert space.is_discrete
+    assert space.locs.shape[0] == 300
+    assert space.support.is_discrete
     assert torch.equal(
         space.encode(torch.tensor([[1.0], [300.0]])), torch.tensor([0, 299])
     )
     # Non-integer or out-of-range populations snap to the nearest valid one.
     assert torch.equal(
-        space.project(torch.tensor([[0.4], [150.6], [999.0]])),
+        _project(space.support, torch.tensor([[0.4], [150.6], [999.0]])),
         torch.tensor([[1.0], [151.0], [300.0]]),
     )
     assert space.sample((5,)).shape == (5, 1)
-    assert space.contains(space.sample((64,)))
+    assert task.contains_design(space.sample((64,)))
 
 
 def test_prior_matches_independent_lognormals():

@@ -16,8 +16,8 @@ def test_event_shapes_and_flags():
     assert task.event_shape_theta == torch.Size([4])
     assert task.event_shape_design == torch.Size([2])
     assert not task.memoryless
-    assert task.design_space.contains(torch.tensor([[-4.0, -2.0], [4.0, 2.0]]))
-    assert not task.design_space.contains(torch.tensor([[0.0, 2.5]]))
+    assert task.contains_design(torch.tensor([[-4.0, -2.0], [4.0, 2.0]]))
+    assert not task.contains_design(torch.tensor([[0.0, 2.5]]))
 
 
 def test_prior_matches_lognormal_with_jacobian():
@@ -102,7 +102,7 @@ def test_drift_func_broadcasts_over_batch():
     task = DoubleLink()
     y = torch.randn(7, 4)
     theta = task.sample_prior(7)
-    design = task.design_space.sample((7,))
+    design = task.design_prior.sample((7,))
 
     assert task.drift_func(y, theta, design).shape == (7, 4)
 
@@ -162,7 +162,7 @@ def test_outcome_logp_matches_analytic_gaussian_density():
 def test_sample_outcome_is_reparametrized():
     task = DoubleLink()
     theta = task.sample_prior(8)
-    design = task.design_space.sample((8,)).requires_grad_(True)
+    design = task.design_prior.sample((8,)).requires_grad_(True)
 
     y = task.sample_outcome(theta, design)
     y.sum().backward()
@@ -190,7 +190,7 @@ def test_history_logp_matches_manual_sequential_computation():
     task = DoubleLink(noise_scale=0.1)
     b, T = 3, 4
     theta = task.sample_prior(b)
-    design_history = task.design_space.sample((b, T))
+    design_history = task.design_prior.sample((b, T))
     y_history = torch.randn(b, T, 4) * 0.1
 
     logp = task.history_logp(y_history, design_history, theta)
@@ -250,7 +250,7 @@ def test_noise_jitter_defaults_off_and_regularizes_a_singular_diffusion():
     assert (task.obs_std > 0).all()
 
     theta = task.sample_prior(4)
-    design = task.design_space.sample((4,))
+    design = task.design_prior.sample((4,))
     logp = task.outcome_logp(task.sample_outcome(theta, design), theta, design)
 
     assert torch.isfinite(logp).all()

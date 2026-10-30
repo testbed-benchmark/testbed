@@ -1,17 +1,14 @@
 """Prey-population task from Blau et al. (2022)."""
 
-from collections.abc import Iterable
-
 import torch
 from torch import Tensor
 from torch.distributions import Binomial, LogNormal
 
-from ..core.design_spaces import FiniteDesignSpace
-from ..core.distributions import Distribution
+from ..core.distributions import Distribution, EmpiricalDistribution, TorchDistribution
 from .base import Task
 
 
-class PreyPopulationPrior(Distribution):
+class PreyPopulationPrior(TorchDistribution):
     r"""Independent log-normal prior over attack rate and handling time.
 
     The prior follows Appendix B.3 of Blau et al. (2022):
@@ -29,48 +26,14 @@ class PreyPopulationPrior(Distribution):
     """
 
     def __init__(self, loc: float = -1.4, scale: float = 1.35) -> None:
-        """Initializes the prior parameters.
+        """Builds independent log-normals for ``(a, T_h)``.
 
         Args:
             loc: Mean of both latent log-parameters.
             scale: Standard deviation of both latent log-parameters.
         """
-        super().__init__(event_shape=(2,))
-        self.register_buffer("loc", torch.tensor(loc))
-        self.register_buffer("scale", torch.tensor(scale))
-
-    @property
-    def lognormal(self) -> torch.distributions.Distribution:
-        """Returns the shared log-normal marginal distribution.
-
-        Returns:
-            LogNormal distribution for either parameter.
-        """
-        return LogNormal(self.loc, self.scale)
-
-    def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
-        """Draws samples of attack rate and handling time.
-
-        Args:
-            sample_shape: Shape of the batch of draws (default: ()).
-
-        Returns:
-            Parameter samples with shape ``[*sample_shape, 2]`` and columns
-            ``(a, T_h)``.
-        """
-        return self.lognormal.sample(self._extended_shape(sample_shape))
-
-    def log_prob(self, theta: Tensor) -> Tensor:
-        """Evaluates the joint log probability of attack rate and handling time.
-
-        Args:
-            theta: Parameter values with shape ``[..., 2]`` and columns
-                ``(a, T_h)``.
-
-        Returns:
-            Joint log probabilities with shape ``[...]``.
-        """
-        return self.lognormal.log_prob(theta).sum(dim=-1)
+        lognormal = LogNormal(torch.tensor(loc), torch.tensor(scale))
+        super().__init__(lognormal.expand((2,)))
 
 
 class PreyPopulation(Task):
@@ -98,8 +61,8 @@ class PreyPopulation(Task):
         event_shape_theta: Shape of one parameter sample.
         event_shape_design: Shape of one initial-population design.
         discrete_y: Whether prey-consumption observations are discrete.
-        design_space: Finite space of initial populations from 1 through
-            300 prey.
+        design_prior: Uniform over the initial populations from 1 through
+            300 prey, a finite set which is the design space.
     """
 
     @property
@@ -137,7 +100,7 @@ class PreyPopulation(Task):
             event_shape_design=[1],
             prior=prior,
             discrete_y=True,
-            design_space=FiniteDesignSpace(
+            design_prior=EmpiricalDistribution(
                 torch.arange(1, 301, dtype=torch.get_default_dtype()).unsqueeze(-1)
             ),
             reparameterize_outcomes=reparameterize_outcomes,

@@ -24,7 +24,7 @@ class Designer(ABC, nn.Module):
         hooks (iterable, optional):
             An optional iterable of ``RolloutHook`` objects used to modify the design process (default: ()).
         transform_designs (bool):
-            If True, the designer will automatically reparametrise designs using the task's DesignSpace.
+            If True, the designer will automatically reparametrise designs using the task's design_transform.
             Set to False if you would prefer to handle this manually (default: True).
     """
 
@@ -58,22 +58,22 @@ class Designer(ABC, nn.Module):
         return self.task.device
 
     def _to_design(self, raw_design):
-        r"""Maps a raw value into a valid design via task.design_space.to_design.
+        r"""Maps a raw value into a valid design via task.design_transform.
 
         Identity when self.transform_designs is False.
         """
         if not self.transform_designs:
             return raw_design
-        return self.task.design_space.to_design(raw_design)
+        return self.task.design_transform(raw_design)
 
     def _to_raw(self, design):
-        r"""Inverse of ``_to_design``, via task.design_space.to_raw.
+        r"""Inverse of ``_to_design``, via task.design_transform.inv.
 
         Identity when self.transform_designs is False.
         """
         if not self.transform_designs:
             return design
-        return self.task.design_space.to_raw(design)
+        return self.task.design_transform.inv(design)
 
     @abstractmethod
     def _step_design(self, state: RolloutState):

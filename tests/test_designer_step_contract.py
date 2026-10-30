@@ -239,7 +239,7 @@ def test_policy_designer_conditions_on_the_requested_history(use_raw_history):
     designer.rollout(task.sample_prior(2))
 
     history_at_t1 = spy.seen[1]
-    in_design_space = task.design_space.contains(history_at_t1)
+    in_design_space = task.contains_design(history_at_t1)
     assert in_design_space is (not use_raw_history)
 
 

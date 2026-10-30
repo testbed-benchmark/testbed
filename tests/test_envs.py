@@ -3,7 +3,7 @@ import typing
 import pytest
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace, FiniteDesignSpace
+from testbed.core import Box, EmpiricalDistribution
 from testbed.envs import (
     BEDEnv,
     CallableReward,
@@ -15,24 +15,24 @@ from testbed.envs import (
 from testbed.tasks import LocationFinding
 
 
-def make_task(design_space=None):
-    if design_space is None:
-        design_space = BoxDesignSpace(-1.0, 1.0, event_shape=(2,))
+def make_task(design_prior=None):
+    if design_prior is None:
+        design_prior = Box(-1.0, 1.0, event_shape=(2,))
     return LocationFinding(
         n_sources=1,
         dim_theta=2,
         noise_scale=0.2,
-        design_space=design_space,
+        design_prior=design_prior,
     )
 
 
-# BoxDesignSpace's own behaviour is covered in tests/test_design_spaces.py;
+# Box's own behaviour is covered in tests/test_design_spaces.py;
 # what follows exercises how BEDEnv uses a design space.
 
 
 def test_bed_env_rejects_invalid_categorical_designs_without_projection():
-    task = make_task(FiniteDesignSpace(torch.tensor([[-1.0, -1.0], [1.0, 1.0]])))
-    # FiniteDesignSpace.project snaps to the nearest valid design, so an invalid
+    task = make_task(EmpiricalDistribution(torch.tensor([[-1.0, -1.0], [1.0, 1.0]])))
+    # EmpiricalDistribution.project snaps to the nearest valid design, so an invalid
     # design only reaches validation with projection turned off.
     env = BEDEnv(
         task,

@@ -1,18 +1,15 @@
 """Linear-Gaussian regression task."""
 
-import math
-from collections.abc import Iterable
-
 import torch
 from torch import Tensor
+from torch.distributions import MultivariateNormal
 
-from ..core.design_spaces import BoxDesignSpace, DesignSpace
-from ..core.distributions import Distribution
+from ..core.distributions import Box, Distribution, TorchDistribution
 from ..core.util import normal_log_prob
 from .base import Task
 
 
-class LinearRegressionPrior(Distribution):
+class LinearRegressionPrior(TorchDistribution):
     r"""Gaussian prior for weights in linear regression.
 
     The default prior is:
@@ -35,66 +32,16 @@ class LinearRegressionPrior(Distribution):
         theta_loc: Tensor = None,
         theta_covmat: Tensor = None,
     ):
-        """Initializes prior for weights in linear regression."""
-        super().__init__(event_shape=(dim_theta,))
-
-        self.dim_theta = dim_theta  # Dimensionality of theta, including bias; e.g., dim_theta=2 is theta0 + theta1 x
-
+        """Builds a ``MultivariateNormal`` prior over the weights."""
         # Default prior is Normal with mean zero and covariance diag([1.0, 0.25, ..., 0.25])
         if theta_loc is None:
-            theta_loc = torch.zeros((self.dim_theta,))
+            theta_loc = torch.zeros(dim_theta)
         if theta_covmat is None:
-            variances = torch.zeros(self.dim_theta)
+            variances = torch.full((dim_theta,), 0.25)
             variances[0] = 1.0
-            variances[1:] = 0.25
             theta_covmat = torch.diag(variances)
-
-        chol = torch.linalg.cholesky(theta_covmat)
-        logdet = 2 * torch.log(torch.diagonal(chol)).sum()
-
-        # All persistent tensors registered as buffers
-        self.register_buffer("loc", theta_loc)
-        self.register_buffer("cov", theta_covmat)
-        self.register_buffer("chol", chol)
-        self.register_buffer("logdet", logdet)
-
-    def sample(self, sample_shape: int | Iterable[int] = ()):
-        """Draws samples of parameters from the prior.
-
-        Args:
-            sample_shape (int or iterable):
-                Shape of the batch of draws (default: ()).
-
-        Returns:
-            Tensor:
-                Samples, shape ``[*sample_shape, dim_theta]``
-        """
-        eps = torch.randn(self._extended_shape(sample_shape), device=self.loc.device)
-        return self.loc + eps @ self.chol.T
-
-    def log_prob(self, theta: Tensor):
-        """Evaluates prior log probabilities.
-
-        Args:
-            theta (Tensor):
-                Points at which to evaluate the log-probability. Shape ``[..., dim_theta]``.
-
-        Returns:
-            Tensor:
-                Log probs, shape ``[...]``
-        """
-        diff = theta - self.loc
-
-        # solve L x = diff  (more stable than inverse); diff as a column vector
-        # so that an unbatched theta works too
-        solve = torch.linalg.solve_triangular(
-            self.chol, diff.unsqueeze(-1), upper=False
-        ).squeeze(-1)
-
-        maha = (solve**2).sum(-1)
-
-        logp = -0.5 * (maha + self.logdet + self.dim_theta * math.log(2 * math.pi))
-        return logp
+        super().__init__(MultivariateNormal(theta_loc, theta_covmat))
+        self.dim_theta = dim_theta  # Dimensionality of theta, including bias; e.g., dim_theta=2 is theta0 + theta1 x
 
 
 class LinearRegression(Task):
@@ -120,9 +67,9 @@ class LinearRegression(Task):
             Setting this to zero gives the standard linear model.
         prior (Distribution, optional):
             Prior over parameters. If None, the default Gaussian LinearRegressionPrior is used.
-        design_space (DesignSpace, optional):
-            Controls the design parametrization. If None, a
-            :class:`~testbed.core.design_spaces.BoxDesignSpace` over
+        design_prior (Distribution, optional):
+            Distribution of random designs; its support is the design space.
+            If None, a :class:`~testbed.core.distributions.Box` over
             ``[-1, 1]^dim`` is used. Note the quadratic term above is centred
             on ``||x|| = 1``, which this box attains.
     """
@@ -139,7 +86,7 @@ class LinearRegression(Task):
         noise_scale: float = 0.1,
         quad: float = 0.0,
         prior=None,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the LinearRegression task."""
@@ -147,15 +94,15 @@ class LinearRegression(Task):
         if prior is None:
             prior = LinearRegressionPrior(dim_theta=dim + 1)
 
-        if design_space is None:
-            design_space = BoxDesignSpace(low=-1.0, high=1.0, event_shape=[dim])
+        if design_prior is None:
+            design_prior = Box(low=-1.0, high=1.0, event_shape=[dim])
 
         super().__init__(
             event_shape_y=[dim_y],
             event_shape_theta=[dim + 1],
             event_shape_design=[dim],
             prior=prior,
-            design_space=design_space,
+            design_prior=design_prior,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 

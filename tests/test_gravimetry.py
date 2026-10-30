@@ -17,7 +17,7 @@ def test_event_shapes_and_flags():
     assert task.event_shape_design == torch.Size([1])
     assert task.memoryless
     # designs are unbounded measurement locations along a line
-    assert task.design_space.contains(torch.tensor([[-500.0], [500.0]]))
+    assert task.contains_design(torch.tensor([[-500.0], [500.0]]))
 
 
 def test_kappa_coefficient_matches_the_physical_mapping():

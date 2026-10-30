@@ -9,8 +9,8 @@ design_net:
   canonicalize_theta: true  # the two sources are exchangeable
 
 task:
-  design_space:
-    _target_: testbed.core.design_spaces.BoxDesignSpace
+  design_prior:
+    _target_: testbed.core.Box
     low: -4.0
     high: 4.0
     event_shape:

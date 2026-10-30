@@ -8,14 +8,11 @@ import torch
 from torch import Tensor, nn
 from torch.distributions import Categorical, Independent, MixtureSameFamily, Normal
 
-from testbed.core.distributions import (
-    Distribution,
-    TorchDistribution,
-    as_sample_shape,
-)
+from testbed.core.constraints import BlockTransform
+from testbed.core.distributions import as_sample_shape
 from testbed.core.util import sort_by_first_coordinate
 from testbed.design_nets.encoder import AttentiveEncoder, DeepSetEncoder, HistoryEncoder
-from testbed.design_nets.modules import MLP, BlockTransform
+from testbed.design_nets.modules import MLP
 
 
 class VariationalPosteriorNet(nn.Module, ABC):
@@ -248,12 +245,9 @@ class GaussianMixtureVariationalPosteriorNet(VariationalPosteriorNet):
                 f"{tuple(self.theta_scale.shape)}."
             )
 
-    def distribution(self, y_history, design_history, mask=None) -> Distribution:
-        """Returns the Gaussian-mixture posterior with batch shape ``batch_shape``."""
-        return TorchDistribution(
-            self._mixture(y_history, design_history, mask=mask),
-            reinterpreted_batch_ndims=0,
-        )
+    def distribution(self, y_history, design_history, mask=None) -> MixtureSameFamily:
+        """Returns the torch Gaussian-mixture posterior, one per history in the batch."""
+        return self._mixture(y_history, design_history, mask=mask)
 
     def log_prob(self, theta: Tensor, y_history, design_history, mask=None) -> Tensor:
         """Evaluates the mixture's log density at theta; shape ``[*batch_shape]``."""
@@ -378,14 +372,13 @@ class ConstrainedGaussianMixtureVariationalPosteriorNet(
             )
         self.transform = transform
 
-    def raw_distribution(self, y_history, design_history, mask=None) -> Distribution:
-        """Returns the mixture over unconstrained coordinates for a history."""
-        return TorchDistribution(
-            self._mixture(y_history, design_history, mask=mask),
-            reinterpreted_batch_ndims=0,
-        )
+    def raw_distribution(
+        self, y_history, design_history, mask=None
+    ) -> MixtureSameFamily:
+        """Returns the torch mixture over unconstrained coordinates, one per history."""
+        return self._mixture(y_history, design_history, mask=mask)
 
-    def distribution(self, y_history, design_history, mask=None) -> Distribution:
+    def distribution(self, y_history, design_history, mask=None) -> MixtureSameFamily:
         """Unavailable: this family has no explicit distribution object over theta.
 
         The base class's ``distribution`` is a mixture in theta's own coordinates,

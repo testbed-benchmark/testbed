@@ -3,7 +3,8 @@ import math
 import pytest
 import torch
 
-from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core import Box
+from testbed.envs.bed_env import _project
 from testbed.tasks import MichaelisMenten
 from testbed.tasks.michaelis_menten import MichaelisMentenPrior
 
@@ -26,8 +27,8 @@ def test_event_shapes():
 def test_task_uses_default_prior_with_correct_bounds():
     task = make_task()
     assert isinstance(task.prior, MichaelisMentenPrior)
-    assert torch.equal(task.prior.lbs, torch.tensor([20.0, 20.0]))
-    assert torch.equal(task.prior.ubs, torch.tensor([200.0, 200.0]))
+    assert torch.equal(task.prior.dist.base_dist.low, torch.tensor([20.0, 20.0]))
+    assert torch.equal(task.prior.dist.base_dist.high, torch.tensor([200.0, 200.0]))
 
 
 def test_prior_sample_shapes_and_bounds():
@@ -137,19 +138,19 @@ def test_sample_outcome_mean_matches_conditional_mean():
 def test_default_design_space_is_the_concentration_box():
     task = make_task()
 
-    assert isinstance(task.design_space, BoxDesignSpace)
-    assert task.design_space.event_shape == torch.Size([1])
-    assert torch.equal(task.design_space.low, torch.zeros(1))
-    assert torch.equal(task.design_space.high, torch.full((1,), 400.0))
+    assert isinstance(task.design_prior, Box)
+    assert task.design_prior.event_shape == torch.Size([1])
+    assert torch.equal(task.design_prior.low, torch.zeros(1))
+    assert torch.equal(task.design_prior.high, torch.full((1,), 400.0))
 
 
 def test_design_space_accepts_the_closed_box_and_rejects_outside():
-    space = make_task().design_space
+    task = make_task()
 
-    assert space.contains(torch.zeros(1))
-    assert space.contains(torch.full((1,), 400.0))
-    assert not space.contains(torch.full((1,), -1e-3))
-    assert not space.contains(torch.full((1,), 400.001))
+    assert task.contains_design(torch.zeros(1))
+    assert task.contains_design(torch.full((1,), 400.0))
+    assert not task.contains_design(torch.full((1,), -1e-3))
+    assert not task.contains_design(torch.full((1,), 400.001))
 
 
 def test_task_rejects_negative_and_oversized_concentrations():
@@ -164,10 +165,11 @@ def test_task_rejects_negative_and_oversized_concentrations():
 
 def test_design_space_sample_and_project_stay_in_the_box():
     torch.manual_seed(0)
-    space = make_task().design_space
+    task = make_task()
+    space = task.design_prior
 
-    assert space.contains(space.sample((64,)))
-    assert space.contains(space.project(torch.randn(64, 1) * 1000))
+    assert task.contains_design(space.sample((64,)))
+    assert task.contains_design(_project(space.support, torch.randn(64, 1) * 1000))
 
 
 def test_reparametrisation_reaches_the_bounds_under_saturation():
@@ -176,15 +178,15 @@ def test_reparametrisation_reaches_the_bounds_under_saturation():
     # reachable through the squash, not just through project(). That matters
     # for the x = 0 gradient singularity covered below.
     torch.manual_seed(0)
-    space = make_task().design_space
+    task = make_task()
 
-    design = space.to_design(torch.randn(256, 1) * 10)
+    design = task.design_transform(torch.randn(256, 1) * 10)
 
-    assert space.contains(design)
+    assert task.contains_design(design)
     assert (design == 0.0).any()
     assert (design == 400.0).any()
     # Inverting a saturated design stays finite rather than blowing up.
-    assert torch.isfinite(space.to_raw(design)).all()
+    assert torch.isfinite(task.design_transform.inv(design)).all()
 
 
 def test_mean_gradient_at_zero_concentration_depends_on_the_hill_exponent():

@@ -9,8 +9,9 @@ from collections.abc import Iterable
 
 import torch
 from torch import Tensor
+from torch.distributions import constraints
 
-from ..core.design_spaces import DesignSpace
+from ..core.constraints import blocks
 from ..core.distributions import Distribution
 from ..core.util import normal_cdf, normal_log_prob
 from .base import Task
@@ -114,6 +115,19 @@ class GravimetryPrior(Distribution):
         r = self.r_min + (self.r_max - self.r_min) * normal_cdf(u[..., 2:3])
         return torch.cat([x0, z, self.kappa_coeff * r**3], dim=-1)
 
+    @property
+    def support(self) -> constraints.Constraint:
+        """``x0`` real, ``z >= z_floor`` and ``kappa`` between its radius bounds."""
+        kappa_bounds = sorted(self.kappa_coeff * r**3 for r in (self.r_min, self.r_max))
+        return blocks(
+            [
+                constraints.real,
+                constraints.greater_than_eq(self.z_floor),
+                constraints.interval(*kappa_bounds),
+            ],
+            [1, 1, 1],
+        )
+
     def sample(self, sample_shape: int | Iterable[int] = ()) -> Tensor:
         """Draws samples of parameters from the prior.
 
@@ -189,9 +203,9 @@ class Gravimetry(Task):
             Standard deviation of observation noise :math:`\sigma` (default: 1.0).
         prior (Distribution, optional):
             Prior over parameters. If None, the default GravimetryPrior is used.
-        design_space (DesignSpace, optional):
-            Measurement locations. If None, the task retains its unbounded
-            default design space.
+        design_prior (Distribution, optional):
+            Distribution of measurement locations; its support is the design
+            space. If None, locations are unbounded with a standard normal prior.
     """
 
     @property
@@ -203,7 +217,7 @@ class Gravimetry(Task):
         self,
         noise_scale: float = 1.0,
         prior=None,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         reparameterize_outcomes: bool | None = None,
     ) -> None:
         """Initializes the gravimetry task."""
@@ -215,7 +229,7 @@ class Gravimetry(Task):
             event_shape_theta=[3],
             event_shape_design=[1],
             prior=prior,
-            design_space=design_space,
+            design_prior=design_prior,
             reparameterize_outcomes=reparameterize_outcomes,
         )
 

@@ -5,10 +5,17 @@ from collections.abc import Iterable
 
 import torch
 from torch import nn
+from torch.distributions import Normal
+from torch.distributions.transforms import Transform
 
-from ..core.design_spaces import DefaultDesignSpace, DesignSpace
-from ..core.distributions import Distribution, as_sample_shape
-from ..core.util import broadcast_and_flatten
+from ..core.constraints import default_design_transform, in_support
+from ..core.distributions import (
+    Distribution,
+    EmpiricalDistribution,
+    TorchDistribution,
+    as_sample_shape,
+)
+from ..core.util import broadcast_and_flatten, matches_event_shape
 
 
 class Task(ABC, nn.Module):
@@ -38,22 +45,22 @@ class Task(ABC, nn.Module):
             ``__init__`` checks this on one prior sample.
         discrete_y (bool):
             Whether observations are discrete (default: False).
-        discrete_theta (bool):
-            Whether parameters are discrete (default: False).
         memoryless (bool):
             Whether outcomes don't depend on history, i.e. ``_outcome_logp``/
             ``_sample_outcome`` ignore their ``y_history``/``design_history``
             kwargs (default: True).
         implicit_likelihood (bool):
             Whether the likelihood is implicit (default: False).
-        design_space (optional):
-            Constraints on the space of designs. Its event shape must match
-            ``event_shape_design`` (default: None).
+        design_prior (Distribution, optional):
+            Distribution of random designs, whose ``support`` is the space of
+            valid designs and which determines :attr:`design_transform`. Its
+            ``event_shape`` must equal ``event_shape_design``. None gives a
+            standard normal over unconstrained designs (default: None).
         validate_designs (bool):
             Whether outcome_logp/sample_outcome/history_logp/sample_joint check
-            incoming designs against design_space.contains(...) and raise if a
-            design lies outside it. Disable for tight loops where the caller
-            already guarantees valid designs (default: True).
+            incoming designs against :meth:`contains_design` and raise if a
+            design lies outside the design space. Disable for tight loops where
+            the caller already guarantees valid designs (default: True).
         reparameterize_outcomes (bool, optional):
             Whether sampled outcomes carry a pathwise gradient to the design.
             None follows the subclass's :attr:`reparameterizable_outcomes`;
@@ -102,10 +109,9 @@ class Task(ABC, nn.Module):
         event_shape_design: Iterable[int],
         prior: Distribution,
         discrete_y: bool = False,
-        discrete_theta: bool = False,
         memoryless: bool = True,
         implicit_likelihood: bool = False,
-        design_space: DesignSpace | None = None,
+        design_prior: Distribution | None = None,
         validate_designs: bool = True,
         reparameterize_outcomes: bool | None = None,
     ):
@@ -124,22 +130,27 @@ class Task(ABC, nn.Module):
 
         self.implicit_likelihood = implicit_likelihood
 
-        # Tracking if there are discrete components in the model
         self.discrete_y = discrete_y
-        self.discrete_theta = discrete_theta
 
-        resolved_design_space = (
-            design_space
-            if design_space is not None
-            else DefaultDesignSpace(self.event_shape_design)
-        )
-        if resolved_design_space.event_shape != self.event_shape_design:
+        if design_prior is None:
+            zeros = torch.zeros(self.event_shape_design)
+            design_prior = TorchDistribution(Normal(zeros, 1.0))
+        if design_prior.event_shape != self.event_shape_design:
             raise ValueError(
-                "design_space.event_shape must match event_shape_design; "
+                "design_prior.event_shape must match event_shape_design; "
                 f"expected {tuple(self.event_shape_design)}, got "
-                f"{tuple(resolved_design_space.event_shape)}."
+                f"{tuple(design_prior.event_shape)}."
             )
-        self.design_space = resolved_design_space
+        if isinstance(design_prior, EmpiricalDistribution):
+            # designs are addressed by index, so each must appear exactly once
+            locs = design_prior.locs
+            if locs.numel() == 0 or torch.unique(
+                locs.reshape(len(locs), -1), dim=0
+            ).shape[0] != len(locs):
+                raise ValueError(
+                    "A finite design space needs at least one design, each listed once."
+                )
+        self.design_prior = design_prior
         self.validate_designs = validate_designs
 
         # None follows the task's own capability. An explicit True the task
@@ -178,8 +189,7 @@ class Task(ABC, nn.Module):
                 f"{tuple(self.event_shape_theta)} and an empty batch_shape; got "
                 f"event_shape {tuple(prior.event_shape)} and batch_shape "
                 f"{tuple(prior.batch_shape)}. A TorchDistribution folds its "
-                "batch dims into the event unless reinterpreted_batch_ndims "
-                "says otherwise."
+                "batch dims into the event."
             )
 
         name = type(self).__name__
@@ -203,6 +213,47 @@ class Task(ABC, nn.Module):
                 "mapping [*batch, *event_shape_theta] to [*batch]; for a single "
                 f"draw it returned shape {tuple(logp.shape)} instead of ()."
             )
+
+    @property
+    def discrete_theta(self) -> bool:
+        """Whether parameters are discrete, i.e. the prior's support is."""
+        return self.prior.support.is_discrete
+
+    @property
+    def design_transform(self) -> Transform:
+        """Maps raw designs onto the design space, ``design_prior.support``.
+
+        The design prior's own ``transform`` if it defines one, and otherwise
+        :func:`~testbed.core.constraints.default_design_transform` of its
+        support. Cached, since designers apply it on every step; the cache is
+        dropped when the task moves (``.to()``, ``.double()``, ...) or the
+        design prior is replaced.
+        """
+        transform = self.__dict__.get("_design_transform")
+        if transform is None:
+            transform = getattr(self.design_prior, "transform", None)
+            if transform is None:
+                transform = default_design_transform(self.design_prior.support)
+            self.__dict__["_design_transform"] = transform
+        return transform
+
+    def _apply(self, fn, recurse=True):
+        """Drops the cached design transform, whose tensors are on the old device."""
+        self.__dict__.pop("_design_transform", None)
+        return super()._apply(fn, recurse)
+
+    def __setattr__(self, name, value):
+        """Drops the cached design transform when the design prior is replaced."""
+        if name == "design_prior":
+            self.__dict__.pop("_design_transform", None)
+        super().__setattr__(name, value)
+
+    def contains_design(self, design) -> bool:
+        """Whether every design in a batch has the design shape and lies in the design space."""
+        design = torch.as_tensor(design)
+        return matches_event_shape(design, self.event_shape_design) and in_support(
+            self.design_prior.support, design
+        )
 
     @property
     def current_prior(self) -> Distribution:
@@ -328,16 +379,16 @@ class Task(ABC, nn.Module):
         return y_flat
 
     def _check_design(self, design):
-        """Raises if design lies outside self.design_space (when validate_designs)."""
+        """Raises if design lies outside the design space (when validate_designs)."""
         if not self.validate_designs:
             return
-        if not self.design_space.contains(design):
-            # contains() rejects both bad values and a bad event shape
+        if not self.contains_design(design):
+            # contains_design() rejects both bad values and a bad event shape
             design = torch.as_tensor(design)
             raise ValueError(
-                f"Design lies outside {self.design_space} "
+                f"Design lies outside the design space {self.design_prior.support} "
                 f"(expected trailing shape "
-                f"{tuple(self.design_space.event_shape)}). "
+                f"{tuple(self.event_shape_design)}). "
                 f"Got design of shape {tuple(design.shape)}: {design}"
             )
 

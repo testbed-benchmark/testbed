@@ -6,7 +6,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from testbed.core.design_spaces import BoxDesignSpace
+from testbed.core import Box
 from testbed.core.hooks import ActionHook, PosteriorUpdateHook
 from testbed.core.rollout import Rollout
 from testbed.design_nets import AlineModel, AlineOutput
@@ -16,9 +16,7 @@ from testbed.tasks import LocationFinding
 
 
 def _make_task():
-    return LocationFinding(
-        n_sources=1, dim_theta=2, design_space=BoxDesignSpace(-4.0, 4.0, (2,))
-    )
+    return LocationFinding(n_sources=1, dim_theta=2, design_prior=Box(-4.0, 4.0, (2,)))
 
 
 def _make_cfg(**overrides):
@@ -70,7 +68,7 @@ def _make_trainer(cfg=None, manager=None, task=None):
 
 def test_model_masks_unavailable_candidates_and_scores_posterior():
     task = _make_task()
-    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
+    space = Box(-4.0, 4.0, event_shape=task.event_shape_design)
     model = _make_model(task)
     context_designs = space.sample((2, 2))
     context_y = task.sample_outcome(
@@ -142,7 +140,7 @@ def test_fractional_design_scale_is_not_truncated_by_integer_center():
 def test_attention_prevents_candidate_leakage():
     torch.manual_seed(0)
     task = _make_task()
-    space = BoxDesignSpace(-4.0, 4.0, event_shape=task.event_shape_design)
+    space = Box(-4.0, 4.0, event_shape=task.event_shape_design)
     model = _make_model(task).eval()
     theta = task.sample_prior(2)[:1]
     context_designs = space.sample((1, 2))
@@ -173,7 +171,7 @@ def test_rollout_samples_in_bounds_without_replacement():
         theta, deterministic=True, return_posterior_scores=True
     )
 
-    assert trainer.task.design_space.contains(rollout.design_history)
+    assert trainer.task.contains_design(rollout.design_history)
     for designs in rollout.design_history:
         assert torch.unique(designs, dim=0).shape[0] == trainer.cfg.T
 
@@ -234,7 +232,7 @@ def test_mean_log_prob_includes_every_parameter(n_sources, dim_theta):
     task = LocationFinding(
         n_sources=n_sources,
         dim_theta=dim_theta,
-        design_space=BoxDesignSpace(-4.0, 4.0, (dim_theta,)),
+        design_prior=Box(-4.0, 4.0, (dim_theta,)),
     )
     model = _make_model(task)
     trainer = Trainer(task, model, _make_cfg())
@@ -293,7 +291,7 @@ def test_policy_reward_matches_reference_clipping_and_standardization():
 def test_empty_context_has_finite_outputs_and_gradients(training):
     trainer, model = _make_trainer()
     model.train(training)
-    candidates = trainer.task.design_space.sample((2, 3))
+    candidates = trainer.task.design_prior.sample((2, 3))
     output = model(
         torch.empty(2, 0, 1),
         torch.empty(2, 0, 2),
@@ -347,8 +345,8 @@ def _checkpoint_cfg(**overrides):
             "_target_": "testbed.tasks.LocationFinding",
             "n_sources": 1,
             "dim_theta": 2,
-            "design_space": {
-                "_target_": "testbed.core.design_spaces.BoxDesignSpace",
+            "design_prior": {
+                "_target_": "testbed.core.Box",
                 "low": -4.0,
                 "high": 4.0,
                 "event_shape": [2],

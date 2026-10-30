@@ -112,7 +112,7 @@ Passing `fused=True` replaces the Python loop over $t$ with compiled kernels via
 
 ## Updating the Prior
 
-A task keeps two priors: `task.prior`, the original prior, and `task.current_prior`, which starts out equal to it. {py:meth}`~testbed.tasks.base.Task.update_prior` replaces the current prior, for example with a posterior after observing some data. This is how myopic and sequential designers work: {py:class}`~testbed.designers.sequential.SequentialDesigner` updates the current prior after each step, and objectives such as PCE sample from it.
+A task keeps two priors: `task.prior`, the original prior, and `task.current_prior`, which starts out equal to it. {py:meth}`~testbed.tasks.base.Task.update_prior` replaces the current prior, for example with a posterior after observing some data. The new prior can be any {py:class}`~testbed.core.distributions.Distribution` with the same event shape, e.g. a wrapped torch distribution (see [Distributions](distributions.md)). This is how myopic and sequential designers work: {py:class}`~testbed.designers.sequential.SequentialDesigner` updates the current prior after each step, and objectives such as PCE sample from it.
 
 `sample_current_prior`, `sample_joint` and `sample_marginal` use the current prior, while `sample_prior` always uses the original one. Here we replace the current prior with a narrower Gaussian centered on `theta_true`:
 

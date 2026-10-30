@@ -16,8 +16,8 @@ def test_event_shapes_and_flags():
     assert task.event_shape_theta == torch.Size([2])
     assert task.event_shape_design == torch.Size([1])
     assert not task.memoryless
-    assert task.design_space.contains(torch.tensor([[-1.0], [1.0]]))
-    assert not task.design_space.contains(torch.tensor([[-1.5]]))
+    assert task.contains_design(torch.tensor([[-1.0], [1.0]]))
+    assert not task.contains_design(torch.tensor([[-1.5]]))
 
 
 def test_prior_matches_lognormal_with_jacobian():
@@ -203,7 +203,7 @@ def test_noise_jitter_defaults_off_and_regularizes_a_singular_diffusion():
     assert (task.obs_std > 0).all()
 
     theta = task.sample_prior(4)
-    design = task.design_space.sample((4,))
+    design = task.design_prior.sample((4,))
     logp = task.outcome_logp(task.sample_outcome(theta, design), theta, design)
 
     assert torch.isfinite(logp).all()

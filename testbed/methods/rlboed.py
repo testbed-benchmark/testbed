@@ -14,12 +14,8 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import optim
 
-from testbed.core.design_spaces import (
-    BoxDesignSpace,
-    DefaultDesignSpace,
-    DesignSpace,
-    FiniteDesignSpace,
-)
+from testbed.core.constraints import interval_bounds, is_unconstrained
+from testbed.core.distributions import EmpiricalDistribution
 from testbed.core.setup import instantiate_design_net, make_main, setup
 from testbed.core.util import restore_rng, rng_state, seed_all
 from testbed.design_nets import (
@@ -304,7 +300,7 @@ def _soft_update(source: torch.nn.Module, target: torch.nn.Module, tau: float) -
         target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
 
 
-def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
+def validate_config(task: Task, cfg) -> None:
     """Rejects unsupported tasks and invalid settings."""
     sac = cfg.sac
     budget = cfg.train_time_budget_seconds
@@ -362,24 +358,28 @@ def validate_config(task: Task, cfg, design_space: DesignSpace) -> None:
         )
     if task.implicit_likelihood:
         raise ValueError("RLBOED requires a task with an explicit likelihood.")
-    if isinstance(design_space, DefaultDesignSpace):
+    design_prior = task.design_prior
+    if is_unconstrained(design_prior.support):
         warnings.warn(
             "RLBOED is training with an unconstrained design space; SAC may "
             "be unstable and the policy can diverge.",
             RuntimeWarning,
             stacklevel=2,
         )
-    elif not isinstance(design_space, (BoxDesignSpace, FiniteDesignSpace)):
+    elif not (
+        interval_bounds(design_prior.support) is not None
+        or isinstance(design_prior, EmpiricalDistribution)
+    ):
         raise TypeError(
-            "RLBOED requires a BoxDesignSpace, FiniteDesignSpace, or "
-            "DefaultDesignSpace."
+            "RLBOED requires a design prior over a box, a finite set (an "
+            "EmpiricalDistribution), or all of real space."
         )
 
 
 @dataclass
 class _SACNetworks:
     actor: StochasticDesignNet
-    design_space: DesignSpace
+    task: Task
     qf1: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
     qf2: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
     qf1_target: RLBOEDQNetwork | RLBOEDDiscreteQNetwork
@@ -401,7 +401,6 @@ def make_networks(
     event_shape_design = task.event_shape_design
     dim_y = event_shape_y.numel()
     dim_design = event_shape_design.numel()
-    design_space = task.design_space
     actor = instantiate_design_net(cfg.design_net, task).to(device)
     if not isinstance(actor, StochasticDesignNet):
         raise TypeError("cfg.design_net must construct a StochasticDesignNet.")
@@ -457,7 +456,7 @@ def make_networks(
 
     return _SACNetworks(
         actor=actor,
-        design_space=design_space,
+        task=task,
         qf1=qf1,
         qf2=qf2,
         qf1_target=qf1_target,
@@ -497,7 +496,7 @@ def _design_probabilities(
 
 def _propose_design(
     actor: StochasticDesignNet,
-    design_space: DesignSpace,
+    task: Task,
     obs: History,
     *,
     reparameterize_policy: bool = False,
@@ -511,11 +510,17 @@ def _propose_design(
     )
     if proposal.log_prob is None:
         raise RuntimeError("A stochastic RLBOED actor must return a log probability.")
-    design, log_prob = design_space.to_design(proposal.raw_design, proposal.log_prob)
-    if isinstance(design_space, BoxDesignSpace):
+    transform = task.design_transform
+    design = transform(proposal.raw_design)
+    log_prob = proposal.log_prob - transform.log_abs_det_jacobian(
+        proposal.raw_design, design
+    )
+    bounds = interval_bounds(task.design_prior.support)
+    if bounds is not None:
         # Match the reference SAC entropy convention: regularize the normalized
         # tanh action before its affine map into the physical design bounds.
-        scale = (design_space.high - design_space.low).to(proposal.raw_design) / 2.0
+        low, high = bounds
+        scale = (high - low).to(proposal.raw_design) / 2.0
         log_prob = log_prob + torch.log(scale).sum()
     return design, log_prob
 
@@ -541,7 +546,7 @@ def collect_episode_batch(
 
     for _ in range(horizon):
         with torch.no_grad():
-            designs, _ = _propose_design(actor, task.design_space, obs)
+            designs, _ = _propose_design(actor, task, obs)
         next_obs, rewards, terminations, truncations, _ = env.step(designs)
 
         dones = terminations | truncations
@@ -613,7 +618,7 @@ def sac_update(
         else:
             next_designs, next_log_prob = _propose_design(
                 nets.actor,
-                nets.design_space,
+                nets.task,
                 data_next_obs,
                 reparameterize_policy=True,
             )
@@ -628,7 +633,9 @@ def sac_update(
         )
 
     if is_categorical:
-        design_indices = nets.design_space.encode(data_designs).long().unsqueeze(-1)
+        design_indices = (
+            nets.task.design_prior.encode(data_designs).long().unsqueeze(-1)
+        )
         qf1_a_values = _critic(nets.qf1, data_obs).gather(1, design_indices).squeeze(-1)
         qf2_a_values = _critic(nets.qf2, data_obs).gather(1, design_indices).squeeze(-1)
     else:
@@ -655,7 +662,7 @@ def sac_update(
         else:
             pi, policy_log_prob = _propose_design(
                 nets.actor,
-                nets.design_space,
+                nets.task,
                 data_obs,
                 reparameterize_policy=True,
             )
@@ -731,7 +738,7 @@ class Trainer:
         self.device = task.device
         if cfg.sac.target_entropy is None:
             self.target_entropy = (
-                0.98 * log(self.nets.design_space.n_designs)
+                0.98 * log(self.task.design_prior.locs.shape[0])
                 if isinstance(self.nets.actor, CategoricalPolicyNet)
                 else -float(task.event_shape_design.numel())
             )
@@ -943,7 +950,7 @@ class Trainer:
                 raw_designs = self.designer.design_net(
                     obs.outcomes, obs.designs, mask=obs.mask
                 )
-                designs = self.task.design_space.to_design(raw_designs)
+                designs = self.task.design_transform(raw_designs)
                 obs, rewards, _, _, _ = eval_env.step(designs)
                 returns += rewards
 
@@ -994,7 +1001,7 @@ class Trainer:
 
     def build_checkpoint(self):
         """Builds the checkpoint dict holding weights and training state."""
-        design_space = self.task.design_space
+        design_prior = self.task.design_prior
         checkpoint = {
             **self.build_policy_checkpoint(),
             "config": OmegaConf.to_container(
@@ -1052,14 +1059,15 @@ class Trainer:
                 checkpoint["elapsed_seconds"] - checkpoint["train_time_budget_seconds"],
             ),
         )
-        if isinstance(design_space, BoxDesignSpace):
-            checkpoint["design_low"] = design_space.low.detach().cpu()
-            checkpoint["design_high"] = design_space.high.detach().cpu()
-        elif isinstance(design_space, FiniteDesignSpace):
-            checkpoint["design_low"] = design_space.values.amin(dim=0).detach().cpu()
-            checkpoint["design_high"] = design_space.values.amax(dim=0).detach().cpu()
-            checkpoint["design_values"] = design_space.values.detach().cpu()
-        # DefaultDesignSpace has no physical bounds. Its normalization
+        bounds = interval_bounds(design_prior.support)
+        if bounds is not None:
+            checkpoint["design_low"] = bounds[0].detach().cpu()
+            checkpoint["design_high"] = bounds[1].detach().cpu()
+        elif isinstance(design_prior, EmpiricalDistribution):
+            checkpoint["design_low"] = design_prior.locs.amin(dim=0).detach().cpu()
+            checkpoint["design_high"] = design_prior.locs.amax(dim=0).detach().cpu()
+            checkpoint["design_values"] = design_prior.locs.detach().cpu()
+        # An unconstrained design space has no physical bounds. Its normalization
         # references are already part of the actor and critic state dicts.
         return checkpoint
 
@@ -1173,7 +1181,7 @@ def load_checkpoint(
         )
 
     task = instantiate(cfg.task).to(cfg.device)
-    validate_config(task, cfg, task.design_space)
+    validate_config(task, cfg)
     _set_seed(cfg.seed, cfg.torch_deterministic)
     nets = make_networks(task, cfg, task.device)
     nets.actor.load_state_dict(state["design_net"])
@@ -1276,8 +1284,7 @@ def run(cfg):
     # fit_rlboed ordering) so weight initialization is reproducible.
     _set_seed(cfg.seed, cfg.torch_deterministic)
     nets = make_networks(task, cfg, task.device)
-    design_space = nets.design_space
-    validate_config(task, cfg, design_space)
+    validate_config(task, cfg)
 
     env = build_env(cfg, task)
     replay_buffer = build_replay_buffer(cfg, task)

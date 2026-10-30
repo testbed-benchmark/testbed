@@ -13,7 +13,7 @@ seed: 0
 torch_deterministic: true
 
 # false: the policy conditions on physical designs; true: on the unconstrained
-# designs it emitted, before task.design_space.to_design.
+# designs it emitted, before task.design_transform.
 use_raw_history: false
 
 objective:
