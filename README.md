@@ -30,9 +30,6 @@ your own training loops on top of them rather than adopting a fixed pipeline.
 It also ships reproducible training recipes for established methods, for fair
 benchmarking.
 
-TestBED currently focuses on policy-based (amortized) approaches to sequential
-experimental design.
-
 ## Installation
 
 ```bash
@@ -55,9 +52,9 @@ pip install "torch-testbed[full]"
 
 ## Quickstart
 
-Choose the next design in a source location-finding problem by optimizing the
-prior contrastive estimation (PCE) bound on expected information gain at each
-step:
+The following code chooses the designs for a source location-finding problem by
+optimising the prior contrastive estimation (PCE) bound on the expected
+information gain at each round:
 
 ```python
 from testbed.tasks import LocationFinding
@@ -77,37 +74,36 @@ walks through this example and compares it with other designers.
 
 ## What's included
 
-**Tasks.** Eleven benchmark problems with a shared interface, including
-location finding, CES, pharmacokinetics, Michaelis–Menten, temporal discounting,
-predator–prey, gravimetry, linear regression, and control tasks (cart-pole,
-pendulum and double-link). They cover continuous and discrete designs and
-outcomes, and likelihoods that depend on the full history.
-To add your own, subclass `Task`; see
-[Implementing New Tasks](https://torch-testbed.readthedocs.io/en/latest/guides/custom_tasks.html).
+**Tasks.** The most common benchmark problems for BED with a
+shared interface, such as location finding, CES, pharmacokinetics,
+Michaelis–Menten, temporal discounting, etc. They cover continuous and discrete
+designs and outcomes, and likelihoods that depend on the full history.
 
 **Designers.** `PolicyDesigner`, `SequentialDesigner`, `StaticDesigner` and
-`RandomDesigner` produce designs for any task, and can be customized or replaced.
+`RandomDesigner` provide different recipes for choosing designs for any task,
+and can be customized or replaced.
 
-**Design objectives and networks.** EIG bounds (PCE, sPCE, NMC, sNMC and
-Barber–Agakov), REINFORCE gradient estimators, and policy networks
-that share a common history convention.
+**Design objectives and networks.** Common bounds and estimators of the expected
+information gain (PCE, sPCE, NMC, sNMC and Barber–Agakov), REINFORCE gradient
+estimators, and policy networks for amortised learning.
 
-**Training methods.** Reference implementations, with Hydra recipes for
-most tasks:
+**Training methods.** Reference implementations of state-of-the-art BED
+algorithms for learning amortised policies, with Hydra recipes for most tasks.
+For example, training a design policy with
+[Action-BED](https://arxiv.org/pdf/2606.23662) on the temporal discounting task
+is as simple as running:
+```bash
+python testbed/methods/actionbed.py --config-name experiments/temporal_discounting/actionbed
+```
 
+The following algorithms are implemented currently:
 | Method | Reference |
 |---|---|
-| DAD | Foster et al., 2021 |
-| RL-BOED (Soft Actor-Critic) | Blau et al., 2022 |
-| ALINE | Huang et al., 2025 |
-| ActionBED | Rossa et al., 2026 |
-| Variational posterior (Barber–Agakov) | — |
-| Static (non-adaptive) designs | — |
-
-```bash
-python testbed/methods/dad.py
-python testbed/methods/actionbed.py --config-name experiments/location_finding_2src/actionbed
-```
+| Variational posterior (Barber–Agakov) | [Foster et al. 2020](https://arxiv.org/pdf/1911.00294), [Phillips et al., 2026](https://arxiv.org/pdf/2607.08335) |
+| DAD | [Foster et al., 2021](https://arxiv.org/pdf/2103.02438) |
+| RL-BOED | [Blau et al., 2022](https://arxiv.org/pdf/2202.00821) |
+| ALINE | [Huang et al., 2025](https://arxiv.org/pdf/2506.07259v2) |
+| Action-BED | [Rossa et al., 2026](https://arxiv.org/pdf/2606.23662) |
 
 See [Configuration recipes](https://torch-testbed.readthedocs.io/en/latest/guides/configuration.html)
 for how recipes are organized and overridden.
@@ -123,11 +119,11 @@ and the API reference, is at
 
 ## Contributing
 
-We welcome contributions, especially new tasks: many standard benchmarks are now
-too easy to separate current methods, and harder tasks are what move the field
-forward. See [CONTRIBUTING.md](https://github.com/testbed-benchmark/testbed/blob/main/CONTRIBUTING.md)
+We welcome contributions. See
+[CONTRIBUTING.md](https://github.com/testbed-benchmark/testbed/blob/main/CONTRIBUTING.md)
 for how to set up a development install and open a pull request, and read our
-[Code of Conduct](https://github.com/testbed-benchmark/testbed/blob/main/CODE_OF_CONDUCT.md)
+[Code of
+Conduct](https://github.com/testbed-benchmark/testbed/blob/main/CODE_OF_CONDUCT.md)
 before taking part.
 
 ## Citation
@@ -137,12 +133,8 @@ If you use TestBED in your research, please cite:
 ```bibtex
 @software{testbed,
   title  = {{TestBED}: A {PyTorch} Library for {Bayesian} Experimental Design},
-  author = {Kerrigan, Gavin and Hedman, Marcel and Iqbal, Sahel},
+  author = {Kerrigan, Gavin and Hedman, Marcel and Iqbal, Sahel and Rainforth, Tom},
   year   = {2026},
   url    = {https://github.com/testbed-benchmark/testbed},
 }
 ```
-
-## License
-
-TestBED is released under the [Apache 2.0 License](https://github.com/testbed-benchmark/testbed/blob/main/LICENSE).
