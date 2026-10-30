@@ -9,13 +9,13 @@
 <p align="center">
   <a href="https://torch-testbed.readthedocs.io/en/latest/"><img src="https://img.shields.io/readthedocs/torch-testbed?style=for-the-badge&logo=readthedocs&logoColor=white&label=docs" alt="Documentation"></a>
   <a href="https://pypi.org/project/torch-testbed/"><img src="https://img.shields.io/pypi/v/torch-testbed?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI"></a>
-  <a href="https://github.com/testbed-benchmark/testbed/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/testbed-benchmark/testbed/tests.yml?branch=main&style=for-the-badge&logo=github&logoColor=white&label=tests" alt="Tests"></a></p>
+  <a href="https://github.com/testbed-benchmark/testbed/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/testbed-benchmark/testbed/tests.yml?branch=main&style=for-the-badge&logo=github&logoColor=white&label=tests" alt="Tests"></a>
+</p>
 
 <p align="center">
+  <a href="#quickstart">Quickstart</a> ·
   <a href="https://torch-testbed.readthedocs.io">Documentation</a> ·
-  <a href="https://torch-testbed.readthedocs.io/en/latest/examples/location_finding.html">Tutorial</a> ·
-  <a href="#citation">Citation</a> ·
-  <a href="https://github.com/testbed-benchmark/testbed/blob/main/CONTRIBUTING.md">Contributing</a>
+  <a href="#citation">Citation</a>
 </p>
 
 ---
