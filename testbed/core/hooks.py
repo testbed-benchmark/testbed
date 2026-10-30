@@ -6,7 +6,7 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
-from ..inference.is_sampler import run_importance_sampling
+from ..inference.importance_sampler import run_importance_sampling
 from .rollout import RolloutState
 
 
@@ -89,35 +89,51 @@ class RolloutHook(nn.Module):
 
 
 class PosteriorUpdateHook(RolloutHook):
-    """Runs posterior inference and updates `task.current_prior` after every step."""
+    """Runs posterior inference after every step, setting `task.current_prior` to the result.
+
+    `inference(task, y_history, design_history) -> Distribution` conditions
+    `task.prior` on the rollout's history so far, of shape `[t, *event_shape]`.
+    Only batch size 1 is supported, since the task holds a single posterior.
+    `task.current_prior` holds the previous step's posterior when it is called,
+    which an engine may use, e.g. to warm-start. Configure an engine with
+    `functools.partial`, e.g. `partial(run_importance_sampling, n_proposal=10_000)`.
+
+    The final posterior is returned as `rollout.extra["posterior"]`. Hooks after
+    this one see it as `task.current_prior` until the rollout ends, when
+    `Designer.rollout` puts the task's `current_prior` back as it was.
+    """
 
     def __init__(
-        self,
-        inference_fn=run_importance_sampling,
-        *,
-        store_history: bool = False,
-        **inference_kwargs,
+        self, inference=run_importance_sampling, *, store_history: bool = False
     ):
-        """inference_fn(task, y_history, design_history, **inference_kwargs) -> Distribution."""
+        """Initializes the hook.
+
+        store_history: also return the posterior after each step, as the list
+            `rollout.extra["posterior_history"]` (default: False).
+        """
         super().__init__()
-        self.inference_fn = inference_fn
+        self.inference = inference
         self.store_history = store_history
-        self.inference_kwargs = inference_kwargs
 
     def after_step(self, state: RolloutState) -> None:
         """Infers the posterior from the history so far and updates the task."""
-        posterior = self.inference_fn(
-            state.task, state.y_history, state.design_history, **self.inference_kwargs
-        )
-        state.task.update_prior(posterior)
+        task = state.task
+        b = state.y_history.shape[0]
+        if b != 1:
+            raise ValueError(
+                "PosteriorUpdateHook supports batch size 1, since the task holds a "
+                f"single posterior; got batch {b}."
+            )
+        posterior = self.inference(task, state.y_history[0], state.design_history[0])
+        task.update_prior(posterior)
         if self.store_history:
-            state.scratch.setdefault("posterior_history", []).append(posterior)
+            state.scratch.setdefault("posterior_history", []).append(task.current_prior)
 
     def on_rollout_end(self, state: RolloutState) -> dict[str, Any] | None:
-        """Attaches the final (and optionally per-step) posterior to the rollout."""
+        """Returns the final (and optionally per-step) posterior."""
         extra = {"posterior": state.task.current_prior}
         if self.store_history:
-            extra["posterior_history"] = state.scratch["posterior_history"]
+            extra["posterior_history"] = state.scratch.get("posterior_history", [])
         return extra
 
 

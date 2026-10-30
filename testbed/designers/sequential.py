@@ -5,11 +5,11 @@ from collections.abc import Sequence
 import torch
 from torch.distributions import Distribution as TorchDist
 
-from testbed.core.distributions import Distribution, TorchDistribution
+from testbed.core.distributions import Distribution, as_distribution
 from testbed.core.hooks import PosteriorUpdateHook, RolloutHook
 from testbed.core.rollout import Rollout
 from testbed.design_objectives import DesignObjective
-from testbed.inference.is_sampler import run_importance_sampling
+from testbed.inference import run_importance_sampling
 from testbed.tasks import Task
 
 from .base import Designer
@@ -22,10 +22,10 @@ class SequentialDesigner(Designer):
     Adam optimization loop, which doesn't vectorize across independent
     per-example optimizations the way an amortized policy net does.
 
-    Composes a PosteriorUpdateHook by default (update_posterior=True): a
-    DesignObjective like NMC/PCE reads task.current_prior, and online
-    posterior tracking is what makes this designer "sequential" rather than
-    a repeated static design. Pass extra_hooks to run alongside it.
+    Composes a PosteriorUpdateHook running `inference` (importance sampling by
+    default): a DesignObjective like NMC/PCE reads task.current_prior, and
+    online posterior tracking is what makes this designer "sequential" rather
+    than a repeated static design. Pass extra_hooks to run alongside it.
     """
 
     def __init__(
@@ -37,12 +37,10 @@ class SequentialDesigner(Designer):
         n_step_opt: int,
         init_design_dist: Distribution | TorchDist | str | None = None,
         *,
-        update_posterior: bool = True,
-        inference_fn=run_importance_sampling,
+        inference=run_importance_sampling,
         store_posterior_history: bool = False,
         extra_hooks: Sequence[RolloutHook] = (),
         transform_designs: bool = True,
-        **inference_kwargs,
     ):
         """Initializes the sequential designer.
 
@@ -58,15 +56,16 @@ class SequentialDesigner(Designer):
                             space and theta space coincide, e.g. source-finding)
         Distribution     -- any testbed Distribution (or torch.distributions.Distribution);
                             one sample is drawn per call.
-        update_posterior: if True (default), a PosteriorUpdateHook runs after
-            every step using inference_fn/inference_kwargs, updating
-            task.current_prior. Set False to manage posterior updates
-            yourself (e.g. via extra_hooks).
+        inference: `inference(task, y_history, design_history) -> Distribution`,
+            run by a PosteriorUpdateHook after every step to update
+            task.current_prior (see PosteriorUpdateHook). Configure it with
+            functools.partial. None turns posterior updates off, e.g. to
+            manage them yourself via extra_hooks.
         store_posterior_history: if True, the PosteriorUpdateHook also keeps
             the posterior computed after each step, exposed on the rollout
             as extra["posterior_history"] (a list of Distribution, one per
             step) alongside the usual extra["posterior"] for the final one.
-            Off by default -- only meaningful when update_posterior is True.
+            Off by default -- only meaningful when inference is not None.
         extra_hooks: additional hooks to run alongside the posterior update
             (after it, so they see the up-to-date posterior).
         transform_designs: see Designer.__init__. Default True: the raw design
@@ -91,18 +90,14 @@ class SequentialDesigner(Designer):
             )
 
         hooks = list(extra_hooks)
-        if update_posterior:
+        if inference is not None:
             hooks = [
-                PosteriorUpdateHook(
-                    inference_fn,
-                    store_history=store_posterior_history,
-                    **inference_kwargs,
-                ),
+                PosteriorUpdateHook(inference, store_history=store_posterior_history),
                 *hooks,
             ]
         elif store_posterior_history:
             raise ValueError(
-                "store_posterior_history=True requires update_posterior=True "
+                "store_posterior_history=True requires an inference "
                 "(there's no PosteriorUpdateHook to track history on)."
             )
         super().__init__(
@@ -116,10 +111,8 @@ class SequentialDesigner(Designer):
         self.lr = lr
         self.n_step_opt = n_step_opt
 
-        if isinstance(init_design_dist, TorchDist) and not isinstance(
-            init_design_dist, Distribution
-        ):
-            init_design_dist = TorchDistribution(init_design_dist)
+        if isinstance(init_design_dist, TorchDist):
+            init_design_dist = as_distribution(init_design_dist)
         self.init_design_dist = init_design_dist
 
     def initialize_design(self):

@@ -17,7 +17,7 @@ In TestBED, `Designer` objects automate the design process for you and produces 
 
 ## Example: posterior inference with a random designer
 
-To illustrate how you can use hooks, we will augment the `RandomDesigner` to do posterior inference at each step of the design process (which, on its own, does no inference and just samples designs from a fixed distribution). A {py:class}`~testbed.core.hooks.RolloutHook` lets us bolt that on without writing a new `Designer`. Below, a {py:class}`~testbed.core.hooks.PosteriorUpdateHook` runs importance sampling after every step, updating `task.current_prior` and (with `store_history=True`) keeping the posterior from each step in `rollout.extra["posterior_history"]`.
+To illustrate how you can use hooks, we will augment the `RandomDesigner` to do posterior inference at each step of the design process (which, on its own, does no inference and just samples designs from a fixed distribution). A {py:class}`~testbed.core.hooks.RolloutHook` lets us bolt that on without writing a new `Designer`. Below, a {py:class}`~testbed.core.hooks.PosteriorUpdateHook` runs importance sampling after every step, updating `task.current_prior` and (with `store_history=True`) keeping the posterior from each step in `rollout.extra["posterior_history"]`. See [Custom Inference](../guides/inference.md) for other inference methods.
 
 ```{code-cell} ipython3
 import torch

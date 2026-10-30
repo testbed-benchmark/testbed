@@ -64,7 +64,7 @@ print(f'design={design}, y={y}')
 print(f'raw_design==inverse_raw_design? {torch.allclose(raw_design, inverse_raw_design)}')
 ```
 
-### Changing the parametrisation
+## Changing the parametrisation
 
 To parametrise the same design space differently, write a design prior with its own `transform`. Here is a uniform prior on a box, as with {py:class}`~testbed.core.distributions.Box`, whose raw designs map through a sigmoid rather than the default tanh:
 

@@ -117,14 +117,14 @@ plot(rollout)
 
 ## SequentialDesigner
 
-Picking designs randomly isn't very fun. Let's use {py:class}`~testbed.designers.SequentialDesigner` to produce a sequence of designs by optimising the {py:class}`~testbed.design_objectives.PCE` at each step. TestBED also supports other objectives, like {py:class}`~testbed.design_objectives.NMC`, and enables you to easily implement your own objectives as needed.
+Picking designs randomly isn't very fun. Let's use {py:class}`~testbed.designers.sequential.SequentialDesigner` to produce a sequence of designs by optimising the {py:class}`~testbed.design_objectives.PCE` at each step. TestBED also supports other objectives, like {py:class}`~testbed.design_objectives.NMC`, and enables you to easily implement your own objectives as needed.
 
-By default, {py:class}`~testbed.designers.SequentialDesigner` optimises its objective (here, `PCE`) by doing a basic gradient-ascent procedure using Adam. While this is often effective, there may be certain tasks where a more tailored approach is desired (e.g., different optimisers, initialisation schemes, random restarts...). You can achieve this in TestBED by either subclassing `SequentialDesigner` or by writing your own custom `Designer`. See our guide on [Implementing Custom Methods](../guides/custom_methods.md).
+By default, {py:class}`~testbed.designers.sequential.SequentialDesigner` optimises its objective (here, `PCE`) by doing a basic gradient-ascent procedure using Adam. While this is often effective, there may be certain tasks where a more tailored approach is desired (e.g., different optimisers, initialisation schemes, random restarts...). You can achieve this in TestBED by either subclassing `SequentialDesigner` or by writing your own custom `Designer`. See our guide on [Implementing Custom Methods](../guides/custom_methods.md).
 
-Furthermore, `PCE` requires us to draw posterior samples at each design iteration. This is done using importance sampling by default (see `testbed.inference`). As solving Bayesian inference is not the goal of our library, determining (and implementing) an appropriate inference method is largely up to you, the user. In TestBED, the recommended way to use custom inference methods are supported using hooks; see [Using Hooks](using_hooks.md). Alternatively, you may write your own `Designer` class.
+Furthermore, `PCE` requires us to draw posterior samples at each design iteration. This is done using importance sampling by default (see `testbed.inference`). As solving Bayesian inference is not the goal of our library, choosing an appropriate inference method is largely up to you, the user: pass any method as `SequentialDesigner(..., inference=...)`. See [Posterior Inference](inference.md) for importance sampling and Pyro's NUTS at work, and [Custom Inference](../guides/inference.md) for writing your own.
 
-```{warning}
-Some designers (e.g., `SequentialDesigner`) change the state of `task` during the design process. It is highly recommended to regularly create a fresh instantiation of your `task` as needed.
+```{note}
+`SequentialDesigner` updates `task.current_prior` after every step while it designs. The rollout puts it back as it was once it ends, so the task can be reused. Only priors you set yourself with `task.update_prior` persist; see [Using Tasks](../guides/using_tasks.md).
 ```
 
 ```{code-cell} ipython3

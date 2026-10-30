@@ -51,15 +51,10 @@ def squeeze_history(tensor: Tensor, event_shape: torch.Size) -> Tensor:
     return tensor.reshape(tensor.shape[n_extra:])
 
 
-def broadcast_and_flatten(*tensors_with_event_shapes):
-    """Broadcasts batch dims and flatten them into one dimension.
+def broadcast_batch_shape(*tensors_with_event_shapes) -> torch.Size:
+    """Broadcasts the batch dims of ``(tensor, event_shape)`` pairs.
 
-    Uses broadcast_to (zero-copy view) so no data is copied unless the
-    computation genuinely requires it (i.e. a 0-stride expanded dim must be
-    reshaped into a different total shape).
-
-    Returns:
-        Pair of ``[b_flat, *event_shape_i]`` tensors and broadcast batch shape.
+    Raises ValueError if a tensor's trailing dims are not its event shape.
     """
     batch_shapes = []
     for t, e in tensors_with_event_shapes:
@@ -70,17 +65,25 @@ def broadcast_and_flatten(*tensors_with_event_shapes):
                 f"got shape {tuple(t.shape)}."
             )
         batch_shapes.append(t.shape[: t.ndim - len(e)])
+    return torch.broadcast_shapes(*batch_shapes)
 
-    target_batch = torch.broadcast_shapes(*batch_shapes)
-    b_flat = 1
-    for s in target_batch:
-        b_flat *= s
 
-    result = []
-    for t, e in tensors_with_event_shapes:
-        full_target = target_batch + torch.Size(e)
-        result.append(t.broadcast_to(full_target).reshape(b_flat, *e))
+def broadcast_and_flatten(*tensors_with_event_shapes):
+    """Broadcasts batch dims and flatten them into one dimension.
 
+    Uses broadcast_to (zero-copy view) so no data is copied unless the
+    computation genuinely requires it (i.e. a 0-stride expanded dim must be
+    reshaped into a different total shape).
+
+    Returns:
+        Pair of ``[b_flat, *event_shape_i]`` tensors and broadcast batch shape.
+    """
+    target_batch = broadcast_batch_shape(*tensors_with_event_shapes)
+    b_flat = target_batch.numel()
+    result = [
+        t.broadcast_to(target_batch + torch.Size(e)).reshape(b_flat, *e)
+        for t, e in tensors_with_event_shapes
+    ]
     return result, target_batch
 
 
