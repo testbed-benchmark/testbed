@@ -188,6 +188,7 @@ class TorchDistribution(Distribution):
 
         Torch's own may be NaN there instead, e.g. log of a negative number.
         """
+        value = value.to(self.device)
         log_prob = self.dist.log_prob(value)
         return torch.where(self.dist.support.check(value), log_prob, -torch.inf)
 
@@ -342,6 +343,19 @@ class Box(TorchDistribution):
         # torch's Uniform rejects low == high, but a zero-width box is allowed
         uniform = Uniform(low, high, validate_args=False)
         super().__init__(Independent(uniform, len(event_shape)))
+
+    def log_prob(self, value: Tensor) -> Tensor:
+        """Minus the log volume inside the closed box, ``-inf`` outside.
+
+        Torch's ``Uniform`` is half-open, so its density is ``-inf`` at
+        ``high``, where projecting designs onto the box puts them. A
+        zero-width dimension pins a coordinate rather than spreading mass over
+        it, so it contributes no volume.
+        """
+        value = value.to(self.device)
+        width = self.high - self.low
+        log_volume = torch.where(width > 0, torch.log(width), 0.0).sum()
+        return torch.where(self.support.check(value), -log_volume, -torch.inf)
 
     @property
     def low(self) -> Tensor:

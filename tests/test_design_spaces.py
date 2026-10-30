@@ -7,7 +7,7 @@ from testbed.core import Box, EmpiricalDistribution, TorchDistribution
 from testbed.core.constraints import default_design_transform, in_support
 from testbed.core.distributions import Distribution
 from testbed.envs.bed_env import _project
-from testbed.tasks import LocationFinding, PreyPopulation
+from testbed.tasks import LinearRegression, LocationFinding, PreyPopulation
 from testbed.tasks.temporal_discounting import TDDesignPrior, TDDesignTransform
 
 
@@ -427,3 +427,56 @@ def test_task_rejects_an_empty_or_duplicated_finite_design_set(values):
         LocationFinding(
             n_sources=1, dim_theta=2, design_prior=EmpiricalDistribution(values)
         )
+
+
+def test_interval_bounds_are_tensors_for_scalar_bounded_supports():
+    from torch.distributions import Beta
+
+    from testbed.core.constraints import interval_bounds
+
+    low, high = interval_bounds(
+        TorchDistribution(Beta(torch.ones(2), torch.ones(2))).support
+    )
+
+    assert isinstance(low, torch.Tensor) and isinstance(high, torch.Tensor)
+    assert torch.isfinite(high - low).all()
+
+
+def test_design_transform_is_cached_until_the_task_moves():
+    task = LinearRegression(dim=2, design_prior=Box(-1.0, 1.0, event_shape=(2,)))
+
+    transform = task.design_transform
+    assert task.design_transform is transform
+
+    task.double()
+    assert task.design_transform is not transform
+    assert (
+        task.design_transform(torch.zeros(2, dtype=torch.float64)).dtype
+        == torch.float64
+    )
+
+    task.design_prior = Box(-2.0, 2.0, event_shape=(2,))
+    torch.testing.assert_close(
+        task.design_transform(torch.full((2,), 1e6)), torch.full((2,), 2.0)
+    )
+
+
+def _accelerator() -> str | None:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return None
+
+
+@pytest.mark.skipif(_accelerator() is None, reason="needs an accelerator")
+def test_contains_design_accepts_designs_on_another_device():
+    device = _accelerator()
+    on_device = LinearRegression(
+        dim=2, design_prior=Box(-1.0, 1.0, event_shape=(2,))
+    ).to(device)
+    on_cpu = LinearRegression(dim=2, design_prior=Box(-1.0, 1.0, event_shape=(2,)))
+
+    assert on_device.contains_design(torch.zeros(2))
+    assert not on_device.contains_design(torch.full((2,), 2.0))
+    assert on_cpu.contains_design(torch.zeros(2, device=device))

@@ -225,13 +225,28 @@ class Task(ABC, nn.Module):
 
         The design prior's own ``transform`` if it defines one, and otherwise
         :func:`~testbed.core.constraints.default_design_transform` of its
-        support. Built on each access, so that it follows the design prior
-        across ``.to()``.
+        support. Cached, since designers apply it on every step; the cache is
+        dropped when the task moves (``.to()``, ``.double()``, ...) or the
+        design prior is replaced.
         """
-        transform = getattr(self.design_prior, "transform", None)
+        transform = self.__dict__.get("_design_transform")
         if transform is None:
-            transform = default_design_transform(self.design_prior.support)
+            transform = getattr(self.design_prior, "transform", None)
+            if transform is None:
+                transform = default_design_transform(self.design_prior.support)
+            self.__dict__["_design_transform"] = transform
         return transform
+
+    def _apply(self, fn, recurse=True):
+        """Drops the cached design transform, whose tensors are on the old device."""
+        self.__dict__.pop("_design_transform", None)
+        return super()._apply(fn, recurse)
+
+    def __setattr__(self, name, value):
+        """Drops the cached design transform when the design prior is replaced."""
+        if name == "design_prior":
+            self.__dict__.pop("_design_transform", None)
+        super().__setattr__(name, value)
 
     def contains_design(self, design) -> bool:
         """Whether every design in a batch has the design shape and lies in the design space."""

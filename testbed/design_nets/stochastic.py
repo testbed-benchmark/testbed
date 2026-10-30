@@ -323,8 +323,9 @@ class GaussianPolicyNet(StochasticDesignNet):
         support = design_prior.support
         bounds = interval_bounds(support)
         if bounds is not None:
-            low = bounds[0].reshape(self.dim_design)
-            high = bounds[1].reshape(self.dim_design)
+            event_shape = design_prior.event_shape
+            low = bounds[0].broadcast_to(event_shape).reshape(self.dim_design)
+            high = bounds[1].broadcast_to(event_shape).reshape(self.dim_design)
         elif is_unconstrained(support):
             # Reference scale for network inputs only; an unconstrained space
             # keeps policy proposals unconstrained.

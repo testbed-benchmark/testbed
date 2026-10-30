@@ -6,14 +6,13 @@ References:
 
 import torch
 from torch import Tensor
-from torch.distributions import Uniform
 
-from ..core.distributions import Box, Distribution, TorchDistribution
+from ..core.distributions import Box, Distribution
 from ..core.util import normal_log_prob
 from .base import Task
 
 
-class MichaelisMentenPrior(TorchDistribution):
+class MichaelisMentenPrior(Box):
     r"""Uniform prior over Michaelis-Menten parameters.
 
     The default prior is:
@@ -41,11 +40,11 @@ class MichaelisMentenPrior(TorchDistribution):
         vhalf_lb: float = 20,
         vhalf_ub: float = 200,
     ):
-        """Builds a ``Uniform`` on the box between the bounds."""
+        """Builds a ``Box`` between the bounds."""
         dtype = torch.get_default_dtype()
         low = torch.tensor([vmax_lb, vhalf_lb], dtype=dtype)
         high = torch.tensor([vmax_ub, vhalf_ub], dtype=dtype)
-        super().__init__(Uniform(low, high))
+        super().__init__(low, high, event_shape=(2,))
 
 
 class MichaelisMenten(Task):

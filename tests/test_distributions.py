@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch.distributions import Gamma, Normal
 
-from testbed.core.distributions import LogNormal, TorchDistribution
+from testbed.core.distributions import Box, LogNormal, TorchDistribution
 
 
 def make_lognormal():
@@ -93,3 +93,46 @@ def test_wrapping_a_validating_distribution_gives_minus_inf_rather_than_raising(
 
     assert torch.isfinite(log_prob[0])
     assert log_prob[1] == -torch.inf
+
+
+def _accelerator() -> str | None:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return None
+
+
+@pytest.mark.skipif(_accelerator() is None, reason="needs an accelerator")
+def test_log_prob_moves_values_to_the_distribution_device():
+    device = _accelerator()
+    dist = TorchDistribution(Normal(torch.zeros(2), 1.0)).to(device)
+
+    log_prob = dist.log_prob(torch.zeros(3, 2))
+
+    assert log_prob.device.type == device
+    torch.testing.assert_close(
+        log_prob.cpu(), Normal(0.0, 1.0).log_prob(torch.zeros(3, 2)).sum(-1)
+    )
+
+
+def test_box_density_is_uniform_on_the_closed_box():
+    box = Box(torch.tensor([0.0, -1.0]), torch.tensor([2.0, 1.0]), event_shape=(2,))
+    expected = -torch.log(torch.tensor(4.0))
+
+    log_prob = box.log_prob(
+        torch.tensor([[0.0, -1.0], [2.0, 1.0], [1.0, 0.0], [2.5, 0.0]])
+    )
+
+    torch.testing.assert_close(log_prob[:3], expected.expand(3))
+    assert log_prob[3] == -torch.inf
+
+
+def test_box_zero_width_dimensions_contribute_no_volume():
+    pinned = Box(torch.tensor([0.0, 1.0]), torch.tensor([2.0, 1.0]), event_shape=(2,))
+
+    log_prob = pinned.log_prob(torch.tensor([[1.0, 1.0], [1.0, 1.5]]))
+
+    torch.testing.assert_close(log_prob[0], -torch.log(torch.tensor(2.0)))
+    assert log_prob[1] == -torch.inf
+    assert Box(1.0, 1.0, event_shape=(2,)).log_prob(torch.ones(2)) == 0.0

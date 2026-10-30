@@ -267,7 +267,11 @@ def interval_bounds(support: constraints.Constraint) -> tuple[Tensor, Tensor] | 
     """Returns ``(low, high)`` if ``support`` is a box, else None."""
     base = _base_constraint(support)
     if isinstance(base, constraints.interval):
-        return base.lower_bound, base.upper_bound
+        low, high = base.lower_bound, base.upper_bound
+        # torch's built-in intervals, e.g. Beta's unit interval, store Python
+        # numbers; callers do tensor arithmetic on the bounds.
+        device = next((b.device for b in (low, high) if isinstance(b, Tensor)), None)
+        return torch.as_tensor(low, device=device), torch.as_tensor(high, device=device)
     return None
 
 
