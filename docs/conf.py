@@ -63,8 +63,14 @@ html_theme_options = {
     "use_download_button": False,
     "show_toc_level": 2,
     "show_prev_next": False,
+    "logo": {
+        "image_light": "_static/testbed-logo-light.svg",
+        "image_dark": "_static/testbed-logo-dark.svg",
+        "alt_text": "TestBED",
+    },
 }
 
+html_favicon = "_static/testbed-icon.svg"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 
