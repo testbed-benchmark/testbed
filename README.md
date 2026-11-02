@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/testbed-benchmark/testbed/readme/docs/_static/testbed-logo.svg" alt="TestBED" width="420">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/testbed-benchmark/testbed/main/docs/_static/testbed-logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/testbed-benchmark/testbed/main/docs/_static/testbed-logo-light.svg" alt="TestBED" width="420">
+  </picture>
 </p>
 
 <p align="center">
@@ -60,8 +63,8 @@ from testbed.design_objectives import PCE
 from testbed.designers import SequentialDesigner
 
 task = LocationFinding(n_sources=1, dim_theta=2)
-pce = PCE(task, n_outer=512, n_inner=512)
-designer = SequentialDesigner(task, T=5, objective=pce, lr=5e-3, n_step_opt=1_000)
+pce = PCE(task, n_outer=128, n_inner=128)
+designer = SequentialDesigner(task, T=5, objective=pce, lr=5e-3, n_step_opt=200)
 
 theta = task.sample_prior()
 rollout = designer.rollout(theta)  # T designs and observations, plus a posterior estimate
@@ -78,8 +81,8 @@ temporal discounting. The interface covers continuous and discrete designs and
 outcomes, as well as likelihoods that depend on the full history.
 
 **Designers.** `PolicyDesigner`, `SequentialDesigner`, `StaticDesigner` and
-`RandomDesigner` offer different strategies for choosing designs. Each works
-with any task, and you can customise or replace them as needed.
+`RandomDesigner` offer different strategies for choosing designs. You can
+customise or replace them as needed.
 
 **Design objectives and networks.** Common bounds on and estimators of the
 expected information gain (PCE, sPCE, NMC, sNMC and Barber–Agakov), REINFORCE
@@ -91,7 +94,7 @@ example, training a policy with [Action-BED](https://arxiv.org/pdf/2606.23662)
 on the temporal discounting task takes a single command:
 
 ```bash
-python testbed/methods/actionbed.py --config-name experiments/temporal_discounting/actionbed
+python -m testbed.methods.actionbed --config-name experiments/temporal_discounting/actionbed
 ```
 
 The following methods are currently available:

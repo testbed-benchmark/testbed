@@ -17,8 +17,8 @@ W&B logging is **opt-in and off by default**, so nothing changes until you enabl
 `wandb` is an optional dependency. Install the extra:
 
 ```sh
-pip install -e ".[wandb]"
-# or install everything with:  pip install -e ".[full]"
+pip install "torch-testbed[wandb]"
+# or install everything with:  pip install "torch-testbed[full]"
 ```
 
 ## Authenticate

@@ -70,7 +70,7 @@ html_theme_options = {
     },
 }
 
-html_favicon = "_static/testbed-icon.svg"
+# Favicons are linked from _templates/layout.html, with a PNG fallback for Safari.
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 

@@ -1,0 +1,9 @@
+{% extends "!layout.html" %}
+
+{#- Safari can't show SVG favicons, so offer a PNG first. Giving it explicit
+    sizes stops Chrome from preferring it over the SVG listed after it. -#}
+{%- block extrahead %}
+  {{ super() }}
+  <link rel="icon" type="image/png" sizes="64x64" href="{{ pathto('_static/testbed-icon.png', 1) }}">
+  <link rel="icon" type="image/svg+xml" href="{{ pathto('_static/testbed-icon.svg', 1) }}">
+{%- endblock extrahead %}
