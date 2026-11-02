@@ -13,7 +13,7 @@ def __getattr__(name):
             if (exc.name or "").split(".")[0] != "pyro":
                 raise
             raise ImportError(
-                "run_mcmc needs Pyro; install it with pip install 'testbed[pyro]'."
+                "run_mcmc needs Pyro; install it with pip install 'torch-testbed[pyro]'."
             ) from exc
         return run_mcmc
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

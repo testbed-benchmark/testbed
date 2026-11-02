@@ -17,7 +17,7 @@ from . import (
 
 # Running from a source tree that was never installed has no metadata to read.
 try:
-    __version__ = version("testbed")
+    __version__ = version("torch-testbed")
 except PackageNotFoundError:
     __version__ = "unknown"
 del PackageNotFoundError, version

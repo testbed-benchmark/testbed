@@ -161,7 +161,7 @@ class WandbLogger(BaseLogger):
         except ImportError as e:  # pragma: no cover - exercised only without extra
             raise ImportError(
                 "wandb is required for WandbLogger; install the extra with "
-                '`pip install -e ".[wandb]"`.'
+                '`pip install "torch-testbed[wandb]"`.'
             ) from e
 
         self.run = wandb.init(

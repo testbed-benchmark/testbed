@@ -6,7 +6,7 @@ orphan: true
 
 Training entry points (`python testbed/methods/<method>.py`) use
 [Hydra](https://hydra.cc/) recipes from `testbed/recipes/`. Hydra is an optional
-dependency; install it with `pip install -e ".[train]"`. Configuration is split into three layers:
+dependency; install it with `pip install "torch-testbed[train]"`. Configuration is split into three layers:
 
 - `task/` recipes own the task constructor settings, the default horizon `T`,
   and task-specific ranges used by methods.

@@ -37,7 +37,7 @@ TestBED provides:
 | Function | Method |
 |---|---|
 | {py:func}`~testbed.inference.importance_sampler.run_importance_sampling` | Importance sampling using the prior as a proposal. The default. |
-| {py:func}`~testbed.inference.pyro_sampler.run_mcmc` | Pyro's NUTS or HMC. Needs `pip install 'testbed[pyro]'`. |
+| {py:func}`~testbed.inference.pyro_sampler.run_mcmc` | Pyro's NUTS or HMC. Needs `pip install 'torch-testbed[pyro]'`. |
 
 ## Using an inference method
 
