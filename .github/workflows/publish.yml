@@ -1,0 +1,103 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build packaging twine
+      - run: python -m build
+      - run: twine check dist/*
+      # PyPI uploads cannot be undone, so stop here if the built version is not the tag.
+      - name: Check the built version matches the release tag
+        id: version
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+
+          from packaging.utils import parse_wheel_filename
+          from packaging.version import Version
+
+          (wheel,) = pathlib.Path("dist").glob("*.whl")
+          built = parse_wheel_filename(wheel.name)[1]
+          tag = Version(os.environ["GITHUB_REF_NAME"])
+          assert built == tag, f"built {built} but the release tag is {tag}"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"version={built}\n")
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/torch-testbed
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  test-install:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Download the released wheel from PyPI
+        run: |
+          # The PyPI index can lag behind the upload, so retry for a few minutes.
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if python -m pip download --no-deps --no-cache-dir --only-binary=:all: -d "$RUNNER_TEMP/release" "torch-testbed==${VERSION}"; then
+              exit 0
+            fi
+            echo "Attempt ${attempt} failed, retrying in 30s"
+            sleep 30
+          done
+          exit 1
+      # The CPU wheel avoids pulling the CUDA libraries, which the check does not need.
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      # Install the wheel downloaded above, since a fresh index lookup could still miss the release.
+      - run: python -m pip install "$RUNNER_TEMP"/release/torch_testbed-*.whl
+      - name: Check the installed package
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          import os
+
+          import testbed
+
+          assert md.version("torch-testbed") == os.environ["VERSION"], md.version("torch-testbed")
+          recipes = [
+              f
+              for f in md.files("torch-testbed")
+              if f.parts[:2] == ("testbed", "recipes") and f.suffix == ".yaml"
+          ]
+          assert recipes, "recipes missing"
+          PY
