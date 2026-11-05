@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite our paper."
+title: "TestBED: An open-source toolkit for Bayesian experimental design"
+authors:
+  - family-names: "Kerrigan"
+    given-names: "Gavin"
+  - family-names: "Hedman"
+    given-names: "Marcel"
+  - family-names: "Iqbal"
+    given-names: "Sahel"
+  - family-names: "Rainforth"
+    given-names: "Tom"
+url: "https://github.com/testbed-benchmark/testbed"
+repository-code: "https://github.com/testbed-benchmark/testbed"
+preferred-citation:
+  type: article
+  title: "TestBED: An open-source toolkit for Bayesian experimental design"
+  authors:
+    - family-names: "Kerrigan"
+      given-names: "Gavin"
+    - family-names: "Hedman"
+      given-names: "Marcel"
+    - family-names: "Iqbal"
+      given-names: "Sahel"
+    - family-names: "Rainforth"
+      given-names: "Tom"
+  journal: "arXiv preprint arXiv:2611.06633"
+  year: 2026
+  url: "https://arxiv.org/abs/2611.06633"
