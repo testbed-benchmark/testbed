@@ -18,6 +18,7 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="https://torch-testbed.readthedocs.io">Documentation</a> ·
+  <a href="https://arxiv.org/abs/2611.06633">Paper</a> ·
   <a href="#citation">Citation</a>
 </p>
 
@@ -29,6 +30,10 @@ policy networks come as small, composable pieces, so you can write your own
 training loops on top of them instead of adopting a fixed pipeline. For fair
 benchmarking, TestBED also ships reproducible training recipes for established
 methods.
+
+Our [accompanying paper](https://arxiv.org/abs/2611.06633) explains the
+motivation for the package and our design choices and abstractions, and
+presents a comprehensive benchmark of modern policy-based BED algorithms.
 
 ## Installation
 
@@ -131,13 +136,13 @@ before taking part.
 
 ## Citation
 
-If you use TestBED in your research, please cite:
+If you use TestBED in your research, please cite our paper:
 
 ```bibtex
-@software{testbed,
-  title  = {{TestBED}: A {PyTorch} Library for {Bayesian} Experimental Design},
-  author = {Kerrigan, Gavin and Hedman, Marcel and Iqbal, Sahel and Rainforth, Tom},
-  year   = {2026},
-  url    = {https://github.com/testbed-benchmark/testbed},
+@article{testbed,
+  title   = {{TestBED}: {An} open-source toolkit for {Bayesian} experimental design},
+  author  = {Kerrigan, Gavin and Hedman, Marcel and Iqbal, Sahel and Rainforth, Tom},
+  journal = {arXiv preprint arXiv:2611.06633},
+  year    = {2026},
 }
 ```
