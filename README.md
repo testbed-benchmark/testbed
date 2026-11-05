@@ -19,7 +19,6 @@
   <a href="#quickstart">Quickstart</a> ·
   <a href="https://torch-testbed.readthedocs.io">Documentation</a> ·
   <a href="https://arxiv.org/abs/2611.06633">Paper</a> ·
-  <a href="#citation">Citation</a>
 </p>
 
 ---
